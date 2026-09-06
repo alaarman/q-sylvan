@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 #include <sylvan_edge_weights.h>
 #include <sylvan_edge_weights_complex.h>
 #include <sylvan_int.h>
+#include "edge_weight_storage/cmap.h"
 
 
 void *wgt_storage; // TODO: move to source file?
@@ -54,6 +56,27 @@ weight_fprint_f 		weight_fprint;
 
 // Table parameters
 static const double default_tolerance = 1e-14;
+
+/* Allow the merging rule to be selected from the environment, so that existing
+ * binaries (tests, benchmarks) can be run under either rule without changes:
+ *   QSYLVAN_REL_TOL   relative tolerance; if set, selects the hybrid rule
+ *   QSYLVAN_ZERO_TOL  absolute zero-collapse tolerance (default 0)
+ */
+void
+sylvan_edge_weights_tolerance_from_env(void)
+{
+    const char *rel = getenv("QSYLVAN_REL_TOL");
+    if (rel == NULL) return;
+    const char *zero = getenv("QSYLVAN_ZERO_TOL");
+    cmap_set_hybrid_tolerance(atof(rel), zero ? atof(zero) : 0.0);
+}
+
+void
+sylvan_edge_weights_set_hybrid_tolerance(double rel, double zero)
+{
+    if (rel < 0) cmap_set_absolute_tolerance(default_tolerance);
+    else         cmap_set_hybrid_tolerance(rel, zero);
+}
 static double tolerance;
 static wgt_storage_backend_t wgt_backend;
 size_t table_size; // current

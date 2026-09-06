@@ -470,6 +470,7 @@ sylvan_init_evbdd(size_t min_wgt_tablesize, size_t max_wgt_tablesize,
     }
 
     // TODO: pass edge weight type to sylvan_init_evbdd
+    sylvan_edge_weights_tolerance_from_env();
     if (min_wgt_tablesize > max_wgt_tablesize) min_wgt_tablesize = max_wgt_tablesize;
     sylvan_init_edge_weights(min_wgt_tablesize, max_wgt_tablesize, 
                              wgt_tab_tolerance, WGT_COMPLEX_128, 

@@ -35,6 +35,18 @@ extern void (*init_wgt_table_entries)(); // set by sylvan_init_evbdd
 
 extern uint64_t sylvan_get_edge_weight_table_size();
 extern double sylvan_edge_weights_tolerance();
+
+/**
+ * Select the hybrid merging rule for the edge-weight table: a *relative*
+ * threshold `rel` for non-zero weights and an *absolute* threshold `zero` for
+ * collapsing a weight to 0.  Must be called BEFORE sylvan_init_evbdd(), since
+ * it changes how weights are hashed.  Passing rel < 0 restores the historical
+ * absolute rule.
+ */
+void sylvan_edge_weights_set_hybrid_tolerance(double rel, double zero);
+
+/** Select the merging rule from QSYLVAN_REL_TOL / QSYLVAN_ZERO_TOL. */
+void sylvan_edge_weights_tolerance_from_env(void);
 extern uint64_t sylvan_edge_weights_count_entries();
 extern void sylvan_edge_weights_free();
 
