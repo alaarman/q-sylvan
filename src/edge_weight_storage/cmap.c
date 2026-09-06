@@ -30,6 +30,49 @@ typedef union {
 
 // float "equality" tolerance
 static long double TOLERANCE = 1e-14l;
+
+/* Merging rule.
+ * CMAP_TOL_ABS    (default, historical): two weights are equal when their real
+ *                 and imaginary parts each differ by less than TOLERANCE.
+ * CMAP_TOL_HYBRID (see Brand et al., "Numerical Errors ... With Edge-Weighted
+ *                 Decision Diagrams"): two non-zero weights are equal when they
+ *                 differ by less than TOL_REL *relative* to their magnitude,
+ *                 and a weight of magnitude at most TOL_ZERO is collapsed to
+ *                 exactly 0.  Relative merging bounds the merging error by the
+ *                 flow through a weight rather than by its sensitivity, which
+ *                 makes it insensitive to the magnitude of the weight and hence
+ *                 to the normalisation strategy.
+ */
+static int         TOL_MODE = CMAP_TOL_ABS;
+static long double TOL_REL  = 1e-14l;   // relative threshold  (delta_rel)
+static long double TOL_ZERO = 0.0l;     // zero-collapse threshold (delta_0)
+
+void
+cmap_set_hybrid_tolerance(double rel, double zero)
+{
+    TOL_MODE = CMAP_TOL_HYBRID;
+    TOL_REL  = (long double) rel;
+    TOL_ZERO = (long double) zero;
+}
+
+void
+cmap_set_absolute_tolerance(double tol)
+{
+    TOL_MODE  = CMAP_TOL_ABS;
+    TOLERANCE = (long double) tol;
+}
+
+int
+cmap_get_tolerance_mode()
+{
+    return TOL_MODE;
+}
+
+static inline long double
+cmag(const complex_t *v)
+{
+    return hypotl((long double) v->r, (long double) v->i);
+}
 static const uint64_t EMPTY = 14738995463583502973ull;
 static const uint64_t LOCK  = 14738995463583502974ull;
 static const uint64_t CL_MASK = -(1ULL << CACHE_LINE);
@@ -73,6 +116,22 @@ cmap_get_tolerance()
 static bool
 complex_close(complex_t *in_table, const complex_t* to_insert)
 {
+    if (TOL_MODE == CMAP_TOL_HYBRID) {
+        long double ma = cmag(in_table), mb = cmag(to_insert);
+        // zero-collapse: a weight of magnitude <= TOL_ZERO *is* zero
+        bool za = (ma <= TOL_ZERO), zb = (mb <= TOL_ZERO);
+        if (za || zb) return (za && zb);
+        if (TOL_REL == 0.0l) {
+            return ((in_table->r == to_insert->r) &&
+                    (in_table->i == to_insert->i));
+        }
+        // relative: |a - b| <= delta_rel * max(|a|,|b|)   (symmetric)
+        long double dr = (long double) in_table->r - (long double) to_insert->r;
+        long double di = (long double) in_table->i - (long double) to_insert->i;
+        long double m  = (ma > mb) ? ma : mb;
+        return (hypotl(dr, di) <= TOL_REL * m);
+    }
+
     if (TOLERANCE == 0.0) {
          return ((in_table->r == to_insert->r) && 
                  (in_table->i == to_insert->i));
@@ -93,7 +152,28 @@ cmap_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
 
     // Round the value to compute the hash with, but store the actual value v
     bucket_t round_v;
-    if (TOLERANCE == 0.0) {
+    if (TOL_MODE == CMAP_TOL_HYBRID) {
+        // Log-polar quantisation: cells of *relative* width TOL_REL, so that
+        // relatively-close weights land in the same (or an adjacent) cell,
+        // exactly as absolutely-close weights do on the uniform grid below.
+        long double m = cmag(v);
+        if (m <= TOL_ZERO || TOL_REL == 0.0l) {
+            round_v.c.r = (m <= TOL_ZERO) ? 0.0 : v->r;
+            round_v.c.i = (m <= TOL_ZERO) ? 0.0 : v->i;
+        }
+        else {
+            long double kr = floorl(logl(m) / log1pl(TOL_REL) + 0.5l);
+            // angular buckets of width TOL_REL, wrapped so that -pi and +pi agree
+            long double nbuckets = floorl(2.0l * 3.14159265358979323846264338327950288l / TOL_REL) + 1.0l;
+            long double ka = floorl(atan2l((long double) v->i,
+                                           (long double) v->r) / TOL_REL + 0.5l);
+            ka = fmodl(ka, nbuckets);
+            if (ka < 0.0l) ka += nbuckets;
+            round_v.c.r = (fl_t) kr;
+            round_v.c.i = (fl_t) ka;
+        }
+    }
+    else if (TOLERANCE == 0.0) {
         round_v.c.r = v->r;
         round_v.c.i = v->i;
     }

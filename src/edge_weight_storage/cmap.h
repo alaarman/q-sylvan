@@ -36,6 +36,23 @@ extern void *cmap_create(uint64_t size, double tolerance);
 
 extern double cmap_get_tolerance();
 
+/* Merging rule selector, see cmap.c */
+#define CMAP_TOL_ABS     0
+#define CMAP_TOL_HYBRID  1
+
+/**
+\brief Use the hybrid merging rule: relative tolerance `rel` for non-zero
+weights, absolute tolerance `zero` for collapsing a weight to 0.
+*/
+extern void cmap_set_hybrid_tolerance(double rel, double zero);
+
+/**
+\brief Use the (historical) absolute merging rule with tolerance `tol`.
+*/
+extern void cmap_set_absolute_tolerance(double tol);
+
+extern int cmap_get_tolerance_mode();
+
 /**
 \brief Free the memory used by a dbs.
 */
