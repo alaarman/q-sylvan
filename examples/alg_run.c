@@ -23,6 +23,8 @@ static size_t min_cachesize = 1LL<<20;
 static size_t max_cachesize = 1LL<<20;
 static size_t wgt_tab_size  = 1LL<<23;
 static double tolerance     = 1e-14;
+static double rel_tolerance = -1;   // >=0 selects the hybrid merging rule
+static double zero_tolerance= 1e-14;
 static int wgt_table_type   = COMP_HASHMAP;
 static int wgt_norm_strat   = NORM_MAX;
 static int wgt_inv_caching  = 1;
@@ -48,6 +50,8 @@ static struct argp_option options[] =
     {"depth", 'd', "<depth>", 0, "Depth of circuits with arbitrary depth (e.g. supremacy)", 0},
     {"norm-strat", 's', "<low|max|min|l2>", 0, "Edge weight normalization strategy", 0},
     {"tol", 1, "<tolerance>", 0, "Tolerance for deciding edge weights equal (default=1e-14)", 0},
+    {"rel-tol", 3, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default=off)", 0},
+    {"zero-tol", 4, "<tolerance>", 0, "Absolute zero-collapse tolerance for the hybrid rule (default=1e-14)", 0},
     {"inv-caching", 2, "<0|1>", 0, "Turn inverse chaching of edge weight computations on/off (default=on)", 0},
     {"grover-flag", 20, "<random|ones>", 0, "Grover flag (default=11..1)", 0},
     {"shor-N", 30, "<N>", 0, "N to factor with Shor's algorithm", 0},
@@ -80,6 +84,12 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1:
         tolerance = atof(arg);
+        break;
+    case 3:
+        rel_tolerance = atof(arg);
+        break;
+    case 4:
+        zero_tolerance = atof(arg);
         break;
     case 2:
         wgt_inv_caching = atoi(arg);
@@ -280,6 +290,8 @@ int main(int argc, char **argv)
     lace_start(workers, 0);
     sylvan_set_sizes(min_tablesize, max_tablesize, min_cachesize, max_cachesize);
     sylvan_init_package();
+    if (rel_tolerance >= 0)
+        sylvan_edge_weights_set_hybrid_tolerance(rel_tolerance, zero_tolerance);
     qsylvan_init_simulator(wgt_tab_size, wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
 
@@ -289,7 +301,8 @@ int main(int argc, char **argv)
 
     /* Print some info */
     INFO("Edge weight normalization: %d\n", wgt_norm_strat);
-    INFO("Edge weight tolerance: %.3e\n", tolerance);
+    if (rel_tolerance >= 0) INFO("Edge weight tolerance: HYBRID rel=%.3e zero=%.3e\n", rel_tolerance, zero_tolerance);
+    else INFO("Edge weight tolerance: %.3e\n", tolerance);
     INFO("Edge weight inverse caching: %d\n", wgt_inv_caching);
     INFO("Workers: %d\n", workers);
     INFO("Random seed: %d\n", rseed);
