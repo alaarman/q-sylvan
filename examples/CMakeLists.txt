@@ -28,6 +28,7 @@ set(ALGORITHM_EXAMPLES
     supremacy.c
 )
 
+add_example(hybrid_demo hybrid_demo.c)
 add_example(alg_run alg_run.c)
 target_sources(alg_run PRIVATE ${ALGORITHM_EXAMPLES})
 
