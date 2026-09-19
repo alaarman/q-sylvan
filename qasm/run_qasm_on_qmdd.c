@@ -20,6 +20,7 @@
 #include <sys/time.h>
 
 #include "qsylvan.h"
+#include "qsylvan_limdd_canon.h"
 #include "qsylvan_qasm_parser.h"
 
 /**********************<Arguments (configured via argp)>***********************/
@@ -40,6 +41,9 @@ static double tolerance = 1e-14;
 static int wgt_table_type = COMP_HASHMAP;
 static int wgt_norm_strat = NORM_L2;
 static bool wgt_inv_caching = true;
+typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
+static dd_kind_t dd_kind = DD_QMDD;
+static const char *dd_kind_name = "qmdd";
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
 static char* json_outputfile = NULL;
@@ -62,6 +66,7 @@ static struct argp_option options[] =
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
+    {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -121,6 +126,13 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1004:
         wgt_inv_caching = false;
+        break;
+    case 'd':
+        dd_kind_name = arg;
+        if (strcmp(arg, "qmdd") == 0)             dd_kind = DD_QMDD;
+        else if (strcmp(arg, "limdd") == 0)       dd_kind = DD_LIMDD;
+        else if (strcmp(arg, "limdd-heur") == 0)  dd_kind = DD_LIMDD_HEUR;
+        else argp_error(state, "unknown dd type '%s'", arg);
         break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1) argp_usage(state);
@@ -200,6 +212,7 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"simulation_time\": %lf,\n", stats.simulation_time);
     fprintf(stream, "    \"tolerance\": %.5e,\n", tolerance);
     fprintf(stream, "    \"wgt_inv_caching\": %d,\n", wgt_inv_caching);
+    fprintf(stream, "    \"dd\": \"%s\",\n", dd_kind_name);
     fprintf(stream, "    \"wgt_norm_strat\": %d,\n", wgt_norm_strat);
     fprintf(stream, "    \"wgt_type\": %d,\n", wgt_table_type);
     fprintf(stream, "    \"min_node_tab_size\": %" PRId64 ",\n", min_tablesize);
@@ -500,6 +513,21 @@ int main(int argc, char *argv[])
     sylvan_init_package();
     qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
+
+    if (dd_kind != DD_QMDD) {
+        /*
+         * The LIMDD layer can build and canonicalise nodes, but it has no gate
+         * application yet, so there is nothing here to simulate a circuit
+         * with. Refusing is better than quietly running QMDDs and reporting
+         * the numbers under a LIMDD heading.
+         */
+        limdd_set_high_determinism(dd_kind == DD_LIMDD);
+        fprintf(stderr, "error: --dd=%s is not available yet: LIMDD has no "
+                        "gate application, so it cannot simulate a circuit. "
+                        "The canonical form itself is reachable through the "
+                        "library API.\n", dd_kind_name);
+        return 1;
+    }
 
     RUN(run_simulation, circuit);
 

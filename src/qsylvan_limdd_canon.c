@@ -21,6 +21,21 @@
 
 #include "qsylvan_limdd_canon.h"
 
+/* Read-mostly: set once at configuration time, then only read. */
+static bool high_determinism = true;
+
+void
+limdd_set_high_determinism(bool on)
+{
+    high_determinism = on;
+}
+
+bool
+limdd_get_high_determinism(void)
+{
+    return high_determinism;
+}
+
 LIMDD_STAB
 limdd_node_stab(LIMDD_TARG p)
 {
@@ -73,6 +88,7 @@ LIMDD
 limdd_edge_canonical(LIMDD e)
 {
     if (limdd_edge_is_zero(e)) return limdd_zero_edge();
+    if (!high_determinism) return e;   // no groups are maintained
 
     const LIMDD_TARG t = limdd_target(e);
     if (t == LIMDD_TERMINAL) return e;
@@ -177,6 +193,10 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
     int created;
     const LIMDD_TARG t = limdd_makenode_ex(var, low, high, &created);
 
+    /* Without high determinism no group was needed to build this node, and
+     * computing one here would cost exactly what that mode exists to avoid. */
+    if (!high_determinism) return t;
+
     /*
      * A fresh bucket may be one a collection has recycled, so whatever is in
      * its cache slot belongs to whoever had it before and must be replaced,
@@ -204,20 +224,32 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         const LIMDD live = lz ? high : low;
         const LIMDD_TARG v = limdd_target(live);
         const LIMDD_TARG t = intern(var, v, LIMDD_LIM_ZERO, LIMDD_TERMINAL,
-                                    limdd_node_stab(v), LIMDD_STAB_TRIVIAL);
-        return limdd_edge_canonical(
-            limdd_bundle(lim_with_pauli_at(limdd_label(live), var, lz, false), t));
+                                    high_determinism ? limdd_node_stab(v)
+                                                     : LIMDD_STAB_TRIVIAL,
+                                    LIMDD_STAB_TRIVIAL);
+        const LIMDD e = limdd_bundle(
+            lim_with_pauli_at(limdd_label(live), var, lz, false), t);
+        return high_determinism ? limdd_edge_canonical(e) : e;
     }
 
     const LIMDD_TARG v0 = limdd_target(low);
     const LIMDD_TARG v1 = limdd_target(high);
-    const LIMDD_STAB s0 = limdd_node_stab(v0);
-    const LIMDD_STAB s1 = limdd_node_stab(v1);
 
     const LIMDD_LIM a = limdd_label(low);
 
     /* Divide the low label out; what is left is all the node keeps. */
     const LIMDD_LIM bp = limdd_lim_mul(limdd_lim_inverse(a), limdd_label(high));
+
+    if (!high_determinism) {
+        /* Stop here: keep the label as it came out of the division, with no
+         * search for a canonical representative of its class. */
+        const LIMDD_TARG t = intern(var, v0, bp, v1, LIMDD_STAB_TRIVIAL,
+                                    LIMDD_STAB_TRIVIAL);
+        return limdd_bundle(a, t);
+    }
+
+    const LIMDD_STAB s0 = limdd_node_stab(v0);
+    const LIMDD_STAB s1 = limdd_node_stab(v1);
 
     /* Candidate as given. */
     LIMDD_LIM g1; bool neg1;

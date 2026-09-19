@@ -89,6 +89,28 @@ extern "C" {
 #endif
 
 /**
+ * Turn the high-determinism rule on or off. On by default.
+ *
+ * With it off, makeedge stops choosing a canonical high label: it divides the
+ * low label out, applies the zero-edge rule, and interns what is left. The
+ * coset minimisation, the child swap and the stabiliser groups are all
+ * skipped, so making a node costs a LIM division instead of O(n^3) linear
+ * algebra.
+ *
+ * What is lost is merging. Two nodes denoting the same state up to a LIM keep
+ * whatever labels they were handed and stay distinct, so the diagram is bigger
+ * -- for stabiliser states, potentially exponentially so, which is the whole
+ * reason LIMDDs exist. Soundness is unaffected: the edges still denote the
+ * states they are supposed to.
+ *
+ * Node stabiliser groups are not computed while this is off, so
+ * limdd_node_stab will derive them on demand and its cache stays cold.
+ * QolDDer calls the same switch high_determinism.
+ */
+void limdd_set_high_determinism(bool on);
+bool limdd_get_high_determinism(void);
+
+/**
  * The canonical edge denoting |0>(x)low + |1>(x)high, where both are edges at
  * level `var`+1.
  *
