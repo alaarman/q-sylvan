@@ -541,7 +541,20 @@ TASK_3(int, llmsset_rehash_par, llmsset_t, dbs, size_t, first, size_t, count)
 
 TASK_IMPL_1(int, llmsset_rehash, llmsset_t, dbs)
 {
-    return CALL(llmsset_rehash_par, dbs, 0, dbs->table_size);
+    /*
+     * Start at 2. Buckets 0 and 1 are reserved, and llmsset_clear_data marks
+     * them occupied to keep them from being allocated, not because they hold
+     * an entry -- their data is whatever was last there, or zero. Rehashing
+     * them publishes that as a real key, and a lookup of a key that happens to
+     * match gets back index 0, which every caller reads as failure.
+     *
+     * An all-zero key is exactly what bucket 0 offers after a fresh clear, so
+     * any table where (0, 0) is a legitimate key hits this: the LIMDD Pauli
+     * table stores the identity word as (0, 0) and could not be looked up
+     * after a collection. Rehashing is parallel, so whether the ghost or the
+     * real entry came first in the probe sequence varied from run to run.
+     */
+    return CALL(llmsset_rehash_par, dbs, 2, dbs->table_size - 2);
 }
 
 TASK_3(size_t, llmsset_count_marked_par, llmsset_t, dbs, size_t, first, size_t, count)
