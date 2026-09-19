@@ -51,6 +51,21 @@ typedef struct {
 #define STAB_SCRATCH_ROWS (2 * LIMDD_MAX_QUBITS)
 static SYLVAN_TLS gen_row_t scratch[STAB_SCRATCH_ROWS];
 
+/**
+ * A row of the subgroup-intersection elimination: a Pauli word together with
+ * the set of Stab(v0) generators that produced it.
+ *
+ * Only the word is eliminated; the mask rides along, so when a row's word
+ * cancels to the identity the mask names a product of Stab(v0) generators that
+ * also lies in Stab(v1). That is one generator of the intersection.
+ */
+typedef struct {
+    limdd_pauli_t w;
+    uint64_t mask;
+} isect_row_t;
+
+static SYLVAN_TLS isect_row_t isect[STAB_SCRATCH_ROWS];
+
 static void
 die(void)
 {
@@ -271,6 +286,240 @@ limdd_stab_fprint(FILE *out, LIMDD_STAB s, const char *indent)
         limdd_lim_fprint(out, stab_head(s));
         fprintf(out, "\n");
     }
+}
+
+/* --- the stabiliser group of a node -------------------------------------- */
+
+/** The element of `s` whose Pauli word is `w`, or 0 if the group has none. */
+static LIMDD_LIM
+stab_find(LIMDD_STAB s, limdd_pauli_t w)
+{
+    const size_t nqubits = limdd_lims_nqubits();
+    LIMDD_LIM acc = LIMDD_LIM_IDENTITY;
+
+    for (; s != LIMDD_STAB_TRIVIAL; s = stab_tail(s)) {
+        const LIMDD_LIM g = stab_head(s);
+        const gen_row_t row = unpack(g);
+
+        size_t c = 0;
+        while (c < 2 * nqubits && !row_bit(&row, c, nqubits)) c++;
+        assert(c < 2 * nqubits && "an RREF row is never the identity");
+
+        gen_row_t cur = { w, false };
+        if (row_bit(&cur, c, nqubits)) {
+            limdd_pauli_t prod = w;
+            limdd_pauli_rightmul(&prod, row.p, nqubits);
+            w = prod;
+            acc = limdd_lim_mul(acc, g);
+        }
+    }
+
+    /*
+     * `acc` is the product of the generators that were used, so its word is
+     * the original `w` exactly when what remains is the identity. The signs
+     * take care of themselves: the generators commute, so limdd_lim_mul never
+     * produces an imaginary factor here.
+     */
+    return limdd_pauli_is_identity(w) ? acc : 0;
+}
+
+/** `a` with its sign flipped. `a` must have scalar +-1. */
+static LIMDD_LIM
+lim_negate(LIMDD_LIM a)
+{
+    return limdd_lim_make(limdd_lim_pauli(a), wgt_neg(limdd_lim_weight(a)));
+}
+
+/** Q a Q, i.e. `a` negated iff its word anticommutes with `q`. */
+static LIMDD_LIM
+conjugate(LIMDD_LIM a, limdd_pauli_t q)
+{
+    return (limdd_pauli_commutation_phase(limdd_lim_pauli(a), q) == 0)
+         ? a : lim_negate(a);
+}
+
+/** True iff `w` and `q` commute. */
+static inline bool
+commutes(limdd_pauli_t w, limdd_pauli_t q)
+{
+    return limdd_pauli_commutation_phase(w, q) == 0;
+}
+
+/**
+ * Generators of { A in s0 : word(A) lies in the span of s1's words }, written
+ * into `out`; returns how many.
+ *
+ * Standard Zassenhaus: stack s0's rows carrying a tag and s1's rows carrying
+ * none, eliminate the words, and read the tags off the rows that cancelled.
+ */
+static size_t
+intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
+{
+    const size_t nqubits = limdd_lims_nqubits();
+    const size_t k0 = limdd_stab_ngens(s0);
+    const size_t k1 = limdd_stab_ngens(s1);
+    assert(k0 + k1 <= STAB_SCRATCH_ROWS);
+    assert(k0 <= 64 && "the generator tag is a 64-bit mask");
+
+    size_t n = 0;
+    for (size_t i = 0; i < k0; i++) {
+        isect[n].w = limdd_lim_pauli(limdd_stab_gen(s0, i));
+        isect[n].mask = UINT64_C(1) << i;
+        n++;
+    }
+    for (size_t j = 0; j < k1; j++) {
+        isect[n].w = limdd_lim_pauli(limdd_stab_gen(s1, j));
+        isect[n].mask = 0;
+        n++;
+    }
+
+    size_t top = 0;
+    for (size_t c = 0; c < 2 * nqubits && top < n; c++) {
+        size_t pivot = top;
+        while (pivot < n) {
+            const gen_row_t r = { isect[pivot].w, false };
+            if (row_bit(&r, c, nqubits)) break;
+            pivot++;
+        }
+        if (pivot == n) continue;
+
+        if (pivot != top) {
+            const isect_row_t t = isect[top];
+            isect[top] = isect[pivot];
+            isect[pivot] = t;
+        }
+
+        for (size_t r = 0; r < n; r++) {
+            if (r == top) continue;
+            const gen_row_t g = { isect[r].w, false };
+            if (!row_bit(&g, c, nqubits)) continue;
+            /* Words only: XOR of the masks, no phase to track. */
+            isect[r].w.x ^= isect[top].w.x;
+            isect[r].w.z ^= isect[top].w.z;
+            isect[r].mask ^= isect[top].mask;
+        }
+        top++;
+    }
+
+    size_t nout = 0;
+    for (size_t r = top; r < n; r++) {
+        assert(limdd_pauli_is_identity(isect[r].w));
+        if (isect[r].mask == 0) continue;   /* a dependency inside s1 alone */
+
+        LIMDD_LIM a = LIMDD_LIM_IDENTITY;
+        for (size_t i = 0; i < k0; i++) {
+            if ((isect[r].mask >> i) & 1) a = limdd_lim_mul(a, limdd_stab_gen(s0, i));
+        }
+        out[nout++] = a;
+    }
+    return nout;
+}
+
+LIMDD_STAB
+limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
+                   LIMDD_STAB s0, LIMDD_STAB s1)
+{
+    assert(stab_table != NULL);
+    assert(var < limdd_lims_nqubits());
+
+    const bool low_zero  = limdd_lim_is_zero(limdd_label(low));
+    const bool high_zero = limdd_lim_is_zero(limdd_label(high));
+    assert(!(low_zero && high_zero) && "the zero vector has no stabiliser group");
+    assert((low_zero || limdd_lim_is_identity(limdd_label(low)))
+           && "the low edge must be normalised before its group is taken");
+
+    const uint64_t bit = UINT64_C(1) << var;
+    const limdd_pauli_t z_here = { 0, bit };
+
+    /* At most one generator per qubit, plus the anti-diagonal coset rep. */
+    LIMDD_LIM out[LIMDD_MAX_QUBITS + 1];
+    size_t nout = 0;
+
+    if (high_zero) {
+        /*
+         * |0>(x)|v0>. Both I and Z fix |0>, so Z at this level joins Stab(v0)
+         * untouched -- this is the one case that gains a generator rather than
+         * losing some to the intersection.
+         */
+        out[nout++] = limdd_lim_make(z_here, EVBDD_ONE);
+        const size_t k0 = limdd_stab_ngens(s0);
+        for (size_t i = 0; i < k0; i++) out[nout++] = limdd_stab_gen(s0, i);
+        return limdd_stab_make(out, nout);
+    }
+
+    const LIMDD_LIM b = limdd_label(high);
+    const limdd_pauli_t q = limdd_lim_pauli(b);
+
+    if (low_zero) {
+        /*
+         * |1>(x)B|v1>. Z fixes |1> only up to a sign, so it is -Z that belongs
+         * here, and Stab(v1) arrives conjugated by B.
+         */
+        out[nout++] = limdd_lim_make(z_here, EVBDD_MIN_ONE);
+        const size_t k1 = limdd_stab_ngens(s1);
+        for (size_t i = 0; i < k1; i++) out[nout++] = conjugate(limdd_stab_gen(s1, i), q);
+        return limdd_stab_make(out, nout);
+    }
+
+    /* --- diagonal part: the subgroup intersection --- */
+    LIMDD_LIM common[LIMDD_MAX_QUBITS];
+    const size_t ncommon = intersect_gens(s0, s1, common);
+
+    for (size_t i = 0; i < ncommon; i++) {
+        const LIMDD_LIM a = common[i];
+        const limdd_pauli_t wa = limdd_lim_pauli(a);
+
+        const LIMDD_LIM a1 = stab_find(s1, wa);
+        assert(a1 != 0 && "the intersection produced a word s1 does not have");
+
+        /*
+         * Conjugating by B flips A's sign when they anticommute, and the two
+         * branches must then agree: Z here supplies the extra -1 when they do
+         * not already match. So the level's Pauli is forced, never chosen.
+         */
+        const bool flip = !commutes(wa, q);
+        const bool differ = (limdd_lim_weight(a) != limdd_lim_weight(a1));
+        const bool need_z = (flip != differ);
+
+        limdd_pauli_t w = wa;
+        if (need_z) w.z |= bit;
+        out[nout++] = limdd_lim_make(w, limdd_lim_weight(a));
+    }
+
+    /* --- anti-diagonal coset representative --- */
+    if (limdd_target(low) == limdd_target(high)) {
+        const EVBDD_WGT beta = limdd_lim_weight(b);
+        const EVBDD_WGT beta_sq = wgt_mul(beta, beta);
+
+        /*
+         * Swapping the branches sends |0>|v0> to |1>B|v1> and back, and the
+         * round trip multiplies by B^2 times the Pauli's own i's. It closes
+         * only when B's scalar squares to +-1: to +1 with X here, to -1 with Y,
+         * whose extra factor of i is what absorbs the difference.
+         */
+        limdd_pauli_t w = q;
+        EVBDD_WGT scalar;
+        bool found = true;
+
+        if (beta_sq == EVBDD_ONE) {
+            w.x |= bit;                     /* X */
+            scalar = beta;
+        } else if (beta_sq == EVBDD_MIN_ONE) {
+            w.x |= bit; w.z |= bit;         /* Y */
+            scalar = wgt_mul(limdd_wgt_i_pow(3), beta);   /* -i * beta */
+        } else {
+            found = false;
+            scalar = EVBDD_ZERO;
+        }
+
+        if (found) {
+            assert((scalar == EVBDD_ONE || scalar == EVBDD_MIN_ONE)
+                   && "an anti-diagonal generator must have scalar +-1");
+            out[nout++] = limdd_lim_make(w, scalar);
+        }
+    }
+
+    return limdd_stab_make(out, nout);
 }
 
 void

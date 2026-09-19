@@ -70,6 +70,7 @@
 #include <stdio.h>
 
 #include "qsylvan_limdd_lim.h"
+#include "qsylvan_limdd_node.h"
 #include "qsylvan_limdd_pauli.h"
 
 #ifdef __cplusplus
@@ -131,6 +132,56 @@ limdd_stab_is_trivial(LIMDD_STAB s)
  * cannot be ignored here.
  */
 bool limdd_stab_contains(LIMDD_STAB s, LIMDD_LIM g);
+
+/**
+ * The stabiliser group of the node (var, low, high), from the groups of its
+ * two child NODES.
+ *
+ * `s0` and `s1` stabilise the nodes the two edges point at, not the states the
+ * edges denote; the high edge's own label is accounted for here.
+ *
+ * WHERE THE GROUP COMES FROM
+ *
+ * The node denotes |0>(x)|v0> + |1>(x)B|v1>, and an operator that fixes it is
+ * a Pauli on this qubit tensored with one on the rest. Splitting on the Pauli
+ * at this level gives two parts:
+ *
+ *   diagonal (I or Z here)
+ *       Fixes each branch separately, so it needs A|v0> = |v0> and, after
+ *       conjugating by B, +-A|v1> = |v1>. That is: the elements of Stab(v0)
+ *       whose Pauli word also lies in Stab(v1)'s span -- a SUBGROUP
+ *       INTERSECTION over GF(2). Whether I or Z belongs at this level is then
+ *       forced, by whether A commutes with B and by the two signs, so every
+ *       such A contributes exactly one generator.
+ *
+ *   anti-diagonal (X or Y here)
+ *       Swaps the two branches, so it exists only when |v0> and B|v1> are
+ *       isomorphic. With canonical children that happens exactly when the two
+ *       edges point at the SAME node, and then only if B's scalar squares to
+ *       +-1 -- X when it squares to +1, Y when to -1. One such element
+ *       suffices: it is a coset representative, and the rest of the coset is
+ *       it times the diagonal part.
+ *
+ * The Bell node is the smallest case with both: low and high both point at the
+ * node for |0>, B = X, giving ZZ from the diagonal part and XX from the
+ * anti-diagonal one -- whose product is -YY, the sign that makes the group
+ * right.
+ *
+ * ASSUMES CANONICAL CHILDREN, and this is not a formality. The anti-diagonal
+ * test is a comparison of node indices, which stands in for "these children
+ * are isomorphic" only once isomorphic nodes have been merged. Hand two
+ * children that are isomorphic but stored separately -- |+> and |->, say,
+ * which differ by Z -- and the coset is skipped and the group comes back half
+ * the size it should be, with no other symptom.
+ *
+ * Nodes built bottom-up by the canonical form satisfy this by construction,
+ * since that is precisely what it establishes. Anything building nodes by hand
+ * has to respect it.
+ *
+ * Must be called from a Lace worker.
+ */
+LIMDD_STAB limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
+                              LIMDD_STAB s0, LIMDD_STAB s1);
 
 /**
  * Write the `k`-th element of the group, for k in 0..2^ngens-1, taking bit i
