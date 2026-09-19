@@ -1,0 +1,381 @@
+/*
+ * Copyright 2026 System Verification Lab, LIACS, Leiden University
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * Tests for LIMDD addition and gate application.
+ *
+ * Everything here is checked against a dense state vector carried alongside
+ * the diagram: the same gate is applied to both and all 2^n amplitudes are
+ * compared. A diagram operation can be wrong in ways no structural check would
+ * notice -- a branch swapped, a phase dropped, a control read off the wrong
+ * qubit -- and all of them change an amplitude, so that is what is compared.
+ *
+ * The gate matrices come out of Q-Sylvan's own gate table rather than being
+ * written out here, so the dense simulator and the diagram cannot disagree
+ * about what gate was meant.
+ */
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <lace.h>
+#include <sylvan.h>
+
+#include "qsylvan.h"
+#include "qsylvan_limdd_ops.h"
+#include "sylvan_edge_weights_complex.h"
+#include "test_assert.h"
+
+#define NQUBITS 5
+#define NBASIS  (1u << NQUBITS)
+
+static uint64_t rng_state = UINT64_C(0x1234567890ABCDEF);
+static uint64_t
+rnd(void)
+{
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 7;
+    rng_state ^= rng_state << 17;
+    return rng_state;
+}
+
+typedef struct { double re, im; } cx;
+
+static cx cx_add(cx a, cx b) { cx r = { a.re+b.re, a.im+b.im }; return r; }
+static cx cx_mul(cx a, cx b)
+{
+    cx r = { a.re*b.re - a.im*b.im, a.re*b.im + a.im*b.re };
+    return r;
+}
+static bool cx_eq(cx a, cx b)
+{
+    return fabs(a.re-b.re) < 1e-9 && fabs(a.im-b.im) < 1e-9;
+}
+
+static cx
+wgt_cx(EVBDD_WGT w)
+{
+    const complex_t c = weight_as_complex(w);
+    cx r = { c.r, c.i };
+    return r;
+}
+
+/* --- the dense reference ------------------------------------------------- */
+
+static void
+dense_gate(cx *v, uint32_t gateid, uint32_t q, uint64_t controls)
+{
+    const cx u00 = wgt_cx(gates[gateid][0]), u01 = wgt_cx(gates[gateid][1]);
+    const cx u10 = wgt_cx(gates[gateid][2]), u11 = wgt_cx(gates[gateid][3]);
+    const unsigned bit = 1u << q;
+
+    for (unsigned i = 0; i < NBASIS; i++) {
+        if (i & bit) continue;
+        if ((i & controls) != controls) continue;   /* controls must all be 1 */
+        const unsigned j = i | bit;
+        const cx a = v[i], b = v[j];
+        v[i] = cx_add(cx_mul(u00, a), cx_mul(u01, b));
+        v[j] = cx_add(cx_mul(u10, a), cx_mul(u11, b));
+    }
+}
+
+static void
+limdd_to_vector(LIMDD e, cx *out)
+{
+    bool bits[NQUBITS];
+    for (unsigned i = 0; i < NBASIS; i++) {
+        for (int k = 0; k < NQUBITS; k++) bits[k] = (i >> k) & 1;
+        out[i] = wgt_cx(limdd_eval(e, bits, NQUBITS));
+    }
+}
+
+static int
+compare(LIMDD e, const cx *want, const char *what, int step)
+{
+    cx got[NBASIS];
+    limdd_to_vector(e, got);
+    for (unsigned i = 0; i < NBASIS; i++) {
+        if (!cx_eq(got[i], want[i])) {
+            fprintf(stderr, "%s step %d: amplitude %u is (%g,%g), should be (%g,%g)\n",
+                    what, step, i, got[i].re, got[i].im, want[i].re, want[i].im);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* --- tests ---------------------------------------------------------------- */
+
+int
+test_basis_state(void)
+{
+    LIMDD e = limdd_all_zero_state(NQUBITS);
+    cx want[NBASIS];
+    memset(want, 0, sizeof(want));
+    want[0].re = 1.0;
+    return compare(e, want, "all-zero state", 0);
+}
+
+int
+test_single_gates(void)
+{
+    /* Each gate on each qubit, from |0..0>, against the dense reference. */
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H,
+                             GATEID_S, GATEID_T, GATEID_Sdag, GATEID_Tdag };
+    for (unsigned g = 0; g < sizeof(ids)/sizeof(ids[0]); g++) {
+        for (uint32_t q = 0; q < NQUBITS; q++) {
+            LIMDD e = limdd_all_zero_state(NQUBITS);
+            cx want[NBASIS];
+            memset(want, 0, sizeof(want));
+            want[0].re = 1.0;
+
+            e = limdd_gate(e, ids[g], q, NQUBITS);
+            dense_gate(want, ids[g], q, 0);
+
+            char label[64];
+            snprintf(label, sizeof(label), "gate %u on qubit %u", ids[g], q);
+            if (compare(e, want, label, 0)) return 1;
+        }
+    }
+    return 0;
+}
+
+int
+test_controlled_gates(void)
+{
+    /* Controls only bite once the control qubit is in superposition, so each
+     * case starts by putting H on the controls. */
+    /* Controls above targets only; see limdd_cgate. */
+    for (uint32_t c = 0; c < NQUBITS; c++) {
+        for (uint32_t t = c + 1; t < NQUBITS; t++) {
+            LIMDD e = limdd_all_zero_state(NQUBITS);
+            cx want[NBASIS];
+            memset(want, 0, sizeof(want));
+            want[0].re = 1.0;
+
+            e = limdd_gate(e, GATEID_H, c, NQUBITS);
+            dense_gate(want, GATEID_H, c, 0);
+
+            e = limdd_cgate(e, GATEID_X, UINT64_C(1) << c, t, NQUBITS);
+            dense_gate(want, GATEID_X, t, UINT64_C(1) << c);
+
+            char label[64];
+            snprintf(label, sizeof(label), "cnot %u->%u", c, t);
+            if (compare(e, want, label, 0)) return 1;
+        }
+    }
+
+    /* Two controls, which is what Grover's diffusion needs. */
+    LIMDD e = limdd_all_zero_state(NQUBITS);
+    cx want[NBASIS];
+    memset(want, 0, sizeof(want));
+    want[0].re = 1.0;
+    for (uint32_t q = 0; q < 3; q++) {
+        e = limdd_gate(e, GATEID_H, q, NQUBITS);
+        dense_gate(want, GATEID_H, q, 0);
+    }
+    const uint64_t ctrl = 0x3;   /* qubits 0 and 1 */
+    e = limdd_cgate(e, GATEID_Z, ctrl, 2, NQUBITS);
+    dense_gate(want, GATEID_Z, 2, ctrl);
+    return compare(e, want, "ccz", 0);
+}
+
+int
+test_random_circuits(void)
+{
+    /*
+     * Random Clifford+T circuits, compared after every gate. Checking only at
+     * the end would find the first mistake but say nothing about where, and
+     * errors that cancel would go unnoticed.
+     */
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H,
+                             GATEID_S, GATEID_T };
+
+    for (int trial = 0; trial < 40; trial++) {
+        LIMDD e = limdd_all_zero_state(NQUBITS);
+        cx want[NBASIS];
+        memset(want, 0, sizeof(want));
+        want[0].re = 1.0;
+
+        for (int step = 0; step < 40; step++) {
+            char label[48];
+            snprintf(label, sizeof(label), "random trial %d", trial);
+
+            if ((rnd() % 3) == 0) {
+                const uint32_t c = rnd() % (NQUBITS - 1);
+                const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+                const uint32_t g = ids[rnd() % 4];   /* X, Y, Z, H */
+                e = limdd_cgate(e, g, UINT64_C(1) << c, t, NQUBITS);
+                dense_gate(want, g, t, UINT64_C(1) << c);
+            } else {
+                const uint32_t q = rnd() % NQUBITS;
+                const uint32_t g = ids[rnd() % 6];
+                e = limdd_gate(e, g, q, NQUBITS);
+                dense_gate(want, g, q, 0);
+            }
+            if (compare(e, want, label, step)) return 1;
+        }
+    }
+    return 0;
+}
+
+int
+test_addition(void)
+{
+    /* Sums of random reachable states, against the dense sum. */
+    for (int trial = 0; trial < 200; trial++) {
+        LIMDD a = limdd_all_zero_state(NQUBITS);
+        LIMDD b = limdd_all_zero_state(NQUBITS);
+        cx va[NBASIS], vb[NBASIS];
+        memset(va, 0, sizeof(va)); va[0].re = 1.0;
+        memset(vb, 0, sizeof(vb)); vb[0].re = 1.0;
+
+        const uint32_t ids[] = { GATEID_X, GATEID_Z, GATEID_H, GATEID_S };
+        for (int step = 0; step < 6; step++) {
+            uint32_t q = rnd() % NQUBITS, g = ids[rnd() % 4];
+            a = limdd_gate(a, g, q, NQUBITS);  dense_gate(va, g, q, 0);
+            if (compare(a, va, "addition/build a", step)) {
+                fprintf(stderr, "  (trial %d, gate %u on qubit %u)\n", trial, g, q);
+                return 1;
+            }
+            q = rnd() % NQUBITS; g = ids[rnd() % 4];
+            b = limdd_gate(b, g, q, NQUBITS);  dense_gate(vb, g, q, 0);
+            if (compare(b, vb, "addition/build b", step)) {
+                fprintf(stderr, "  (trial %d, gate %u on qubit %u)\n", trial, g, q);
+                return 1;
+            }
+        }
+
+        const LIMDD s = limdd_plus(a, b, 0);
+        cx want[NBASIS];
+        for (unsigned i = 0; i < NBASIS; i++) want[i] = cx_add(va[i], vb[i]);
+        if (compare(s, want, "addition", trial)) {
+            cx ca[NBASIS], cb[NBASIS], cs[NBASIS];
+            limdd_to_vector(a, ca); limdd_to_vector(b, cb); limdd_to_vector(s, cs);
+            fprintf(stderr, "  a == b ? %s   a=%llu b=%llu s=%llu\n",
+                    a == b ? "yes" : "no",
+                    (unsigned long long)a, (unsigned long long)b, (unsigned long long)s);
+            for (unsigned i = 0; i < NBASIS; i++) {
+                fprintf(stderr, "  [%2u] a=(%6.3f,%6.3f) dense_a=(%6.3f,%6.3f) | "
+                                "b=(%6.3f,%6.3f) dense_b=(%6.3f,%6.3f) | sum=(%6.3f,%6.3f) want=(%6.3f,%6.3f)\n",
+                        i, ca[i].re, ca[i].im, va[i].re, va[i].im,
+                        cb[i].re, cb[i].im, vb[i].re, vb[i].im,
+                        cs[i].re, cs[i].im, want[i].re, want[i].im);
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int
+test_probabilities(void)
+{
+    for (int trial = 0; trial < 100; trial++) {
+        LIMDD e = limdd_all_zero_state(NQUBITS);
+        cx want[NBASIS];
+        memset(want, 0, sizeof(want)); want[0].re = 1.0;
+
+        const uint32_t ids[] = { GATEID_X, GATEID_Z, GATEID_H, GATEID_S, GATEID_T };
+        for (int step = 0; step < 12; step++) {
+            if ((rnd() % 3) == 0) {
+                const uint32_t c = rnd() % (NQUBITS - 1);
+                const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+                e = limdd_cgate(e, GATEID_X, UINT64_C(1) << c, t, NQUBITS);
+                dense_gate(want, GATEID_X, t, UINT64_C(1) << c);
+            } else {
+                const uint32_t q = rnd() % NQUBITS, g = ids[rnd() % 5];
+                e = limdd_gate(e, g, q, NQUBITS);
+                dense_gate(want, g, q, 0);
+            }
+        }
+
+        /* A unitary circuit from a basis state stays normalised, and the
+         * diagram must agree without expanding it. */
+        double n2 = 0.0;
+        for (unsigned i = 0; i < NBASIS; i++) n2 += want[i].re*want[i].re + want[i].im*want[i].im;
+        if (fabs(limdd_norm_squared(e, NQUBITS) - n2) > 1e-9) {
+            fprintf(stderr, "trial %d: norm^2 is %g, dense says %g\n",
+                    trial, limdd_norm_squared(e, NQUBITS), n2);
+            return 1;
+        }
+
+        for (uint32_t q = 0; q < NQUBITS; q++) {
+            double p1 = 0.0;
+            for (unsigned i = 0; i < NBASIS; i++) {
+                if (i & (1u << q)) p1 += want[i].re*want[i].re + want[i].im*want[i].im;
+            }
+            const double got = limdd_prob_qubit_one(e, q, NQUBITS);
+            if (fabs(got - p1) > 1e-9) {
+                fprintf(stderr, "trial %d qubit %u: P(1) is %g, dense says %g\n",
+                        trial, q, got, p1);
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+TASK_0(int, runtests)
+{
+    limdd_nodes_init(NQUBITS, 1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
+
+    if (test_basis_state()) return 1;
+    printf("limdd all-zero state:                    ok\n");
+    if (test_single_gates()) return 1;
+    printf("every 1-qubit gate matches a dense sim:  ok\n");
+    if (test_controlled_gates()) return 1;
+    printf("controlled gates match a dense sim:      ok\n");
+    if (test_addition()) return 1;
+    printf("addition matches the dense sum:          ok\n");
+    if (test_random_circuits()) return 1;
+    printf("40 random Clifford+T circuits, per gate: ok\n");
+    if (test_probabilities()) return 1;
+    printf("norm and measurement probabilities:      ok\n");
+
+    printf("(%zu nodes, %zu LIMs)\n", limdd_node_table_count(), limdd_lim_table_count());
+    limdd_nodes_quit();
+    return 0;
+}
+
+static int
+run_with(int backend, const char *name)
+{
+    printf("== LIMDD operations with %s edge weights ==\n", name);
+    lace_start(1, 0);
+    sylvan_set_sizes(1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
+    sylvan_init_package();
+    /* Through the simulator's initialiser, so the gate table is populated. */
+    qsylvan_init_simulator(1LL << 18, 1LL << 18, -1, backend, NORM_LOW);
+
+    const int res = RUN(runtests);
+
+    sylvan_quit();
+    lace_stop();
+    return res;
+}
+
+int
+main(void)
+{
+    if (run_with(COMP_HASHMAP, "complex")) return 1;
+    /* The same circuits with exact coefficients: T is a pi/4 rotation, so
+     * Clifford+T stays inside Q[i,sqrt2]. */
+    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])")) return 1;
+    return 0;
+}
