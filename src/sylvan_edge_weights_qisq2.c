@@ -33,19 +33,42 @@ void weight_qisq2_copy(qisq2_t *a, qisq2_t *a_copy){
 }
 
 qisq2_t *
+/*
+ * Raw memory: the four mpq_t are NOT initialised. Either qisq2_init it, or
+ * fill it with weight_value, which initialises as it copies. Release it with
+ * weight_qisq2_free once it holds GMP storage.
+ */
 weight_qisq2_malloc()
 {
     qisq2_t *res = malloc(sizeof(qisq2_t));
     return res;
 }
 
+void weight_qisq2_set(qisq2_t *x, qisq2_t *y);
+
 void
 _weight_qisq2_value(void *wgt_store, EVBDD_WGT a, qisq2_t *res)
 {
-    //if (a == EVBDD_ZERO)         *res = qisq2_zero();
-    //else if (a == EVBDD_ONE)     *res = qisq2_one();
-    //else if (a == EVBDD_MIN_ONE) *res = qisq2_mone();
-    *res = *(qisq2_t*)(wgt_store_get(wgt_store, a)); // ?
+    /*
+     * A deep copy, not a struct assignment. Each mpq_t holds a pointer to its
+     * limbs, so copying the struct would leave `res` sharing storage with the
+     * table entry -- and the very next qisq2_reduce would canonicalise in
+     * place and rewrite the stored weight. That is what made wgt_neg change
+     * the value it was reading.
+     *
+     * `res` is initialised here rather than by the caller, because callers
+     * pass both weight_malloc'd buffers and plain stack variables. It owns its
+     * limbs afterwards and must be released with weight_qisq2_free.
+     */
+    qisq2_init(res);
+    weight_qisq2_set(res, (qisq2_t *)(wgt_store_get(wgt_store, a)));
+}
+
+void
+weight_qisq2_free(qisq2_t *a)
+{
+    qisq2_clear(a);
+    free(a);
 }
 
 EVBDD_WGT
@@ -264,9 +287,12 @@ weight_qisq2_sqrttwoConjugate(qisq2_t *result, qisq2_t *x) {
 
 void
 qisq2_mul_clear_input(qisq2_t *x, qisq2_t *y) {
+    /* A struct assignment here would alias x's limbs, and the qisq2_clear
+     * below would then free them out from under x. */
     qisq2_t *tmp;
     tmp = weight_qisq2_malloc();
-    *tmp = *x;
+    qisq2_init(tmp);
+    weight_qisq2_set(tmp, x);
     weight_qisq2_mul(x,y);
     qisq2_clear(tmp);
     free(tmp);

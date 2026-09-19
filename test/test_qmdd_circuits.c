@@ -746,29 +746,47 @@ int test_20qubit_circuit()
     return 0;
 }
 
-int run_qmdd_tests()
+int run_qmdd_tests(int wgt_backend)
 {
     // we are not testing garbage collection
     sylvan_gc_disable();
 
     // circuits
     if (test_swap_circuit()) return 1;
-    if (test_cswap_circuit()) return 1;
+    /*
+     * Under qisq2 only the sub-tests whose expected amplitudes are exact are
+     * run. The others state theirs as complex_lookup of a double, which names
+     * a weight only the complex backend can hold -- under qisq2 that call
+     * reinterprets two doubles as four GMP rationals. Porting them means
+     * rewriting the expectations as algebraic literals, as
+     * test_gates_qisq2 does.
+     */
+    if (wgt_backend != QISQ2_MAP) {
+        if (test_cswap_circuit()) return 1;
+    }
     if (test_tensor_product()) return 1;
-    if (test_measurements()) return 1;
+    if (wgt_backend != QISQ2_MAP) {
+        if (test_measurements()) return 1;
+    }
     if (test_5qubit_circuit()) return 1;
     if (test_10qubit_circuit()) return 1;
     //if (test_20qubit_circuit()) return 1;
-    if (test_QFT()) return 1;
+    if (wgt_backend != QISQ2_MAP) {
+        // QFT uses R_k for k up to the qubit count, and e^(2*pi*i/2^k) is in
+        // Q[i,sqrt2] only for k <= 3. Beyond that there is no qisq2 number to
+        // hold the rotation, so this is outside what the backend can express
+        // rather than something to fix.
+        if (test_QFT()) return 1;
+    }
 
     return 0;
 }
 
 // Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
 // that calls lace_start() is not one.
-TASK_0(int, run_qmdd_tests_task)
+TASK_1(int, run_qmdd_tests_task, int, wgt_backend)
 {
-    return run_qmdd_tests();
+    return run_qmdd_tests(wgt_backend);
 }
 
 int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits) 
@@ -787,7 +805,7 @@ int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits)
 
     printf("wgt backend = %d, norm strat = %d, wgt indx bits = %d:\n", 
             wgt_backend, norm_strat, wgt_indx_bits);
-    int res = RUN(run_qmdd_tests_task);
+    int res = RUN(run_qmdd_tests_task, wgt_backend);
 
     sylvan_quit();
     lace_stop();
@@ -798,6 +816,9 @@ int runtests()
 {
     for (int backend = 0; backend < n_wgt_storage_types; backend++) {
         for (int norm_strat = 0; norm_strat < n_norm_strategies; norm_strat++) {
+            // qisq2 has no absolute value, so max/min/L2 normalisation cannot
+            // be built on it; sweeping them would only abort.
+            if (!qsylvan_norm_supported(backend, norm_strat)) continue;
             if (test_with(backend, norm_strat, 11)) return 1;
             if (backend == COMP_HASHMAP) {
                 // test with edge wgt index > 23 bits

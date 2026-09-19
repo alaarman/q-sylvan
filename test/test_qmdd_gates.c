@@ -4,6 +4,7 @@
 #include "qsylvan.h"
 #include "test_assert.h"
 #include <sylvan_edge_weights_complex.h>
+#include <sylvan_edge_weights_qisq2.h>
 
 bool VERBOSE = true;
 
@@ -700,10 +701,87 @@ int test_controlled_range_gate()
     return 0;
 }
 
-int run_qmdd_tests()
+
+/**
+ * Gate tests for the qisq2 backend.
+ *
+ * The tests above compare weight indices against complex_lookup(...) of a
+ * double, which only names a weight the complex backend can hold: under qisq2
+ * the same call reinterprets two doubles as four GMP rationals. They are
+ * therefore complex-specific by construction, not merely untuned.
+ *
+ * The point of qisq2 is that these amplitudes are exact, so the expectations
+ * here are written as algebraic literals -- 1/sqrt(2) is the number
+ * 0 + (1/2)*sqrt(2), not 0.7071067811865476 -- and equality is exact rather
+ * than a tolerance question.
+ */
+int test_gates_qisq2()
+{
+    QMDD q0, q1, q2;
+    AMP a;
+    bool x[] = {0};
+    bool x2[] = {0, 0};
+    BDDVAR nqubits;
+
+    // 1/sqrt(2) = 0 + (1/2)sqrt(2), exactly
+    const AMP inv_sqrt2 = qisq2_lookup(0,1, 1,2, 0,1, 0,1);
+    const AMP neg_inv_sqrt2 = qisq2_lookup(0,1, -1,2, 0,1, 0,1);
+
+    // X|0> = |1>, X|1> = |0>
+    nqubits = 1;
+    q0 = qmdd_create_basis_state(nqubits, x);
+    q1 = qmdd_gate(q0, GATEID_X, 0);
+    q2 = qmdd_gate(q1, GATEID_X, 0);
+    x[0] = 0; test_assert(evbdd_getvalue(q1, x) == EVBDD_ZERO);
+    x[0] = 1; test_assert(evbdd_getvalue(q1, x) == EVBDD_ONE);
+    x[0] = 0; test_assert(evbdd_getvalue(q2, x) == EVBDD_ONE);
+    x[0] = 1; test_assert(evbdd_getvalue(q2, x) == EVBDD_ZERO);
+    test_assert(q0 == q2);
+
+    // H|0> = (|0>+|1>)/sqrt(2), and H|1> = (|0>-|1>)/sqrt(2)
+    x[0] = 0; q0 = qmdd_create_basis_state(nqubits, x);
+    x[0] = 1; q1 = qmdd_create_basis_state(nqubits, x);
+    q0 = qmdd_gate(q0, GATEID_H, 0);
+    q1 = qmdd_gate(q1, GATEID_H, 0);
+    x[0] = 0; test_assert(evbdd_getvalue(q0, x) == inv_sqrt2);
+    x[0] = 1; test_assert(evbdd_getvalue(q0, x) == inv_sqrt2);
+    x[0] = 0; test_assert(evbdd_getvalue(q1, x) == inv_sqrt2);
+    x[0] = 1; test_assert(evbdd_getvalue(q1, x) == neg_inv_sqrt2);
+
+    // H is its own inverse -- exactly, with no accumulated rounding
+    x[0] = 0; q0 = qmdd_create_basis_state(nqubits, x);
+    q1 = qmdd_gate(qmdd_gate(q0, GATEID_H, 0), GATEID_H, 0);
+    test_assert(q0 == q1);
+
+    // A Bell state: H on qubit 0, then CNOT. Amplitudes exactly (1/2)sqrt(2).
+    nqubits = 2;
+    x2[0] = 0; x2[1] = 0;
+    q0 = qmdd_create_basis_state(nqubits, x2);
+    q0 = qmdd_gate(q0, GATEID_H, 0);
+    q0 = qmdd_cgate(q0, GATEID_X, 0, 1);
+    x2[1] = 0; x2[0] = 0; a = evbdd_getvalue(q0, x2); test_assert(a == inv_sqrt2);
+    x2[1] = 0; x2[0] = 1; a = evbdd_getvalue(q0, x2); test_assert(a == EVBDD_ZERO);
+    x2[1] = 1; x2[0] = 0; a = evbdd_getvalue(q0, x2); test_assert(a == EVBDD_ZERO);
+    x2[1] = 1; x2[0] = 1; a = evbdd_getvalue(q0, x2); test_assert(a == inv_sqrt2);
+    test_assert(qmdd_is_unitvector(q0, 2));
+
+    // Z|1> = -|1>, exactly
+    nqubits = 1;
+    x[0] = 1; q0 = qmdd_create_basis_state(nqubits, x);
+    q1 = qmdd_gate(q0, GATEID_Z, 0);
+    x[0] = 1; test_assert(evbdd_getvalue(q1, x) == EVBDD_MIN_ONE);
+    x[0] = 0; test_assert(evbdd_getvalue(q1, x) == EVBDD_ZERO);
+
+    if(VERBOSE) printf("qmdd qisq2 gates:         ok\n");
+    return 0;
+}
+
+int run_qmdd_tests(int wgt_backend)
 {
     // we are not testing garbage collection
     sylvan_gc_disable();
+
+    if (wgt_backend == QISQ2_MAP) return test_gates_qisq2();
 
     // gates
     if (test_x_gate()) return 1;
@@ -720,9 +798,9 @@ int run_qmdd_tests()
 
 // Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
 // that calls lace_start() is not one.
-TASK_0(int, run_qmdd_tests_task)
+TASK_1(int, run_qmdd_tests_task, int, wgt_backend)
 {
-    return run_qmdd_tests();
+    return run_qmdd_tests(wgt_backend);
 }
 
 int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits) 
@@ -741,7 +819,7 @@ int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits)
 
     printf("wgt backend = %d, norm strat = %d, wgt indx bits = %d:\n", 
             wgt_backend, norm_strat, wgt_indx_bits);
-    int res = RUN(run_qmdd_tests_task);
+    int res = RUN(run_qmdd_tests_task, wgt_backend);
 
     sylvan_quit();
     lace_stop();
@@ -753,6 +831,9 @@ int runtests()
 {
     for (int backend = 0; backend < n_wgt_storage_types; backend++) {
         for (int norm_strat = 0; norm_strat < n_norm_strategies; norm_strat++) {
+            // qisq2 has no absolute value, so max/min/L2 normalisation cannot
+            // be built on it; sweeping them would only abort.
+            if (!qsylvan_norm_supported(backend, norm_strat)) continue;
             if (test_with(backend, norm_strat, 11)) return 1;
             if (backend == COMP_HASHMAP) {
                 // test with edge wgt index > 23 bits

@@ -9,6 +9,7 @@
 /******************<Implementation of edge_weights interface>******************/
 
 qisq2_t *weight_qisq2_malloc();
+void weight_qisq2_free(qisq2_t *a);
 void _weight_qisq2_value(void *wgt_store, EVBDD_WGT a, qisq2_t *res);
 EVBDD_WGT weight_qisq2_lookup(qisq2_t *a);
 EVBDD_WGT _weight_qisq2_lookup_ptr(qisq2_t *a, void *wgt_store);

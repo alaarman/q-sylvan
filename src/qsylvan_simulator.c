@@ -77,6 +77,13 @@ double qmdd_amp_to_prob_qisq2(AMP a);
 AMP qmdd_amp_from_prob_qisq2(double a);
 double qmdd_fid_from_amp_qisq2(AMP prod);
 
+bool
+qsylvan_norm_supported(int edge_weigth_backend, int norm_strat)
+{
+    if (edge_weigth_backend != QISQ2_MAP) return true;
+    return norm_strat == NORM_LOW;
+}
+
 void
 qsylvan_init_simulator(size_t min_tablesize, size_t max_tablesize, double wgt_tab_tolerance, int edge_weigth_backend, int norm_strat)
 {
@@ -86,14 +93,12 @@ qsylvan_init_simulator(size_t min_tablesize, size_t max_tablesize, double wgt_ta
         sylvan_init_evbdd(min_tablesize, max_tablesize, wgt_tab_tolerance, edge_weigth_backend, norm_strat, &qmdd_gates_init);
         break;
     case QISQ2_MAP:
-        if (norm_strat == NORM_L2){
-            printf("Invalid L2 norm for Qisq2 edge weights!\nAborted \n");
-            exit(0);
-        }
-        if (norm_strat == NORM_MAX || norm_strat == NORM_MIN){
-            //TODO: implement max_norm and min_norm for qisq2: make workaround for abs function
-            printf("Qisq2 edge weights are not implemented for min and max weights.\nAborted \n");
-            exit(0);
+        if (!qsylvan_norm_supported(edge_weigth_backend, norm_strat)) {
+            // TODO: implement max/min/L2 norms for qisq2, which needs an
+            // absolute value that Q[i,sqrt2] does not contain.
+            fprintf(stderr, "qsylvan: normalisation strategy %d is not "
+                            "implemented for qisq2 edge weights\n", norm_strat);
+            exit(1);   // an error, so do not report success
         }
         sylvan_init_evbdd(min_tablesize, max_tablesize, wgt_tab_tolerance, edge_weigth_backend, norm_strat, &qmdd_gates_qisq2_init);
         break;
@@ -1104,12 +1109,13 @@ qmdd_get_amplitude_qisq2(QMDD q, bool *x, BDDVAR nqubits)
     qisq2_t *res;
     res = weight_qisq2_malloc();
     complex_t res_complex;
-    qisq2_init(res);
+    // no qisq2_init here: weight_value initialises as it deep-copies, and
+    // initialising twice strands the first set of limbs.
     weight_value(evbdd_getvalue(q, x), res);
     reverse_bit_array(x, nqubits);
     res_complex.r = mpq_get_d(res->a) + mpq_get_d(res->b)*SQRT2;
     res_complex.i = mpq_get_d(res->c) + mpq_get_d(res->d)*SQRT2;
-    free(res);
+    weight_qisq2_free(res);
     return res_complex;
 }
 
@@ -1129,8 +1135,13 @@ qmdd_amp_from_prob_qisq2(double a)
 {
     qisq2_t *c;
     c = weight_qisq2_malloc();
-    mpq_set_d(c->a,flt_sqrt(a));
-    return weight_lookup(c);
+    // weight_qisq2_malloc hands back raw memory, and mpq_set_d on an
+    // uninitialised mpq_t reallocs a garbage pointer.
+    qisq2_init(c);
+    mpq_set_d(c->a, flt_sqrt(a));
+    AMP res = weight_lookup(c);
+    weight_qisq2_free(c);
+    return res;
 }
 
 double
@@ -1141,7 +1152,7 @@ qmdd_fid_from_amp_qisq2(AMP prod){
     // fid = |c|^2 = |c.r + c.i|^2 = sqrt(c.r^2 + c.i^2)^2 = c.r^2 + c.i^2
     weight_qisq2_abs_sqr(&c);
     double fid = mpq_get_d(c.a) + mpq_get_d(c.b)*SQRT2;
-    //qisq2_clear(&c);
+    qisq2_clear(&c);
     return fid;
 }
 
@@ -1315,7 +1326,20 @@ qmdd_is_close_to_unitvector(QMDD qmdd, BDDVAR n, double tol)
 bool
 qmdd_is_unitvector(QMDD qmdd, BDDVAR n)
 {
-    return qmdd_is_close_to_unitvector(qmdd, n, sylvan_edge_weights_tolerance()*10);
+    /*
+     * Two different tolerances are in play and they must not be conflated.
+     * sylvan_edge_weights_tolerance() is how close two WEIGHTS have to be to
+     * count as the same entry, and for an exact backend such as qisq2 it is
+     * rightly zero. This check is a different thing: it converts every
+     * amplitude to a double and sums the squares, so its answer carries
+     * rounding error whatever the weights are made of. Comparing that sum to 1
+     * with zero tolerance can never succeed -- which is what made every qisq2
+     * gate test fail its sanity assertion.
+     */
+    const double store_tol = sylvan_edge_weights_tolerance() * 10;
+    const double sum_tol = 1e-12;   // headroom for summing 2^n doubles
+    return qmdd_is_close_to_unitvector(qmdd, n,
+                                       store_tol > sum_tol ? store_tol : sum_tol);
 }
 
 double

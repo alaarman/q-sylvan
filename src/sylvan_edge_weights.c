@@ -31,6 +31,7 @@ void sylvan_edge_weights_free();
 /******************<Interface for different edge_weight_types>*****************/
 
 weight_malloc_f 		weight_malloc;
+weight_free_f		weight_free;
 _weight_value_f 		_weight_value;
 
 weight_lookup_f 		weight_lookup;
@@ -102,6 +103,7 @@ void init_edge_weight_functions(edge_weight_type_t edge_weight_type)
     {
     case WGT_COMPLEX_128:
         weight_malloc       = (weight_malloc_f) &weight_complex_malloc;
+        weight_free         = (weight_free_f) &free;
         _weight_value       = (_weight_value_f) &_weight_complex_value;
         weight_lookup       = (weight_lookup_f) &weight_complex_lookup;
         _weight_lookup_ptr  = (_weight_lookup_ptr_f) &_weight_complex_lookup_ptr;
@@ -125,6 +127,7 @@ void init_edge_weight_functions(edge_weight_type_t edge_weight_type)
         break;
     case WGT_QISQ2:
         weight_malloc       = (weight_malloc_f) &weight_qisq2_malloc;
+        weight_free         = (weight_free_f) &weight_qisq2_free;
         _weight_value       = (_weight_value_f) &_weight_qisq2_value;
         weight_lookup       = (weight_lookup_f) &weight_qisq2_lookup;
         _weight_lookup_ptr  = (_weight_lookup_ptr_f) &_weight_qisq2_lookup_ptr;
@@ -277,8 +280,8 @@ wgt_table_gc_keep(EVBDD_WGT a)
     weight_t wa_copy = weight_malloc();
     weight_copy(wa,wa_copy);
     EVBDD_WGT res = _weight_lookup_ptr(wa_copy, wgt_storage_new);
-    free(wa);
-    free(wa_copy);
+    weight_free(wa);
+    weight_free(wa_copy);
     return res;
 }
 
@@ -421,7 +424,7 @@ wgt_abs(EVBDD_WGT a)
     weight_value(a, w);
     weight_abs(w);
     res = weight_lookup_ptr(w);
-    free(w);
+    weight_free(w);
 
     return res;
 }
@@ -439,7 +442,7 @@ wgt_abs_sqr(EVBDD_WGT a)
     weight_value(a, w);
     weight_abs_sqr(w);
     res = weight_lookup_ptr(w);
-    free(w);
+    weight_free(w);
 
     return res;
 }
@@ -458,7 +461,7 @@ wgt_neg(EVBDD_WGT a)
     weight_value(a, w);
     weight_neg(w);
     res = weight_lookup_ptr(w);
-    free(w);
+    weight_free(w);
 
     return res; 
 }
@@ -475,7 +478,7 @@ wgt_conj(EVBDD_WGT a)
     weight_value(a, w);
     weight_conj(w);
     res = weight_lookup_ptr(w);
-    free(w);
+    weight_free(w);
 
     return res; 
 }
@@ -500,8 +503,8 @@ wgt_add(EVBDD_WGT a, EVBDD_WGT b)
     weight_value(b, wb);
     weight_add(wa, wb);
     res = weight_lookup_ptr(wa);
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -530,8 +533,8 @@ wgt_sub(EVBDD_WGT a, EVBDD_WGT b)
     weight_value(b, wb);
     weight_sub(wa, wb);
     res = weight_lookup_ptr(wa);
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -561,8 +564,8 @@ wgt_mul(EVBDD_WGT a, EVBDD_WGT b)
     weight_value(b, wb);
     weight_mul(wa, wb);
     res = weight_lookup_ptr(wa);
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -592,8 +595,8 @@ wgt_div(EVBDD_WGT a, EVBDD_WGT b)
     weight_value(b, wb);
     weight_div(wa, wb);
     res = weight_lookup_ptr(wa);
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -620,8 +623,8 @@ wgt_eq(EVBDD_WGT a, EVBDD_WGT b)
     weight_value(b, wb);
     bool res = weight_eq(wa, wb);
 
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     return res;
 }
@@ -636,8 +639,8 @@ wgt_eps_close(EVBDD_WGT a, EVBDD_WGT b, double eps)
     weight_value(b, wb);
     bool res = weight_eps_close(wa, wb, eps);
 
-    free(wa);
-    free(wb);
+    weight_free(wa);
+    weight_free(wb);
 
     return res;
 }
@@ -703,8 +706,8 @@ wgt_norm_max(EVBDD_WGT *low, EVBDD_WGT *high)
         *low  = EVBDD_ONE;
     }
 
-    free(wl);
-    free(wh);
+    weight_free(wl);
+    weight_free(wh);
     return norm;
 }
 
@@ -763,10 +766,10 @@ wgt_norm_min(EVBDD_WGT *low, EVBDD_WGT *high)
         *low  = EVBDD_ONE;
     }
 
-    free(wl);
-    free(wh);
-    free(wl_abs);
-    free(wh_abs);
+    weight_free(wl);
+    weight_free(wh);
+    weight_free(wl_abs);
+    weight_free(wh_abs);
     return norm;
 }
 
@@ -783,7 +786,7 @@ void wgt_fprint(FILE *stream, EVBDD_WGT a)
     weight_t w = weight_malloc();
     weight_value(a, w);
     weight_fprint(stream, w);
-    free(w);
+    weight_free(w);
 }
 
 /************************<Printing & utility functions>************************/

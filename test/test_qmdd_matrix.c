@@ -675,16 +675,24 @@ int test_tensor_product()
     return 0;
 }
 
-int runtests()
+int runtests(int wgt_backend)
 {
     // we are not testing garbage collection
     sylvan_gc_disable();
 
+    /*
+     * Under qisq2 only the sub-tests whose expected amplitudes are exact are
+     * run. The others state theirs as complex_lookup of a double, which names
+     * a weight only the complex backend can hold -- under qisq2 that call
+     * reinterprets two doubles as four GMP rationals. Porting them means
+     * rewriting the expectations as algebraic literals, as
+     * test_gates_qisq2 does.
+     */
     if (test_x_gate()) return 1;
-    if (test_h_gate()) return 1;
-    if (test_phase_gates()) return 1;
-    if (test_cx_gate()) return 1;
-    if (test_cz_gate()) return 1;
+    if (wgt_backend != QISQ2_MAP) { if (test_h_gate()) return 1; }
+    if (wgt_backend != QISQ2_MAP) { if (test_phase_gates()) return 1; }
+    if (wgt_backend != QISQ2_MAP) { if (test_cx_gate()) return 1; }
+    if (wgt_backend != QISQ2_MAP) { if (test_cz_gate()) return 1; }
     if (test_ccz_gate()) return 1;
     if (test_multi_cgate()) return 1;
     if (test_tensor_product()) return 1;
@@ -694,9 +702,9 @@ int runtests()
 
 // Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
 // that calls lace_start() is not one.
-TASK_0(int, runtests_task)
+TASK_1(int, runtests_task, int, wgt_backend)
 {
-    return runtests();
+    return runtests(wgt_backend);
 }
 
 int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits) 
@@ -718,7 +726,7 @@ int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits)
 
     printf("wgt backend = %d, norm strat = %d, wgt indx bits = %d:\n", 
             wgt_backend, norm_strat, wgt_indx_bits);
-    int res = RUN(runtests_task);
+    int res = RUN(runtests_task, wgt_backend);
 
     sylvan_quit();
     lace_stop();
@@ -730,6 +738,9 @@ int main()
 {
     for (int backend = 0; backend < n_wgt_storage_types; backend++) {
         for (int norm_strat = 0; norm_strat < n_norm_strategies; norm_strat++) {
+            // qisq2 has no absolute value, so max/min/L2 normalisation cannot
+            // be built on it; sweeping them would only abort.
+            if (!qsylvan_norm_supported(backend, norm_strat)) continue;
             if (test_with(backend, norm_strat, 11)) return 1;
             if (backend == COMP_HASHMAP) {
                 // test with edge wgt index > 23 bits

@@ -75,6 +75,10 @@ extern EVBDD_WGT wgt_table_gc_keep(EVBDD_WGT a);
 /******************<Interface for different edge_weight_types>*****************/
 
 typedef weight_t (*weight_malloc_f)();
+/* Releases a weight obtained from weight_malloc + weight_value. A plain free()
+ * is wrong for types that own heap storage of their own: a qisq2 number holds
+ * four GMP rationals, whose limbs must be cleared first. */
+typedef void (*weight_free_f)(weight_t a);
 typedef void (*_weight_value_f)(void *wgt_store, EVBDD_WGT a, weight_t res);
 typedef EVBDD_WGT (*weight_lookup_f)(weight_t a);
 typedef EVBDD_WGT (*_weight_lookup_ptr_f)(weight_t a, void *wgt_store);
@@ -105,6 +109,7 @@ typedef void (*weight_fprint_f)(FILE *stream, weight_t a);
 
 
 extern weight_malloc_f 		weight_malloc;
+extern weight_free_f 		weight_free;
 extern _weight_value_f 		_weight_value;
 
 extern weight_lookup_f 		weight_lookup;

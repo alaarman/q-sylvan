@@ -62,6 +62,16 @@ class QSimulator()
 }
 */
 
+/**
+ * Whether this weight backend can run under this normalisation strategy.
+ *
+ * qisq2 numbers are exact elements of Q[i,sqrt2] and have no absolute value
+ * inside that field, so the strategies that need one -- max, min, and the L2
+ * norm -- are not available. Callers that sweep combinations should skip the
+ * ones this rejects; qsylvan_init_simulator itself can only abort.
+ */
+bool qsylvan_norm_supported(int edge_weigth_backend, int norm_strat);
+
 void qsylvan_init_simulator(size_t min_tablesize, size_t max_tablesize, double wgt_tab_tolerance, int edge_weigth_backend, int norm_strat);
 void qsylvan_init_defaults(size_t wgt_tab_size);
 

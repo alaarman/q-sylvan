@@ -199,6 +199,60 @@ qmdd_gates_init()
     gates[k][3] = weight_lookup(&dynamic_gate[3]);
 }
 
+/**
+ * The R_k gates for the qisq2 backend.
+ *
+ * R_k is diag(1, e^(2*pi*i/2^k)), and e^(2*pi*i/2^k) lies in Q[i,sqrt2] only
+ * for k <= 3: 1, -1, i, and (1+i)/sqrt2. Beyond that the root of unity is not
+ * in the field at all, so there is no qisq2 number to store and the gate
+ * cannot be represented -- this is a property of the field, not a gap in the
+ * implementation.
+ *
+ * The unrepresentable ones are left as the zero matrix rather than filled from
+ * a complex_t, which is what qmdd_phase_gates_init would do: passing a
+ * complex_t to the qisq2 table reinterprets two doubles as four GMP rationals
+ * and corrupts memory. A zero gate gives a visibly wrong answer instead of an
+ * unpredictable one.
+ */
+void
+qmdd_phase_gates_qisq2_init(int n)
+{
+    for (int k = 0; k <= n; k++) {
+        const uint32_t fwd = GATEID_Rk(k);
+        const uint32_t bwd = GATEID_Rk_dag(k);
+
+        gates[fwd][0] = EVBDD_ONE;  gates[fwd][1] = EVBDD_ZERO;
+        gates[fwd][2] = EVBDD_ZERO;
+        gates[bwd][0] = EVBDD_ONE;  gates[bwd][1] = EVBDD_ZERO;
+        gates[bwd][2] = EVBDD_ZERO;
+
+        switch (k) {
+        case 0:  // e^(2 pi i) = 1
+            gates[fwd][3] = EVBDD_ONE;
+            gates[bwd][3] = EVBDD_ONE;
+            break;
+        case 1:  // e^(i pi) = -1
+            gates[fwd][3] = EVBDD_MIN_ONE;
+            gates[bwd][3] = EVBDD_MIN_ONE;
+            break;
+        case 2:  // e^(i pi/2) = i
+            gates[fwd][3] = qisq2_lookup(0,1, 0,1,  1,1, 0,1);
+            gates[bwd][3] = qisq2_lookup(0,1, 0,1, -1,1, 0,1);
+            break;
+        case 3:  // e^(i pi/4) = (1+i)/sqrt2
+            gates[fwd][3] = qisq2_lookup(0,1, 1,2, 0,1,  1,2);
+            gates[bwd][3] = qisq2_lookup(0,1, 1,2, 0,1, -1,2);
+            break;
+        default: // not in Q[i,sqrt2]
+            gates[fwd][0] = EVBDD_ZERO;
+            gates[bwd][0] = EVBDD_ZERO;
+            gates[fwd][3] = EVBDD_ZERO;
+            gates[bwd][3] = EVBDD_ZERO;
+            break;
+        }
+    }
+}
+
 void
 qmdd_phase_gates_init(int n)
 {
@@ -295,6 +349,8 @@ qmdd_gates_qisq2_init()
     k = GATEID_sqrtYdag;
     gates[k][0] = qisq2_lookup(1,2,0,1,-1,2,0,1); gates[k][1] = qisq2_lookup(1,2,0,1,-1,2,0,1);
     gates[k][2] = qisq2_lookup(-1,2,0,1,1,2,0,1); gates[k][3] = qisq2_lookup(1,2,0,1,-1,2,0,1);
+
+    qmdd_phase_gates_qisq2_init(255);
 }
 
 // ---------------- </ gate definitions for qisq2 > ----------------

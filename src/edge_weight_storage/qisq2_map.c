@@ -173,9 +173,27 @@ qisq2_map_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
             if (bucket->d[0] == EMPTY) {
                 if (cas(&bucket->d[0], EMPTY, LOCK)) {
                     *ret = ref;
+                    /*
+                     * The table gets its OWN limbs. Publishing `v`'s words
+                     * directly would hand the caller's GMP storage to the
+                     * table while the caller still holds it, so whichever of
+                     * the two cleared first would corrupt the other. With a
+                     * copy, find_or_put never consumes its argument and the
+                     * caller can always release it. The copy is made here,
+                     * after winning the CAS, so a thread that loses does not
+                     * make one.
+                     */
+                    qisq2_t owned;
+                    qisq2_init(&owned);
+                    mpq_set(owned.a, v->a);
+                    mpq_set(owned.b, v->b);
+                    mpq_set(owned.c, v->c);
+                    mpq_set(owned.d, v->d);
+
+                    bucket_t *src = (bucket_t *)&owned;
                     // write backwards (overwrite bucket->d[0] last)
                     for (int k = entry_size-1; k >= 0; k--) {
-                        atomic_write (&bucket->d[k], val->d[k]);
+                        atomic_write (&bucket->d[k], src->d[k]);
                     }
                     return 0;
                 }
@@ -188,7 +206,8 @@ qisq2_map_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
             qisq2_t *in_table = (qisq2_t *)bucket;
             if (qisq2_equal(in_table, v)) {
                 *ret = ref;
-                qisq2_clear(v);
+                /* `v` belongs to the caller; clearing it here is what made a
+                 * lookup consume its argument. */
                 return 1;
             }
 

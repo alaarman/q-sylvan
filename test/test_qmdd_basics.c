@@ -555,6 +555,9 @@ int runtests()
 {
     for (int backend = 0; backend < n_wgt_storage_types; backend++) {
         for (int norm_strat = 0; norm_strat < n_norm_strategies; norm_strat++) {
+            // qisq2 has no absolute value, so max/min/L2 normalisation cannot
+            // be built on it; sweeping them would only abort.
+            if (!qsylvan_norm_supported(backend, norm_strat)) continue;
             if (test_with(backend, norm_strat, 11)) return 1;
             if (backend == COMP_HASHMAP) {
                 // test with edge wgt index > 23 bits
