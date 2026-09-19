@@ -105,6 +105,14 @@ sylvan_test_warnings(test_limdd_stab_node)
 
 add_test(NAME test_limdd_stab_node COMMAND test_limdd_stab_node)
 
+add_executable(test_limdd_coset)
+target_sources(test_limdd_coset PRIVATE test_limdd_coset.c)
+target_link_libraries(test_limdd_coset PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_coset PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_coset)
+
+add_test(NAME test_limdd_coset COMMAND test_limdd_coset)
+
 # ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
 
 foreach(_qmdd_test

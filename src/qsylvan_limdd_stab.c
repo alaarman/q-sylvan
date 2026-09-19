@@ -61,7 +61,8 @@ static SYLVAN_TLS gen_row_t scratch[STAB_SCRATCH_ROWS];
  */
 typedef struct {
     limdd_pauli_t w;
-    uint64_t mask;
+    uint64_t mask0;   /* which generators of s0 went into this row */
+    uint64_t mask1;   /* and which of s1 */
 } isect_row_t;
 
 static SYLVAN_TLS isect_row_t isect[STAB_SCRATCH_ROWS];
@@ -353,26 +354,33 @@ commutes(limdd_pauli_t w, limdd_pauli_t q)
  * none, eliminate the words, and read the tags off the rows that cancelled.
  */
 static size_t
-intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
+stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
 {
     const size_t nqubits = limdd_lims_nqubits();
     const size_t k0 = limdd_stab_ngens(s0);
     const size_t k1 = limdd_stab_ngens(s1);
     assert(k0 + k1 <= STAB_SCRATCH_ROWS);
-    assert(k0 <= 64 && "the generator tag is a 64-bit mask");
+    assert(k0 <= 64 && k1 <= 64 && "generator tags are 64-bit masks");
 
     size_t n = 0;
     for (size_t i = 0; i < k0; i++) {
         isect[n].w = limdd_lim_pauli(limdd_stab_gen(s0, i));
-        isect[n].mask = UINT64_C(1) << i;
+        isect[n].mask0 = UINT64_C(1) << i;
+        isect[n].mask1 = 0;
         n++;
     }
     for (size_t j = 0; j < k1; j++) {
         isect[n].w = limdd_lim_pauli(limdd_stab_gen(s1, j));
-        isect[n].mask = 0;
+        isect[n].mask0 = 0;
+        isect[n].mask1 = UINT64_C(1) << j;
         n++;
     }
 
+    /*
+     * Eliminate the words only; the tags ride along. Signs are deliberately
+     * not tracked -- both callers recover them afterwards by multiplying the
+     * tagged generators back together, which gets the phases right for free.
+     */
     size_t top = 0;
     for (size_t c = 0; c < 2 * nqubits && top < n; c++) {
         size_t pivot = top;
@@ -393,26 +401,116 @@ intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
             if (r == top) continue;
             const gen_row_t g = { isect[r].w, false };
             if (!row_bit(&g, c, nqubits)) continue;
-            /* Words only: XOR of the masks, no phase to track. */
             isect[r].w.x ^= isect[top].w.x;
             isect[r].w.z ^= isect[top].w.z;
-            isect[r].mask ^= isect[top].mask;
+            isect[r].mask0 ^= isect[top].mask0;
+            isect[r].mask1 ^= isect[top].mask1;
         }
         top++;
     }
 
+    *nrows = n;
+    return top;
+}
+
+/** The product of the generators of `s` named by `mask`, in index order. */
+static LIMDD_LIM
+product_of(LIMDD_STAB s, uint64_t mask)
+{
+    LIMDD_LIM acc = LIMDD_LIM_IDENTITY;
+    for (size_t i = 0; mask != 0; i++, mask >>= 1) {
+        if (mask & 1) acc = limdd_lim_mul(acc, limdd_stab_gen(s, i));
+    }
+    return acc;
+}
+
+/**
+ * Generators of { A in s0 : word(A) lies in the span of s1's words }, written
+ * into `out`; returns how many.
+ *
+ * Standard Zassenhaus: the rows that cancel to the identity are combinations
+ * of s0 and s1 rows that agree, and their s0 tag names the element.
+ */
+static size_t
+intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
+{
+    size_t n;
+    const size_t top = stack_generators(s0, s1, &n);
+
     size_t nout = 0;
     for (size_t r = top; r < n; r++) {
         assert(limdd_pauli_is_identity(isect[r].w));
-        if (isect[r].mask == 0) continue;   /* a dependency inside s1 alone */
-
-        LIMDD_LIM a = LIMDD_LIM_IDENTITY;
-        for (size_t i = 0; i < k0; i++) {
-            if ((isect[r].mask >> i) & 1) a = limdd_lim_mul(a, limdd_stab_gen(s0, i));
-        }
-        out[nout++] = a;
+        if (isect[r].mask0 == 0) continue;   /* a dependency inside s1 alone */
+        out[nout++] = product_of(s0, isect[r].mask0);
     }
     return nout;
+}
+
+/**
+ * True iff `w` is the sign the rule prefers: nonnegative imaginary part, and
+ * among the two purely real options the nonnegative one.
+ */
+static bool
+sign_is_canonical(EVBDD_WGT w)
+{
+    complex_t c;
+    weight_value(w, &c);
+    if (c.i > 1e-14) return true;
+    if (c.i < -1e-14) return false;
+    return c.r >= 0.0;
+}
+
+LIMDD_LIM
+limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
+                     LIMDD_LIM *witness, bool *negated)
+{
+    assert(stab_table != NULL);
+    assert(!limdd_lim_is_zero(b) && "the zero map has no coset to minimise");
+
+    const size_t nqubits = limdd_lims_nqubits();
+
+    size_t n;
+    const size_t top = stack_generators(s0, s1, &n);
+
+    /*
+     * Reduce b's word by the basis. The basis is in RREF, so clearing every
+     * pivot column leaves the one element of the coset with zeros there, which
+     * is the least under the column order -- any other element differs by some
+     * combination of basis rows and so carries a 1 at that combination's
+     * leading pivot.
+     */
+    gen_row_t cur = { limdd_lim_pauli(b), false };
+    uint64_t mask0 = 0, mask1 = 0;
+
+    for (size_t r = 0; r < top; r++) {
+        size_t c = 0;
+        const gen_row_t row = { isect[r].w, false };
+        while (c < 2 * nqubits && !row_bit(&row, c, nqubits)) c++;
+        assert(c < 2 * nqubits && "an eliminated row is never the identity");
+
+        if (!row_bit(&cur, c, nqubits)) continue;
+        cur.p.x ^= isect[r].w.x;
+        cur.p.z ^= isect[r].w.z;
+        mask0 ^= isect[r].mask0;
+        mask1 ^= isect[r].mask1;
+    }
+
+    /*
+     * The tags name the G and H that produce that word. Multiplying them back
+     * out in order is what recovers the phase: the words alone cannot, since
+     * XOR forgets every factor of i the products pick up.
+     */
+    const LIMDD_LIM g = product_of(s0, mask0);
+    const LIMDD_LIM h = product_of(s1, mask1);
+    LIMDD_LIM e = limdd_lim_mul(limdd_lim_mul(g, b), h);
+    assert(limdd_pauli_equals(limdd_lim_pauli(e), cur.p));
+
+    const bool flip = !sign_is_canonical(limdd_lim_weight(e));
+    if (flip) e = limdd_lim_make(limdd_lim_pauli(e), wgt_neg(limdd_lim_weight(e)));
+
+    if (witness != NULL) *witness = g;
+    if (negated != NULL) *negated = flip;
+    return e;
 }
 
 LIMDD_STAB

@@ -184,6 +184,44 @@ LIMDD_STAB limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
                               LIMDD_STAB s0, LIMDD_STAB s1);
 
 /**
+ * The canonical representative of the class of high-edge labels equivalent
+ * to `b`, namely { +-G B H : G in s0, H in s1 }.
+ *
+ * WHY THAT IS THE CLASS
+ *
+ * The nodes |0>(x)|v0> + |1>(x)B|v1> and the same with B'' in place of B denote
+ * states related by a LIM exactly when B'' = +-G B H for some G in Stab(v0) and
+ * H in Stab(v1): G is what the parent LIM does to the low branch, which must
+ * leave |v0> alone, and H is the slack in how B acts on |v1>. Picking one
+ * representative of that class is what merges two nodes that are the same
+ * state in disguise, and so is what makes the diagram canonical.
+ *
+ * WHY IT IS NOT EXPONENTIAL
+ *
+ * The class has up to 2^(k0+k1+1) elements, but its WORDS do not: multiplying
+ * Pauli words XORs their symplectic vectors, so the words form an affine coset
+ * of the span of s0's and s1's words. The least word is then just `b` reduced
+ * by an RREF basis of that span -- linear algebra, not enumeration.
+ *
+ * Once the word is fixed only the scalar is free, and only up to sign: two
+ * elements of the class with the same word differ by exactly +-1 (conjugating
+ * one decomposition into another contributes a sign and nothing else). So one
+ * rule settles it -- the scalar is taken with nonnegative imaginary part, ties
+ * broken towards nonnegative real part.
+ *
+ * WITNESS
+ *
+ * `*witness` receives the G above, and `*negated` whether the sign rule flipped
+ * the result. Together they say what the parent edge must be multiplied by to
+ * preserve the state: the Pauli at the node's own level is Z when `*negated`
+ * and I otherwise, tensored with G.
+ *
+ * Must be called from a Lace worker.
+ */
+LIMDD_LIM limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
+                               LIMDD_LIM *witness, bool *negated);
+
+/**
  * Write the `k`-th element of the group, for k in 0..2^ngens-1, taking bit i
  * of k as "include generator i".
  *
