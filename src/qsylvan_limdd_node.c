@@ -15,6 +15,7 @@
  */
 
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #include <sylvan_int.h>
@@ -29,6 +30,9 @@
  */
 static llmsset_t limdd_nodes   = NULL;
 static size_t    limdd_nqubits = 0;
+
+/* One slot per node bucket; see limdd_node_stab_raw in the header. */
+static _Atomic(uint64_t) *node_stab = NULL;
 
 static LIMDD zero_edge = 0;
 static LIMDD one_edge  = 0;
@@ -60,6 +64,20 @@ limdd_getnode(LIMDD_TARG p)
     assert(limdd_nodes != NULL);
     assert(p != LIMDD_TERMINAL);
     return (limddnode_t) llmsset_index_to_ptr(limdd_nodes, p);
+}
+
+uint64_t
+limdd_node_stab_raw(LIMDD_TARG p)
+{
+    assert(node_stab != NULL);
+    return atomic_load_explicit(&node_stab[p], memory_order_relaxed);
+}
+
+void
+limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v)
+{
+    assert(node_stab != NULL);
+    atomic_store_explicit(&node_stab[p], v, memory_order_relaxed);
 }
 
 LIMDD
@@ -241,6 +259,12 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
         exit(1);
     }
 
+    node_stab = calloc(node_tablesize, sizeof(_Atomic(uint64_t)));
+    if (node_stab == NULL) {
+        fprintf(stderr, "sylvan: could not allocate the LIMDD stabiliser cache\n");
+        exit(1);
+    }
+
     zero_edge = limdd_bundle(LIMDD_LIM_ZERO, LIMDD_TERMINAL);
     one_edge  = limdd_bundle(LIMDD_LIM_IDENTITY, LIMDD_TERMINAL);
 }
@@ -252,6 +276,8 @@ limdd_nodes_quit(void)
         llmsset_free(limdd_nodes);
         limdd_nodes = NULL;
     }
+    free(node_stab);
+    node_stab = NULL;
     limdd_nqubits = 0;
     zero_edge = 0;
     one_edge = 0;

@@ -191,6 +191,23 @@ LIMDD limdd_node_low(LIMDD_TARG p);
 LIMDD limdd_node_high(LIMDD_TARG p);
 
 /**
+ * One machine word of storage per node, where the canonical form caches that
+ * node's stabiliser group. Zero means "not computed yet"; the group handles
+ * themselves are never zero.
+ *
+ * It lives here rather than in the node because the bucket is full, and it is
+ * a plain array rather than a table because the key is already an index.
+ *
+ * Concurrency: entries are written with a relaxed atomic store, and two
+ * workers racing on the same node both compute the same value, so the race is
+ * benign and needs no lock. Neighbouring entries do share a cache line, but
+ * llmsset hands each worker a 512-bucket region at a time, so concurrent
+ * writers are normally far further apart than that.
+ */
+uint64_t limdd_node_stab_raw(LIMDD_TARG p);
+void limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v);
+
+/**
  * The amplitude that `e` assigns to the basis state `bits`, where bits[k] is
  * qubit k. `nqubits` entries are read.
  *
