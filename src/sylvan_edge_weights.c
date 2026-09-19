@@ -83,6 +83,7 @@ sylvan_edge_weights_set_hybrid_tolerance(double rel, double zero)
 }
 static double tolerance;
 static wgt_storage_backend_t wgt_backend;
+static edge_weight_type_t wgt_type = WGT_COMPLEX_128;
 size_t table_size; // current
 size_t min_tablesize; // initial
 size_t max_tablesize; // maximum
@@ -99,6 +100,7 @@ void sylvan_init_edge_weights(size_t _min_tablesize, size_t _max_tablesize, doub
 
 void init_edge_weight_functions(edge_weight_type_t edge_weight_type)
 {
+    wgt_type = edge_weight_type;
     switch (edge_weight_type)
     {
     case WGT_COMPLEX_128:
@@ -169,6 +171,29 @@ init_edge_weight_storage(size_t size, double tol, wgt_storage_backend_t backend,
 
     // Set EVBDD_WGT values for 1, 0 (and -1)
     init_one_zero(*wgt_store);
+}
+
+edge_weight_type_t
+sylvan_get_edge_weight_type(void)
+{
+    return wgt_type;
+}
+
+complex_t
+weight_as_complex(EVBDD_WGT a)
+{
+    complex_t res;
+    if (wgt_type == WGT_QISQ2) {
+        qisq2_t q;
+        weight_value(a, &q);
+        // a + b*sqrt2 + i(c + d*sqrt2)
+        res.r = mpq_get_d(q.a) + mpq_get_d(q.b) * sqrt(2.0);
+        res.i = mpq_get_d(q.c) + mpq_get_d(q.d) * sqrt(2.0);
+        qisq2_clear(&q);
+    } else {
+        weight_value(a, &res);
+    }
+    return res;
 }
 
 uint64_t

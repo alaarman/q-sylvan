@@ -453,8 +453,7 @@ intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
 static bool
 sign_is_canonical(EVBDD_WGT w)
 {
-    complex_t c;
-    weight_value(w, &c);
+    const complex_t c = weight_as_complex(w);
     if (c.i > 1e-14) return true;
     if (c.i < -1e-14) return false;
     return c.r >= 0.0;

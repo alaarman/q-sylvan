@@ -46,6 +46,7 @@
 
 #include "qsylvan_limdd_canon.h"
 #include "sylvan_edge_weights_complex.h"
+#include "sylvan_edge_weights_qisq2.h"
 #include "test_assert.h"
 
 #define NQUBITS 4
@@ -91,8 +92,9 @@ eval_at(LIMDD e, uint64_t b, uint32_t level)
     const unsigned k = ((unsigned)__builtin_popcountll(p.x & p.z)
                         + 2u * (unsigned)__builtin_popcountll(p.z & c)) & 3u;
 
-    complex_t w;
-    weight_value(limdd_lim_weight(lim), &w);
+    // weight_as_complex, not weight_value: under an exact backend the weight
+    // is four GMP rationals and writing it into a complex_t corrupts the stack.
+    const complex_t w = weight_as_complex(limdd_lim_weight(lim));
     const cx acc = cx_mul((cx){ w.r, w.i }, ipow[k]);
 
     const LIMDD_TARG t = limdd_target(e);
@@ -124,12 +126,32 @@ random_word_above(uint32_t var)
     return p;
 }
 
+/*
+ * Scalars drawn from Q[i,sqrt2], so the same set is exactly representable in
+ * both backends and the two runs test the same thing. 1/sqrt(2) is included
+ * because it is the one value that distinguishes them: exactly (1/2)sqrt2
+ * under qisq2, and a rounded double otherwise.
+ */
 static EVBDD_WGT
 random_scalar(void)
 {
-    static const double re[6] = { 1.0, 0.0, -1.0,  0.0, 0.5, -0.25 };
-    static const double im[6] = { 0.0, 1.0,  0.0, -1.0, 0.0,  0.5  };
+    /* { 1, i, -1, -i, 1/2, (1/2)sqrt2 } -- the same six numbers in both
+     * backends, so the two runs compare like with like. The last is the one
+     * that separates them: exactly (1/2)sqrt2 under qisq2, and the rounded
+     * double 0.7071067811865476 otherwise. */
     const unsigned w = rnd() % 6;
+    if (sylvan_get_edge_weight_type() == WGT_QISQ2) {
+        switch (w) {
+        case 0: return qisq2_lookup( 1,1, 0,1,  0,1, 0,1);   //  1
+        case 1: return qisq2_lookup( 0,1, 0,1,  1,1, 0,1);   //  i
+        case 2: return qisq2_lookup(-1,1, 0,1,  0,1, 0,1);   // -1
+        case 3: return qisq2_lookup( 0,1, 0,1, -1,1, 0,1);   // -i
+        case 4: return qisq2_lookup( 1,2, 0,1,  0,1, 0,1);   //  1/2
+        default:return qisq2_lookup( 0,1, 1,2,  0,1, 0,1);   //  (1/2)sqrt2
+        }
+    }
+    static const double re[6] = { 1.0, 0.0, -1.0,  0.0, 0.5, 0.70710678118654752440 };
+    static const double im[6] = { 0.0, 1.0,  0.0, -1.0, 0.0, 0.0 };
     return complex_lookup(re[w], im[w]);
 }
 
@@ -644,13 +666,14 @@ TASK_0(int, runtests)
     return 0;
 }
 
-int
-main(void)
+static int
+run_with(edge_weight_type_t type, wgt_storage_backend_t backend, const char *name)
 {
+    printf("== LIMDD with %s edge weights ==\n", name);
     lace_start(8, 0);
     sylvan_set_sizes(1LL << 16, 1LL << 16, 1LL << 16, 1LL << 16);
     sylvan_init_package();
-    sylvan_init_edge_weights(1LL << 18, 1LL << 18, 1e-14, WGT_COMPLEX_128, COMP_HASHMAP);
+    sylvan_init_edge_weights(1LL << 18, 1LL << 18, 1e-14, type, backend);
 
     int res = RUN(runtests);
 
@@ -658,4 +681,12 @@ main(void)
     sylvan_quit();
     lace_stop();
     return res;
+}
+
+int
+main(void)
+{
+    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex")) return 1;
+    if (run_with(WGT_QISQ2, QISQ2_MAP, "exact (Q[i,sqrt2])")) return 1;
+    return 0;
 }

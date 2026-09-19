@@ -21,6 +21,7 @@
 
 #include "qsylvan_limdd_lim.h"
 #include "sylvan_edge_weights_complex.h"
+#include "sylvan_edge_weights_qisq2.h"
 
 LIMDD_LIM LIMDD_LIM_IDENTITY = 0;
 LIMDD_LIM LIMDD_LIM_ZERO     = 0;
@@ -233,14 +234,25 @@ limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
      * four must exist in the weight table; that in turn requires the weights
      * to be complex.
      */
+    /*
+     * i and -i, in whichever representation the weights use. Both lie in
+     * Q[i,sqrt2], so an exact backend holds them exactly -- which is the whole
+     * reason a LIMDD wants one: a LIM is interned under (Pauli word, scalar),
+     * and the products a Pauli multiplication generates are these four.
+     */
     i_pow[0] = EVBDD_ONE;
-    i_pow[1] = complex_lookup(0.0, 1.0);
     i_pow[2] = EVBDD_MIN_ONE;
-    i_pow[3] = complex_lookup(0.0, -1.0);
+    if (sylvan_get_edge_weight_type() == WGT_QISQ2) {
+        i_pow[1] = qisq2_lookup(0,1, 0,1,  1,1, 0,1);
+        i_pow[3] = qisq2_lookup(0,1, 0,1, -1,1, 0,1);
+    } else {
+        i_pow[1] = complex_lookup(0.0, 1.0);
+        i_pow[3] = complex_lookup(0.0, -1.0);
+    }
 
     if (i_pow[1] == i_pow[0] || i_pow[1] == i_pow[2]) {
-        fprintf(stderr, "sylvan: LIMDD needs complex edge weights; "
-                        "i is not representable in the current weight type\n");
+        fprintf(stderr, "sylvan: LIMDD needs a weight type containing i; "
+                        "the current one does not represent it\n");
         exit(1);
     }
 

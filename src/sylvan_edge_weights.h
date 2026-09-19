@@ -35,6 +35,19 @@ extern void init_edge_weight_storage(size_t size, double tol, wgt_storage_backen
 extern void (*init_wgt_table_entries)(); // set by sylvan_init_evbdd
 
 extern uint64_t sylvan_get_edge_weight_table_size();
+
+/** Which representation the weights currently use. */
+edge_weight_type_t sylvan_get_edge_weight_type(void);
+
+/**
+ * The weight `a` as a pair of doubles.
+ *
+ * Backend-agnostic, so that code which only needs to order weights or pick a
+ * sign does not have to know whether they are stored as doubles or as exact
+ * algebraic numbers. For an exact backend this loses precision by design: the
+ * result is for comparing and printing, never for arithmetic.
+ */
+complex_t weight_as_complex(EVBDD_WGT a);
 extern double sylvan_edge_weights_tolerance();
 
 /**

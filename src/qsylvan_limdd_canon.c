@@ -135,9 +135,11 @@ lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
     if (pa.x != pb.x) return pa.x < pb.x ? -1 : 1;
     if (pa.z != pb.z) return pa.z < pb.z ? -1 : 1;
 
-    complex_t ca, cb;
-    weight_value(limdd_lim_weight(a), &ca);
-    weight_value(limdd_lim_weight(b), &cb);
+    /* As doubles, which is enough to order them and works for any backend.
+     * Exact weights lose precision here, but only the ORDER matters and it
+     * stays a deterministic function of the value. */
+    const complex_t ca = weight_as_complex(limdd_lim_weight(a));
+    const complex_t cb = weight_as_complex(limdd_lim_weight(b));
     if (ca.r != cb.r) return ca.r < cb.r ? -1 : 1;
     if (ca.i != cb.i) return ca.i < cb.i ? -1 : 1;
     return 0;
