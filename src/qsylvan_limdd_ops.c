@@ -276,6 +276,51 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     return res;
 }
 
+/* --- controls on either side, and swap -------------------------------- */
+
+/** CNOT with the control BELOW the target, via Hadamard conjugation. */
+static LIMDD
+cx_reversed(LIMDD e, uint32_t c, uint32_t t, uint32_t nq)
+{
+    assert(c > t);
+    e = limdd_gate(e, GATEID_H, c, nq);
+    e = limdd_gate(e, GATEID_H, t, nq);
+    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << t, c, nq);  /* now t < c */
+    e = limdd_gate(e, GATEID_H, t, nq);
+    e = limdd_gate(e, GATEID_H, c, nq);
+    return e;
+}
+
+LIMDD
+limdd_cgate_either(LIMDD e, uint32_t gateid, uint32_t control, uint32_t target,
+                   uint32_t nqubits, bool *ok)
+{
+    *ok = true;
+    if (control < target) return limdd_cgate(e, gateid, UINT64_C(1) << control,
+                                             target, nqubits);
+
+    if (gateid == GATEID_Z) {
+        /* CZ = diag(1,1,1,-1) is symmetric in its two qubits. */
+        return limdd_cgate(e, GATEID_Z, UINT64_C(1) << target, control, nqubits);
+    }
+    if (gateid == GATEID_X) return cx_reversed(e, control, target, nqubits);
+
+    *ok = false;
+    return e;
+}
+
+LIMDD
+limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits)
+{
+    if (a == b) return e;
+    if (a > b) { const uint32_t t = a; a = b; b = t; }
+
+    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << a, b, nqubits);
+    e = cx_reversed(e, b, a, nqubits);
+    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << a, b, nqubits);
+    return e;
+}
+
 /* --- states and probabilities -------------------------------------------- */
 
 /* --- counting the live nodes --------------------------------------------- */

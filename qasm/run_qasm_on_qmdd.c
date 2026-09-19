@@ -432,18 +432,23 @@ limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
     else if (strcmp(gate->name, "sdg")  == 0) id = GATEID_Sdag;
     else if (strcmp(gate->name, "t")    == 0) id = GATEID_T;
     else if (strcmp(gate->name, "tdg")  == 0) id = GATEID_Tdag;
+    else if (strcmp(gate->name, "swap") == 0) {
+        *state = limdd_swap(*state, gate->targets[0], gate->targets[1], nqubits);
+        return true;
+    }
     else if (strcmp(gate->name, "cx")   == 0 || strcmp(gate->name, "cy") == 0 ||
              strcmp(gate->name, "cz")   == 0 || strcmp(gate->name, "ch") == 0) {
-        const uint32_t c = gate->ctrls[0];
-        if (c >= t) {
-            fprintf(stderr, "limdd: control %u is not above target %u; the "
-                            "recursion cannot resolve it (try --reorder-swaps)\n", c, t);
-            return false;
-        }
         const uint32_t cid = (gate->name[1] == 'x') ? GATEID_X
                            : (gate->name[1] == 'y') ? GATEID_Y
                            : (gate->name[1] == 'z') ? GATEID_Z : GATEID_H;
-        *state = limdd_cgate(*state, cid, UINT64_C(1) << c, t, nqubits);
+        bool ok;
+        *state = limdd_cgate_either(*state, cid, gate->ctrls[0], t, nqubits, &ok);
+        if (!ok) {
+            fprintf(stderr, "limdd: '%s' with control %u below target %u has no "
+                            "exact reordering identity\n",
+                    gate->name, gate->ctrls[0], t);
+            return false;
+        }
         return true;
     }
     else {
@@ -455,8 +460,7 @@ limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
     return true;
 }
 
-static int
-limdd_simulate_circuit(quantum_circuit_t *circuit)
+TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize)
 {
     const BDDVAR n = circuit->qreg_size;
     if (n > LIMDD_MAX_QUBITS) {
@@ -474,25 +478,45 @@ limdd_simulate_circuit(quantum_circuit_t *circuit)
             if (!limdd_apply_gate(&state, op, n)) { limdd_unprotect(&state); return 1; }
         }
         else if (op->type == op_measurement) {
-            /*
-             * The same quantity the QMDD path reports: the probability of
-             * measuring |0> on the TOP qubit, as a fraction of the state's
-             * norm. Reporting P(1), or P on the measured qubit, would make
-             * the two columns look like they disagree when they do not.
-             */
-            const double p1 = limdd_prob_qubit_one(state, 0, n);
-            const double tot = limdd_norm_squared(state, n);
-            stats.first_qubit_prob = (tot > 0.0) ? (tot - p1) / tot : 1e10;
-            break;
+            break;   /* the probability is taken from the final state below */
         }
         if (count_nodes) {
             const uint64_t c = limdd_countnodes(state);
             if (c > stats.max_nodes) stats.max_nodes = c;
         }
+
+        /*
+         * Nothing is freed until it is collected, and a few hundred gates
+         * intern far more LIMs than stay reachable. `state` is protected, so
+         * a collection here keeps exactly what the circuit still needs.
+         * Between gates is the only safe moment: the collector has explicit
+         * roots and does not see a half-finished operation's temporaries.
+         */
+        if (limdd_lim_table_count() > tabsize - (tabsize >> 2) ||
+            limdd_node_table_count() > tabsize - (tabsize >> 2) ||
+            limdd_stab_table_count() > tabsize - (tabsize >> 2)) {
+            CALL(limdd_gc);
+        }
     }
 
     stats.simulation_time = wctime() - t_start;
     stats.norm = limdd_norm_squared(state, n);
+
+    /*
+     * Computed from the final state, not inside the measurement branch: the
+     * paper's benchmark circuits carry no measure statement at all, so that
+     * branch never runs and the figure stayed at its initial zero -- which
+     * looked exactly like a wrong state.
+     *
+     * The quantity is the QMDD path's: the probability of |0> on the TOP
+     * qubit as a fraction of the norm. Reporting P(1), or P on some other
+     * qubit, would make the two columns disagree where they do not.
+     */
+    {
+        const double p1 = limdd_prob_qubit_one(state, 0, n);
+        stats.first_qubit_prob = (stats.norm > 0.0)
+                               ? (stats.norm - p1) / stats.norm : 1e10;
+    }
     stats.final_nodes = limdd_countnodes(state);
     limdd_unprotect(&state);
     return 0;
@@ -591,11 +615,12 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          */
         size_t lt = min_tablesize;
         if (lt > (1LL<<23)) lt = 1LL<<23;
+
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
          * they reach it, so a value larger than the diagram is deep sends
          * them past the terminal. */
         limdd_nodes_init(circuit->qreg_size, lt, lt, lt, lt);
-        if (limdd_simulate_circuit(circuit) != 0) {
+        if (CALL(limdd_simulate_circuit, circuit, lt) != 0) {
             limdd_nodes_quit();
             exit(1);
         }

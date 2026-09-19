@@ -90,6 +90,17 @@ VOID_TASK_0(limdd_gc_mark_roots)
 
 VOID_TASK_0(limdd_gc_go)
 {
+    /*
+     * The operation cache first. Its entries are keyed on edges and hold
+     * edges, and a collection frees buckets for reuse -- so an entry that
+     * survives a sweep can hand back a node that now belongs to something
+     * else. Sylvan's own collector clears it for the same reason. Nothing
+     * about this is visible until a run is long enough to collect, which is
+     * what let it through: every circuit small enough to finish without
+     * collecting gave the right answer.
+     */
+    cache_clear();
+
     limdd_gc_clear_nodes();
     limdd_gc_clear_stabs();
     limdd_gc_clear_lims();

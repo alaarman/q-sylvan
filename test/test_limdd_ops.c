@@ -195,6 +195,57 @@ test_controlled_gates(void)
     return compare(e, want, "ccz", 0);
 }
 
+/**
+ * SWAP, and controlled gates with the control below the target.
+ *
+ * These go through identities rather than the recursion, so they need
+ * checking against the dense reference in their own right -- a wrong
+ * Hadamard conjugation would still produce a valid state, just not this one.
+ */
+int
+test_reversed_and_swap(void)
+{
+    for (uint32_t a = 0; a < NQUBITS; a++) {
+        for (uint32_t b = 0; b < NQUBITS; b++) {
+            if (a == b) continue;
+
+            LIMDD e = limdd_all_zero_state(NQUBITS);
+            cx want[NBASIS];
+            memset(want, 0, sizeof(want));
+            want[0].re = 1.0;
+
+            /* Spread the amplitude first, or every gate below is a no-op. */
+            for (uint32_t q = 0; q < NQUBITS; q++) {
+                const uint32_t g = (q % 2) ? GATEID_H : GATEID_T;
+                e = limdd_gate(e, g, q, NQUBITS);
+                dense_gate(want, g, q, 0);
+            }
+
+            bool ok;
+            e = limdd_cgate_either(e, GATEID_X, a, b, NQUBITS, &ok);
+            test_assert(ok);
+            dense_gate(want, GATEID_X, b, UINT64_C(1) << a);
+            char l1[48]; snprintf(l1, sizeof(l1), "cx %u->%u", a, b);
+            if (compare(e, want, l1, 0)) return 1;
+
+            e = limdd_cgate_either(e, GATEID_Z, a, b, NQUBITS, &ok);
+            test_assert(ok);
+            dense_gate(want, GATEID_Z, b, UINT64_C(1) << a);
+            char l2[48]; snprintf(l2, sizeof(l2), "cz %u->%u", a, b);
+            if (compare(e, want, l2, 0)) return 1;
+
+            e = limdd_swap(e, a, b, NQUBITS);
+            /* SWAP as three CNOTs, applied to the reference the same way. */
+            dense_gate(want, GATEID_X, b, UINT64_C(1) << a);
+            dense_gate(want, GATEID_X, a, UINT64_C(1) << b);
+            dense_gate(want, GATEID_X, b, UINT64_C(1) << a);
+            char l3[48]; snprintf(l3, sizeof(l3), "swap %u<->%u", a, b);
+            if (compare(e, want, l3, 0)) return 1;
+        }
+    }
+    return 0;
+}
+
 int
 test_random_circuits(void)
 {
@@ -343,6 +394,8 @@ TASK_0(int, runtests)
     printf("controlled gates match a dense sim:      ok\n");
     if (test_addition()) return 1;
     printf("addition matches the dense sum:          ok\n");
+    if (test_reversed_and_swap()) return 1;
+    printf("reversed controls and swap:              ok\n");
     if (test_random_circuits()) return 1;
     printf("40 random Clifford+T circuits, per gate: ok\n");
     if (test_probabilities()) return 1;

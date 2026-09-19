@@ -104,6 +104,29 @@ TASK_DECL_5(LIMDD, limdd_cgate, LIMDD, uint32_t, uint64_t, uint32_t, uint32_t);
     RUN(limdd_cgate, e, gateid, control_mask, target, nqubits)
 
 /**
+ * A controlled gate with the control on either side of the target.
+ *
+ * limdd_cgate needs the control above the target. When it is not, two
+ * identities put it there rather than reaching for a matrix representation
+ * LIMDD does not have:
+ *
+ *   CZ is symmetric, so its two qubits simply exchange roles.
+ *   CX reverses under Hadamards on both qubits:
+ *   (H (x) H) CNOT_{a->b} (H (x) H) = CNOT_{b->a}.
+ *
+ * Both are exact and stay inside Clifford+T. Any other gate with the control
+ * below the target is refused.
+ */
+LIMDD limdd_cgate_either(LIMDD e, uint32_t gateid, uint32_t control,
+                         uint32_t target, uint32_t nqubits, bool *ok);
+
+/**
+ * Exchange two qubits, as three CNOTs, the middle one reversed by the
+ * identity above.
+ */
+LIMDD limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits);
+
+/**
  * The probability of measuring |1> on `qubit`, for a normalised state.
  *
  * Computed by summing squared magnitudes over the diagram rather than over
