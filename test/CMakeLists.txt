@@ -73,6 +73,14 @@ sylvan_test_warnings(test_limdd_pauli)
 
 add_test(NAME test_limdd_pauli COMMAND test_limdd_pauli)
 
+add_executable(test_limdd_lim)
+target_sources(test_limdd_lim PRIVATE test_limdd_lim.c)
+target_link_libraries(test_limdd_lim PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_lim PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_lim)
+
+add_test(NAME test_limdd_lim COMMAND test_limdd_lim)
+
 # ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
 
 foreach(_qmdd_test
