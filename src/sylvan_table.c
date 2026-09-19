@@ -21,12 +21,73 @@
 #include <errno.h>
 #include <string.h> // memset
 
-SYLVAN_TLS uint64_t my_region = UINT64_MAX;
+/**
+ * Sentinel meaning "this worker does not currently own a region".
+ */
+#define NO_REGION UINT64_MAX
 
-VOID_TASK_0(llmsset_reset_region)
+/**
+ * The region each worker is currently filling, per table.
+ *
+ * Thread-local rather than a shared array indexed by worker: a worker bumps its
+ * cursor on every insertion, so a shared array would put several workers'
+ * cursors on one cache line and every insertion would invalidate its
+ * neighbours'. Thread-local storage sidesteps that entirely -- there is no
+ * shared line to begin with.
+ *
+ * Indexed by llmsset::table_id so that several tables can be live at once
+ * without stealing each other's cursor.
+ */
+SYLVAN_TLS uint64_t my_region[LLMSSET_MAX_TABLES] = {
+    NO_REGION, NO_REGION, NO_REGION, NO_REGION,
+    NO_REGION, NO_REGION, NO_REGION, NO_REGION,
+};
+static_assert(LLMSSET_MAX_TABLES == 8,
+              "the initialiser of my_region must list LLMSSET_MAX_TABLES entries");
+
+/**
+ * Which table ids are taken. Claimed and released with a CAS; there is no lock
+ * and no blocking, a losing racer simply retries with the value the CAS handed
+ * back. Tables are created rarely, so contention here is irrelevant anyway.
+ */
+static _Atomic(uint64_t) table_ids_in_use = 0;
+
+static unsigned
+claim_table_id(void)
+{
+    const uint64_t all = (LLMSSET_MAX_TABLES == 64)
+                       ? UINT64_MAX
+                       : ((UINT64_C(1) << LLMSSET_MAX_TABLES) - 1);
+
+    uint64_t cur = atomic_load_explicit(&table_ids_in_use, memory_order_relaxed);
+    for (;;) {
+        if ((cur & all) == all) {
+            fprintf(stderr, "llmsset_create: more than %d tables in use; "
+                            "raise LLMSSET_MAX_TABLES\n", LLMSSET_MAX_TABLES);
+            exit(1);
+        }
+        const unsigned id = ctz_uint64(~cur & all);
+        const uint64_t want = cur | (UINT64_C(1) << id);
+        if (atomic_compare_exchange_weak_explicit(&table_ids_in_use, &cur, want,
+                                                  memory_order_acq_rel,
+                                                  memory_order_relaxed)) {
+            return id;
+        }
+        // CAS failed and refreshed `cur`; try again with the new value.
+    }
+}
+
+static void
+release_table_id(unsigned id)
+{
+    atomic_fetch_and_explicit(&table_ids_in_use, ~(UINT64_C(1) << id),
+                              memory_order_release);
+}
+
+VOID_TASK_1(llmsset_reset_region, unsigned, table_id)
 {
     // we don't actually need Lace, but it's a Lace task to run for initialisation
-    my_region = UINT64_MAX; // no region
+    my_region[table_id] = NO_REGION; // no region
 }
 
 static uint64_t
@@ -65,10 +126,14 @@ claim_next_region(const llmsset_t dbs, uint64_t start_region)
 static uint64_t
 claim_data_bucket(const llmsset_t dbs)
 {
+    // This worker's cursor for this table. Thread-local, so writing through it
+    // cannot invalidate a line any other worker is reading.
+    uint64_t *const region = &my_region[dbs->table_id];
+
     for (;;) {
-        if (my_region != UINT64_MAX) {
+        if (*region != NO_REGION) {
             // find empty bucket in current region
-            _Atomic(uint64_t)*ptr = dbs->bitmap2 + (my_region * 8u);
+            _Atomic(uint64_t)*ptr = dbs->bitmap2 + (*region * 8u);
 
             for (int i = 0; i < 8; i++) {
                 uint64_t v = atomic_load_explicit(ptr, memory_order_relaxed);
@@ -79,15 +144,15 @@ claim_data_bucket(const llmsset_t dbs)
                         UINT64_C(0x8000000000000000) >> j,
                         memory_order_relaxed
                     );
-                    return (8u * my_region + (uint64_t)i) * 64u + (uint64_t)j;
+                    return (8u * *region + (uint64_t)i) * 64u + (uint64_t)j;
                 }
                 ptr++;
             }
 
             // Current region is full; claim the next available one.
-            uint64_t claimed = claim_next_region(dbs, my_region + 1u);
+            uint64_t claimed = claim_next_region(dbs, *region + 1u);
             if (claimed == UINT64_MAX) return UINT64_MAX;
-            my_region = claimed;
+            *region = claimed;
         }
         else {
             // First use after startup or GC. Spread workers over the region space.
@@ -102,7 +167,7 @@ claim_data_bucket(const llmsset_t dbs)
 
             uint64_t claimed = claim_next_region(dbs, start_region);
             if (claimed == UINT64_MAX) return UINT64_MAX;
-            my_region = claimed;
+            *region = claimed;
         }
     }
 }
@@ -380,11 +445,8 @@ llmsset_create(size_t initial_size, size_t max_size)
     dbs->create_cb = NULL;
     dbs->destroy_cb = NULL;
 
-    // yes, ugly. for now, we use a global thread-local value.
-    // that is a problem with multiple tables.
-    // so, for now, do NOT use multiple tables!!
-
-    TOGETHER(llmsset_reset_region);
+    dbs->table_id = claim_table_id();
+    TOGETHER(llmsset_reset_region, dbs->table_id);
 
     // initialize hashtab
     sylvan_init_hash();
@@ -395,6 +457,7 @@ llmsset_create(size_t initial_size, size_t max_size)
 void
 llmsset_free(llmsset_t dbs)
 {
+    release_table_id(dbs->table_id);
     sylvan_free_aligned(dbs->table, dbs->max_size * sizeof(*dbs->table));
     sylvan_free_aligned(dbs->data, dbs->max_size * 2 * sizeof(uint64_t));
     sylvan_free_aligned(dbs->bitmap1, dbs->max_size / (512 * 8));
@@ -417,7 +480,7 @@ VOID_TASK_IMPL_1(llmsset_clear_data, llmsset_t, dbs)
     // forbid first two positions (index 0 and 1)
     dbs->bitmap2[0] = UINT64_C(0xc000000000000000);
 
-    TOGETHER(llmsset_reset_region);
+    TOGETHER(llmsset_reset_region, dbs->table_id);
 }
 
 VOID_TASK_IMPL_1(llmsset_clear_hashes, llmsset_t, dbs)

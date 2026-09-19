@@ -32,10 +32,17 @@ extern "C" {
  * Methods llmsset_clear, llmsset_mark and llmsset_rehash implement garbage collection.
  * During their execution, llmsset_lookup is not allowed.
  *
- * WARNING: Originally, this table is designed to allow multiple tables.
- * However, this is not compatible with thread local storage for now.
- * Do not use multiple tables.
+ * Multiple tables may coexist, up to LLMSSET_MAX_TABLES of them. Each table
+ * claims an id at creation and releases it in llmsset_free; the id indexes the
+ * per-worker region cursor, which is thread-local, so two tables never share a
+ * cursor and no worker ever writes a cache line another worker reads.
  */
+
+/**
+ * Maximum number of llmsset instances that may exist at the same time.
+ * Each one costs every Lace worker one uint64 of thread-local storage.
+ */
+#define LLMSSET_MAX_TABLES 8
 
 /**
  * hash(a, b, seed)
@@ -67,6 +74,7 @@ typedef struct llmsset
     llmsset_create_cb  create_cb;    // custom create function
     llmsset_destroy_cb destroy_cb;   // custom destroy function
     _Atomic(int16_t)   threshold;    // number of iterations for insertion until returning error
+    unsigned           table_id;     // index into the per-worker region cursors
 } *llmsset_t;
 
 /**

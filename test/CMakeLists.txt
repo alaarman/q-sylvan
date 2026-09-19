@@ -33,6 +33,14 @@ target_link_libraries(test_cxx PRIVATE qsylvan::sylvan)
 target_compile_features(test_cxx PRIVATE cxx_std_11)
 sylvan_test_warnings(test_cxx)
 
+add_executable(test_table_multi)
+target_sources(test_table_multi PRIVATE test_table_multi.c)
+target_link_libraries(test_table_multi PRIVATE qsylvan::sylvan)
+target_compile_features(test_table_multi PRIVATE c_std_11)
+sylvan_test_warnings(test_table_multi)
+
+add_test(NAME test_table_multi COMMAND test_table_multi)
+
 add_test(NAME test_basic COMMAND test_basic)
 add_test(NAME test_zdd   COMMAND test_zdd)
 add_test(NAME test_table COMMAND test_table)
