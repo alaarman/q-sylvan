@@ -372,6 +372,99 @@ test_bell_shares_a_node(void)
     return 0;
 }
 
+/* --- edges as identities for states -------------------------------------- */
+
+int
+test_edge_equality(void)
+{
+    /*
+     * A label may be multiplied by anything fixing the target without changing
+     * the state, so an edge only identifies a state once that freedom is
+     * quotiented out. Every member of the coset must reduce to the edge itself.
+     */
+    for (int trial = 0; trial < 1000; trial++) {
+        const LIMDD e = random_edge(0);
+        if (limdd_edge_is_zero(e)) continue;
+
+        const LIMDD_STAB s = limdd_node_stab(limdd_target(e));
+        const size_t k = limdd_stab_ngens(s);
+        if (k == 0) continue;
+
+        for (uint64_t i = 0; i < ((uint64_t)1 << k); i++) {
+            const LIMDD_LIM g = limdd_stab_element(s, i);
+            const LIMDD alt = limdd_bundle(limdd_lim_mul(limdd_label(e), g),
+                                           limdd_target(e));
+            if (limdd_edge_canonical(alt) != e) {
+                fprintf(stderr, "trial %d: a label times a stabiliser did not "
+                                "reduce back to the edge\n", trial);
+                return 1;
+            }
+            /* ...and it really was the same state to begin with. */
+            cx va[NBASIS], vb[NBASIS];
+            vector_of(e, 0, va);
+            vector_of(alt, 0, vb);
+            for (unsigned j = 0; j < NBASIS; j++) test_assert(cx_eq(va[j], vb[j]));
+        }
+    }
+    return 0;
+}
+
+#define NPOOL 400
+
+/**
+ * Equal states, equal edges -- checked the hard way.
+ *
+ * A pool of independently built diagrams is compared pairwise, both as vectors
+ * and as edges, and the two verdicts must agree. This is the statement the
+ * whole canonical form exists to support, and it is stronger than any of the
+ * targeted invariance tests: those perturb an input in a way chosen to
+ * preserve the state, whereas here any two constructions that happen to
+ * coincide have to coincide.
+ */
+int
+test_equal_states_equal_edges(void)
+{
+    static LIMDD pool[NPOOL];
+    static cx vecs[NPOOL][NBASIS];
+
+    size_t n = 0;
+    for (int trial = 0; trial < NPOOL; trial++) {
+        const LIMDD e = random_edge(0);
+        if (limdd_edge_is_zero(e)) continue;
+        pool[n] = e;
+        vector_of(e, 0, vecs[n]);
+        n++;
+    }
+
+    size_t coincidences = 0;
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = i + 1; j < n; j++) {
+            bool same_state = true;
+            for (unsigned b = 0; b < NBASIS && same_state; b++) {
+                if (!cx_eq(vecs[i][b], vecs[j][b])) same_state = false;
+            }
+            const bool same_edge = (pool[i] == pool[j]);
+            if (same_state != same_edge) {
+                fprintf(stderr,
+                        "diagrams %zu and %zu: states %s but edges %s\n", i, j,
+                        same_state ? "equal" : "differ",
+                        same_edge ? "equal" : "differ");
+                return 1;
+            }
+            if (same_state) coincidences++;
+        }
+    }
+
+    /* A run where no two diagrams ever coincided would prove nothing. */
+    if (coincidences == 0) {
+        fprintf(stderr, "no two diagrams denoted the same state -- "
+                        "the test proved nothing\n");
+        return 1;
+    }
+    printf("  (%zu coinciding pairs among %zu diagrams)\n", coincidences, n);
+    return 0;
+}
+
 /* --- the cached stabiliser groups ---------------------------------------- */
 
 static void
@@ -535,6 +628,10 @@ TASK_0(int, runtests)
     printf("|0000> and |1000> share every node:           ok\n");
     if (test_bell_shares_a_node()) return 1;
     printf("the Bell state needs one node per level:      ok\n");
+    if (test_edge_equality()) return 1;
+    printf("a label times a stabiliser reduces back:      ok\n");
+    if (test_equal_states_equal_edges()) return 1;
+    printf("equal states have equal edges:                ok\n");
     if (test_stab_of_canonical_nodes()) return 1;
     printf("cached groups match the states they fix:      ok\n");
     if (test_concurrent()) return 1;

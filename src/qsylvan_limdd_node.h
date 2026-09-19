@@ -181,6 +181,15 @@ limdd_edge_is_zero(LIMDD e)
  */
 LIMDD_TARG limdd_makenode(uint32_t var, LIMDD low, LIMDD high);
 
+/**
+ * As limdd_makenode, but `*created` reports whether the bucket was fresh.
+ *
+ * Anything caching data alongside a node needs this: after a collection a
+ * bucket can be handed out again, and a cache slot left over from its previous
+ * occupant would otherwise be read as that node's.
+ */
+LIMDD_TARG limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created);
+
 /** The variable of node `p`. `p` must not be the terminal. */
 uint32_t limdd_node_var(LIMDD_TARG p);
 

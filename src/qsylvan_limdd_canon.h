@@ -50,15 +50,13 @@
  *                       with one zero child is always stored with the zero on
  *                       the high side. |0..0> and |10..0> are the same node.
  *
- * WHAT IS NOT DONE HERE
+ * THE LABEL TOO
  *
- * The LABEL on the returned edge is not itself canonical: it may be multiplied
- * by any element of the result node's stabiliser group and still denote the
- * same state. That does not affect node merging -- the next level divides the
- * label out again and minimises over the same coset -- so diagrams stay
- * canonical and stay small. It does mean two edges denoting one state can
- * differ, so comparing states by edge equality needs the label reduced against
- * the target's group first.
+ * The label on the returned edge is reduced against the target's stabiliser
+ * group, which is the one remaining freedom: L and L G denote the same state
+ * for every G that fixes the target. Node merging does not need it -- the next
+ * level divides the label out again -- but state equality does, and without it
+ * two edges for one state can differ.
  *
  * Weight normalisation follows from the rules above rather than being a rule
  * of its own: the low edge carries the identity, so the node's weights are
@@ -105,6 +103,16 @@ LIMDD limdd_makeedge(uint32_t var, LIMDD low, LIMDD high);
  * limdd_makeedge, since limdd_stab_of_node needs canonical children.
  */
 LIMDD_STAB limdd_node_stab(LIMDD_TARG p);
+
+/**
+ * `e` with its label replaced by the least member of L * Stab(target).
+ *
+ * Every member of that coset denotes the same state, so an edge is only
+ * determined up to it; reducing makes two edges for one state identical, which
+ * is what comparing states by edge equality needs. makeedge applies this to
+ * everything it returns, so edges from it are already reduced.
+ */
+LIMDD limdd_edge_canonical(LIMDD e);
 
 /** The group of the state an edge denotes, i.e. its target's group conjugated
  *  by its label. The zero edge has the trivial group. */

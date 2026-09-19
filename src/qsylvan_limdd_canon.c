@@ -69,6 +69,34 @@ limdd_edge_stab(LIMDD e)
     return limdd_stab_make(gens, k);
 }
 
+LIMDD
+limdd_edge_canonical(LIMDD e)
+{
+    if (limdd_edge_is_zero(e)) return limdd_zero_edge();
+
+    const LIMDD_TARG t = limdd_target(e);
+    if (t == LIMDD_TERMINAL) return e;
+
+    const LIMDD_STAB s = limdd_node_stab(t);
+    if (limdd_stab_is_trivial(s)) return e;
+
+    /*
+     * L and L G denote the same state for every G in Stab(t), so the label is
+     * only determined up to that right coset. Minimising over it is what makes
+     * two edges for one state identical.
+     *
+     * limdd_stab_min_coset also offers a sign, which this coset does not have:
+     * -L G is a different state, since no stabiliser group contains -I. So the
+     * flip is undone. The word it chose is unaffected either way, and for a
+     * fixed word the coset holds exactly one element.
+     */
+    bool neg;
+    LIMDD_LIM m = limdd_stab_min_coset(limdd_label(e), LIMDD_STAB_TRIVIAL, s, NULL, &neg);
+    if (neg) m = limdd_lim_make(limdd_lim_pauli(m), wgt_neg(limdd_lim_weight(m)));
+
+    return limdd_bundle(m, t);
+}
+
 /**
  * `a` with the Pauli (x, z) placed at qubit `var`.
  *
@@ -112,9 +140,15 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
 {
     const LIMDD low = limdd_bundle(LIMDD_LIM_IDENTITY, lo);
     const LIMDD high = limdd_bundle(lab, hi);
-    const LIMDD_TARG t = limdd_makenode(var, low, high);
+    int created;
+    const LIMDD_TARG t = limdd_makenode_ex(var, low, high, &created);
 
-    if (limdd_node_stab_raw(t) == 0) {
+    /*
+     * A fresh bucket may be one a collection has recycled, so whatever is in
+     * its cache slot belongs to whoever had it before and must be replaced,
+     * not read.
+     */
+    if (created || limdd_node_stab_raw(t) == 0) {
         limdd_node_set_stab_raw(t, limdd_stab_of_node(var, low, high, s_lo, s_hi));
     }
     return t;
@@ -137,7 +171,8 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         const LIMDD_TARG v = limdd_target(live);
         const LIMDD_TARG t = intern(var, v, LIMDD_LIM_ZERO, LIMDD_TERMINAL,
                                     limdd_node_stab(v), LIMDD_STAB_TRIVIAL);
-        return limdd_bundle(lim_with_pauli_at(limdd_label(live), var, lz, false), t);
+        return limdd_edge_canonical(
+            limdd_bundle(lim_with_pauli_at(limdd_label(live), var, lz, false), t));
     }
 
     const LIMDD_TARG v0 = limdd_target(low);
@@ -171,7 +206,7 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
          * the operator that negates the high branch and leaves the low one.
          */
         const LIMDD_LIM r = limdd_lim_mul(a, g1);
-        return limdd_bundle(lim_with_pauli_at(r, var, false, neg1), t);
+        return limdd_edge_canonical(limdd_bundle(lim_with_pauli_at(r, var, false, neg1), t));
     } else {
         const LIMDD_TARG t = intern(var, v1, lab2, v0, s1, s0);
 
@@ -185,6 +220,6 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         } else {
             r = lim_with_pauli_at(r, var, true, false);
         }
-        return limdd_bundle(r, t);
+        return limdd_edge_canonical(limdd_bundle(r, t));
     }
 }

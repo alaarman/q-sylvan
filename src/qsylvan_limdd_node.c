@@ -123,6 +123,13 @@ limdd_node_high(LIMDD_TARG p)
 LIMDD_TARG
 limdd_makenode(uint32_t var, LIMDD low, LIMDD high)
 {
+    int created;
+    return limdd_makenode_ex(var, low, high, &created);
+}
+
+LIMDD_TARG
+limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
+{
     assert(limdd_nodes != NULL);
     assert(var < limdd_nqubits);
 
@@ -162,8 +169,7 @@ limdd_makenode(uint32_t var, LIMDD low, LIMDD high)
            | low_targ;
     n.high = ((uint64_t)high_lim << LIMDD_TARG_BITS) | high_targ;
 
-    int created;
-    const uint64_t res = llmsset_lookup(limdd_nodes, n.low, n.high, &created);
+    const uint64_t res = llmsset_lookup(limdd_nodes, n.low, n.high, created);
     if (res == 0) {
         fprintf(stderr, "sylvan: LIMDD node table is full\n");
         exit(1);
