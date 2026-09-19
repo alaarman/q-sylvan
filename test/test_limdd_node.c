@@ -361,7 +361,7 @@ test_concurrent_makenode(void)
 
 TASK_0(int, runtests)
 {
-    limdd_nodes_init(NQUBITS, 1LL << 16, 1LL << 16, 1LL << 16);
+    limdd_nodes_init(NQUBITS, 1LL << 16, 1LL << 16, 1LL << 16, 1LL << 16);
 
     if (test_edge_encoding()) return 1;
     printf("limdd edge fields round-trip:            ok\n");

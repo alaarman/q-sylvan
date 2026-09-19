@@ -112,15 +112,16 @@ typedef uint64_t LIMDD_TARG;
 #define LIMDD_TARG_MAX  LIMDD_TARG_MASK
 
 /**
- * Create the LIMDD node table, and the LIM and Pauli tables under it.
+ * Create the LIMDD node table, and the LIM, Pauli and stabiliser tables under it.
  *
  * The edge weight table must already exist and must hold complex weights.
  * Must be called from a Lace worker.
  */
 void limdd_nodes_init(size_t nqubits, size_t node_tablesize,
-                      size_t pauli_tablesize, size_t lim_tablesize);
+                      size_t pauli_tablesize, size_t lim_tablesize,
+                      size_t stab_tablesize);
 
-/** Destroy the node, LIM and Pauli tables. The weight table is untouched. */
+/** Destroy the node, LIM, Pauli and stabiliser tables. Weights are untouched. */
 void limdd_nodes_quit(void);
 
 /** Number of nodes currently in the table, terminal excluded. */

@@ -21,6 +21,7 @@
 #include <sylvan_platform.h>
 
 #include "qsylvan_limdd_node.h"
+#include "qsylvan_limdd_stab.h"
 
 /*
  * Written once by limdd_nodes_init and read-only afterwards, so there is no
@@ -227,9 +228,11 @@ limdd_eval(LIMDD e, const bool *bits, size_t nqubits)
 
 void
 limdd_nodes_init(size_t nqubits, size_t node_tablesize,
-                 size_t pauli_tablesize, size_t lim_tablesize)
+                 size_t pauli_tablesize, size_t lim_tablesize,
+                 size_t stab_tablesize)
 {
     limdd_lims_init(nqubits, pauli_tablesize, lim_tablesize);
+    limdd_stab_init(stab_tablesize);
 
     limdd_nqubits = nqubits;
     limdd_nodes = llmsset_create(node_tablesize, node_tablesize);
@@ -252,5 +255,6 @@ limdd_nodes_quit(void)
     limdd_nqubits = 0;
     zero_edge = 0;
     one_edge = 0;
+    limdd_stab_quit();
     limdd_lims_quit();
 }
