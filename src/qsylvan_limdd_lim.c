@@ -168,6 +168,13 @@ limdd_lim_inverse(LIMDD_LIM lim)
     return limdd_lim_make(limdd_lim_pauli(lim), w);
 }
 
+EVBDD_WGT
+limdd_wgt_i_pow(unsigned k)
+{
+    assert(k < 4);
+    return i_pow[k & 3];
+}
+
 void
 limdd_lim_fprint(FILE *out, LIMDD_LIM lim)
 {

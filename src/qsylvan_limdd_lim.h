@@ -176,6 +176,14 @@ LIMDD_LIM limdd_lim_mul(LIMDD_LIM a, LIMDD_LIM b);
  */
 LIMDD_LIM limdd_lim_inverse(LIMDD_LIM lim);
 
+/**
+ * The edge weight i^k, for k in 0..3.
+ *
+ * Applying a Pauli word to a basis state produces such a factor, so callers
+ * that evaluate a diagram need them; they are interned once at init.
+ */
+EVBDD_WGT limdd_wgt_i_pow(unsigned k);
+
 /** Print `lim` as "(re,im) * IXYZ" to `out`, without a trailing newline. */
 void limdd_lim_fprint(FILE *out, LIMDD_LIM lim);
 

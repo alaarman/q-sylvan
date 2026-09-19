@@ -55,6 +55,7 @@ target_sources(qsylvan
     sylvan_edge_weights_complex.c
     qsylvan_limdd_pauli.c
     qsylvan_limdd_lim.c
+    qsylvan_limdd_node.c
   PUBLIC
     FILE_SET HEADERS
     BASE_DIRS
@@ -90,6 +91,7 @@ target_sources(qsylvan
       sylvan_edge_weights_complex.h
       qsylvan_limdd_pauli.h
       qsylvan_limdd_lim.h
+      qsylvan_limdd_node.h
       "${CMAKE_CURRENT_BINARY_DIR}/sylvan_config.h"
 )
 
