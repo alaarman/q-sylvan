@@ -55,6 +55,16 @@ sylvan_test_warnings(test_simulator_mtbdd)
 add_test(NAME test_mtbdd           COMMAND test_mtbdd)
 add_test(NAME test_simulator_mtbdd COMMAND test_simulator_mtbdd)
 
+# ── Q-Sylvan LIMDD tests ─────────────────────────────────────────────────────
+
+add_executable(test_limdd_pauli)
+target_sources(test_limdd_pauli PRIVATE test_limdd_pauli.c)
+target_link_libraries(test_limdd_pauli PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_pauli PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_pauli)
+
+add_test(NAME test_limdd_pauli COMMAND test_limdd_pauli)
+
 # ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
 
 foreach(_qmdd_test
