@@ -30,7 +30,7 @@ static int gc_enabled = 1;
  * Enable garbage collection (both automatic and manual).
  */
 void
-sylvan_gc_enable()
+sylvan_gc_enable(void)
 {
     gc_enabled = 1;
 }
@@ -39,7 +39,7 @@ sylvan_gc_enable()
  * Disable garbage collection (both automatic and manual).
  */
 void
-sylvan_gc_disable()
+sylvan_gc_disable(void)
 {
     gc_enabled = 0;
 }
@@ -371,9 +371,9 @@ sylvan_init_package(void)
     /* Initialize garbage collection */
     gc = 0;
 #if SYLVAN_AGGRESSIVE_RESIZE
-    main_hook = TASK(sylvan_gc_aggressive_resize);
+    main_hook = sylvan_gc_aggressive_resize_CALL;
 #else
-    main_hook = TASK(sylvan_gc_normal_resize);
+    main_hook = sylvan_gc_normal_resize_CALL;
 #endif
 
     sylvan_stats_init();
@@ -397,7 +397,7 @@ sylvan_register_quit(quit_cb cb)
 }
 
 void
-sylvan_quit()
+sylvan_quit(void)
 {
     while (quit_register != NULL) {
         struct reg_quit_entry *e = quit_register;

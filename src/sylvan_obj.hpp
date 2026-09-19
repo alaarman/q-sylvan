@@ -187,6 +187,11 @@ public:
     Bdd Xnor(const Bdd& g) const;
 
     /**
+     * @brief Returns whether all f and g are disjoint, i.e. f * g is false
+     */
+    bool Disjoint(const Bdd& g) const;
+
+    /**
      * @brief Returns whether all elements in f are also in g
      */
     bool Leq(const Bdd& g) const;
@@ -441,8 +446,8 @@ public:
      */
     static BddSet fromVector(const std::vector<Bdd> variables) {
         BddSet set;
-        for (int i=variables.size()-1; i>=0; i--) {
-            set.set *= variables[i];
+        for (size_t i=variables.size(); i>0; i--) {
+            set.set *= variables[i-1];
         }
         return set;
     }
@@ -453,8 +458,8 @@ public:
      */
     static BddSet fromVector(const std::vector<uint32_t> variables) {
         BddSet set;
-        for (int i=variables.size()-1; i>=0; i--) {
-            set.add(variables[i]);
+        for (size_t i=variables.size(); i>0; i--) {
+            set.add(variables[i-1]);
         }
         return set;
     }
@@ -810,6 +815,7 @@ class MtbddMap
     MtbddMap(MTBDD from) : mtbdd(from) { mtbdd_protect(&mtbdd); }
     MtbddMap(Mtbdd &from) : mtbdd(from.mtbdd) { mtbdd_protect(&mtbdd); }
 public:
+    MtbddMap(const MtbddMap& from) : mtbdd(from.mtbdd) { mtbdd_protect(&mtbdd); }
     MtbddMap() : mtbdd(mtbdd_map_empty()) { mtbdd_protect(&mtbdd); }
     ~MtbddMap() { mtbdd_unprotect(&mtbdd); }
 

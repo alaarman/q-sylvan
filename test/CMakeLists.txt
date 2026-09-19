@@ -1,70 +1,73 @@
-include(CTest)
+function(sylvan_test_warnings target)
+    target_compile_options(${target} PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall -Wextra -Werror -Wno-deprecated>
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall -Wextra -Werror -Wno-deprecated>
+        $<$<COMPILE_LANG_AND_ID:C,MSVC>:/W4>
+        $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>
+    )
+endfunction()
 
-# Build test_basic, test_cxx and test_zdd executables
+# ── Upstream Sylvan tests ────────────────────────────────────────────────────
+
 add_executable(test_basic)
 target_sources(test_basic PRIVATE test_basic.c)
 target_link_libraries(test_basic PRIVATE qsylvan::sylvan)
 target_compile_features(test_basic PRIVATE c_std_11)
-target_compile_options(test_basic PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
-
-add_executable(test_mtbdd)
-target_sources(test_mtbdd PRIVATE test_mtbdd.c)
-target_link_libraries(test_mtbdd PRIVATE qsylvan::sylvan)
-target_compile_features(test_mtbdd PRIVATE c_std_11)
-target_compile_options(test_mtbdd PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
-
-add_executable(test_simulator_mtbdd)
-target_sources(test_simulator_mtbdd PRIVATE test_simulator_mtbdd.c)
-target_link_libraries(test_simulator_mtbdd PRIVATE qsylvan::sylvan)
-target_compile_features(test_simulator_mtbdd PRIVATE c_std_11)
-target_compile_options(test_simulator_mtbdd PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
-
-add_executable(test_cxx)
-target_sources(test_cxx PRIVATE test_cxx.cpp)
-target_link_libraries(test_cxx PRIVATE qsylvan::sylvan)
-target_compile_features(test_cxx PRIVATE cxx_std_11)
-target_compile_options(test_cxx PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
+sylvan_test_warnings(test_basic)
 
 add_executable(test_zdd)
 target_sources(test_zdd PRIVATE test_zdd.c)
 target_link_libraries(test_zdd PRIVATE qsylvan::sylvan)
 target_compile_features(test_zdd PRIVATE c_std_11)
-target_compile_options(test_zdd PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
+sylvan_test_warnings(test_zdd)
 
-# tests for mtbdd, bdd and ldd 
-add_test(test_basic test_basic)
-add_test(test_mtbdd test_mtbdd)
-add_test(test_simulator_mtbdd test_simulator_mtbdd)
-add_test(test_cxx test_cxx)
-add_test(test_zdd test_zdd)
+add_executable(test_table)
+target_sources(test_table PRIVATE test_table.c)
+target_link_libraries(test_table PRIVATE qsylvan::sylvan)
+target_compile_features(test_table PRIVATE c_std_11)
+sylvan_test_warnings(test_table)
 
-# test_qmdd_normalization
-add_executable(test_qmdd_normalization test_qmdd_normalization.c)
-target_link_libraries(test_qmdd_normalization qsylvan)
-add_test(test_qmdd_normalization test_qmdd_normalization)
+add_executable(test_cxx)
+target_sources(test_cxx PRIVATE test_cxx.cpp)
+target_link_libraries(test_cxx PRIVATE qsylvan::sylvan)
+target_compile_features(test_cxx PRIVATE cxx_std_11)
+sylvan_test_warnings(test_cxx)
 
-# test_qmdd_basics
-add_executable(test_qmdd_basics test_qmdd_basics.c)
-target_link_libraries(test_qmdd_basics qsylvan)
-add_test(test_qmdd_basics test_qmdd_basics)
+add_test(NAME test_basic COMMAND test_basic)
+add_test(NAME test_zdd   COMMAND test_zdd)
+add_test(NAME test_table COMMAND test_table)
+add_test(NAME test_cxx   COMMAND test_cxx)
 
-# test_qmdd_gates
-add_executable(test_qmdd_gates test_qmdd_gates.c)
-target_link_libraries(test_qmdd_gates qsylvan)
-add_test(test_qmdd_gates test_qmdd_gates)
+# ── Q-Sylvan MTBDD tests ─────────────────────────────────────────────────────
 
-# test_qmdd_circuits
-add_executable(test_qmdd_circuits test_qmdd_circuits.c)
-target_link_libraries(test_qmdd_circuits qsylvan)
-add_test(test_qmdd_circuits test_qmdd_circuits)
+add_executable(test_mtbdd)
+target_sources(test_mtbdd PRIVATE test_mtbdd.c)
+target_link_libraries(test_mtbdd PRIVATE qsylvan::sylvan)
+target_compile_features(test_mtbdd PRIVATE c_std_11)
+sylvan_test_warnings(test_mtbdd)
 
-# test_qmdd_matrix
-add_executable(test_qmdd_matrix test_qmdd_matrix.c)
-target_link_libraries(test_qmdd_matrix qsylvan)
-add_test(test_qmdd_matrix test_qmdd_matrix)
+add_executable(test_simulator_mtbdd)
+target_sources(test_simulator_mtbdd PRIVATE test_simulator_mtbdd.c)
+target_link_libraries(test_simulator_mtbdd PRIVATE qsylvan::sylvan)
+target_compile_features(test_simulator_mtbdd PRIVATE c_std_11)
+sylvan_test_warnings(test_simulator_mtbdd)
 
-# test_qmdd_gc
+add_test(NAME test_mtbdd           COMMAND test_mtbdd)
+add_test(NAME test_simulator_mtbdd COMMAND test_simulator_mtbdd)
+
+# ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
+
+foreach(_qmdd_test
+        test_qmdd_normalization
+        test_qmdd_basics
+        test_qmdd_gates
+        test_qmdd_circuits
+        test_qmdd_matrix)
+    add_executable(${_qmdd_test} ${_qmdd_test}.c)
+    target_link_libraries(${_qmdd_test} PRIVATE qsylvan::sylvan)
+    add_test(NAME ${_qmdd_test} COMMAND ${_qmdd_test})
+endforeach()
+
 add_executable(test_qmdd_gc test_qmdd_gc.c ../examples/grover.c)
-target_link_libraries(test_qmdd_gc qsylvan)
-add_test(test_qmdd_gc test_qmdd_gc)
-
+target_link_libraries(test_qmdd_gc PRIVATE qsylvan::sylvan)
+add_test(NAME test_qmdd_gc COMMAND test_qmdd_gc)

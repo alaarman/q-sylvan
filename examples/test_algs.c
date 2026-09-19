@@ -384,6 +384,13 @@ int runtests()
     return 0;
 }
 
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+TASK_0(int, runtests_task)
+{
+    return runtests();
+}
+
 int main()
 {
     // Standard Lace initialization
@@ -397,7 +404,7 @@ int main()
     qsylvan_init_simulator(1LL<<16, 1LL<<16, TOLERANCE, COMP_HASHMAP, NORM_MAX);
     qmdd_set_testing_mode(true); // turn on internal sanity tests
 
-    int res = runtests();
+    int res = RUN(runtests_task);
 
     sylvan_quit();
     lace_stop();

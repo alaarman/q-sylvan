@@ -920,6 +920,28 @@ void simulate_circuit(quantum_circuit_t* circuit)
 }
 
 /**
+ * Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+ * that calls lace_start() is not one. Creating the gate MTBDDs, the simulation
+ * and writing the stats (which reads leaves of the state MTBDD) all touch the
+ * MTBDD tables.
+ */
+VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
+{
+    // Init the dd's of the gates
+    mtbdd_gates_init_mpc();
+
+    simulate_circuit(circuit);
+
+    if (json_outputfile != NULL) {
+        FILE *fp = fopen(json_outputfile, "w");
+        fprint_stats(fp, circuit);
+        fclose(fp);
+    } else {
+        fprint_stats(stdout, circuit);
+    }
+}
+
+/**
  * 
  * Command Line Interface, parse arguments, parse QASM file, start simulation.
  * 
@@ -948,18 +970,7 @@ int main(int argc, char *argv[])
     uint32_t mpc_type = mpc_init(precision, tolerance); 
     assert(mpc_type == MPC_TYPE);
 
-    // Init the dd's of the gates
-    mtbdd_gates_init_mpc();
-
-    simulate_circuit(circuit);
-
-    if (json_outputfile != NULL) {
-        FILE *fp = fopen(json_outputfile, "w");
-        fprint_stats(fp, circuit);
-        fclose(fp);
-    } else {
-        fprint_stats(stdout, circuit);
-    }
+    RUN(run_simulation, circuit);
 
     sylvan_quit();
     lace_stop();

@@ -16,7 +16,7 @@
  */
 
 #include <sylvan_int.h>
-#include <sylvan_align.h>
+#include <sylvan_platform.h>
 
 #include <errno.h>  // for errno
 #include <string.h> // memset
@@ -67,6 +67,7 @@ struct
     {2, BDD_SATCOUNT, "BDD satcount"},
     {2, BDD_PATHCOUNT, "BDD pathcount"},
     {2, BDD_ISBDD, "BDD isbdd"},
+    {2, BDD_DISJOINT, "BDD disjoint"},
 
     {2, MTBDD_APPLY, "MTBDD binary apply"},
     {2, MTBDD_UAPPLY, "MTBDD unary apply"},
@@ -134,7 +135,7 @@ VOID_TASK_0(sylvan_stats_reset_perthread)
 #else
     sylvan_stats_t *sylvan_stats = pthread_getspecific(sylvan_stats_key);
     if (sylvan_stats == NULL) {
-        sylvan_stats = alloc_aligned(sizeof(sylvan_stats_t));
+        sylvan_stats = sylvan_alloc_aligned(sizeof(sylvan_stats_t));
         if (sylvan_stats == 0) {
             fprintf(stderr, "sylvan_stats: Unable to allocate memory: %s!\n", strerror(errno));
             exit(1);

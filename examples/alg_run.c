@@ -276,6 +276,29 @@ run_shor()
 
 /******************************</Run algorithms>*******************************/
 
+/**
+ * Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+ * that calls lace_start() is not one. All inputs/outputs are file-scope state
+ * (the argp options and 'stats'), so this task needs no arguments.
+ */
+VOID_TASK_0(run_algorithm_task)
+{
+    /* Run the given quantum algorithm */
+    if (algorithm == alg_grover) {
+        run_grover();
+    } else if (algorithm == alg_shor) {
+        run_shor();
+    } else if (algorithm == alg_supremacy) {
+        run_supremacy();
+    }
+
+    /* Some stats */
+    stats.final_magnitude = qmdd_get_magnitude(stats.final_qmdd, stats.nqubits);
+    INFO("Magnitude of final state: %.05lf\n", stats.final_magnitude);
+    stats.final_nodecount = evbdd_countnodes(stats.final_qmdd);
+    INFO("Final Nodecount: %" PRIu64 "\n", stats.final_nodecount);
+}
+
 
 
 
@@ -307,20 +330,9 @@ int main(int argc, char **argv)
     INFO("Workers: %d\n", workers);
     INFO("Random seed: %d\n", rseed);
 
-    /* Run the given quantum algorithm */
-    if (algorithm == alg_grover) {
-        run_grover();
-    } else if (algorithm == alg_shor) {
-        run_shor();
-    } else if (algorithm == alg_supremacy) {
-        run_supremacy();
-    }
+    /* Run the given quantum algorithm (on a Lace worker) */
+    RUN(run_algorithm_task);
 
-    /* Some stats */
-    stats.final_magnitude = qmdd_get_magnitude(stats.final_qmdd, stats.nqubits);
-    INFO("Magnitude of final state: %.05lf\n", stats.final_magnitude);
-    stats.final_nodecount = evbdd_countnodes(stats.final_qmdd);
-    INFO("Final Nodecount: %" PRIu64 "\n", stats.final_nodecount);
     if (csv_outputfile != NULL) {
         INFO("Writing csv output to %s\n", csv_outputfile);
         write_csv_stats();

@@ -718,6 +718,13 @@ int run_qmdd_tests()
     return 0;
 }
 
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+TASK_0(int, run_qmdd_tests_task)
+{
+    return run_qmdd_tests();
+}
+
 int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits) 
 {
     // Standard Lace initialization
@@ -734,7 +741,7 @@ int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits)
 
     printf("wgt backend = %d, norm strat = %d, wgt indx bits = %d:\n", 
             wgt_backend, norm_strat, wgt_indx_bits);
-    int res = run_qmdd_tests();
+    int res = RUN(run_qmdd_tests_task);
 
     sylvan_quit();
     lace_stop();

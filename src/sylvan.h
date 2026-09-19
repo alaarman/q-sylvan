@@ -25,25 +25,18 @@
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>      // for FILE
-#include <stdlib.h>     // for realloc
+#include <stdio.h> // for FILE
+#include <stdlib.h> // for realloc
 #include <unistd.h>
 #include <pthread.h>
 
-#if SYLVAN_STATS
-#ifdef __MACH__
-#include <mach/mach_time.h>
-#else
-#include <time.h>
-#endif
-#endif
+#include <sylvan_platform.h>
 
 /**
  * Sylvan header files outside the namespace
  */
 
 #include <lace.h>
-#include <sylvan_tls.h>
 
 #ifdef __cplusplus
 namespace sylvan {

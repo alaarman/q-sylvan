@@ -71,10 +71,10 @@ typedef uint64_t MTBDDMAP;
  * mtbdd_true and mtbdd_false are the Boolean leaves representing True and False.
  * False is also used in Integer/Real/Fraction MTBDDs for partially defined functions.
  */
-static const MTBDD mtbdd_complement = 0x8000000000000000LL;
+static const MTBDD mtbdd_complement = UINT64_C(0x8000000000000000);
 static const MTBDD mtbdd_false      = 0;
-static const MTBDD mtbdd_true       = 0x8000000000000000LL;
-static const MTBDD mtbdd_invalid    = 0xffffffffffffffffLL;
+static const MTBDD mtbdd_true       = UINT64_C(0x8000000000000000);
+static const MTBDD mtbdd_invalid    = UINT64_MAX;
 
 /**
  * Definitions for backward compatibility...
@@ -86,11 +86,10 @@ typedef MTBDD BDDSET;        // set of nodes
 typedef uint32_t BDDVAR;
 
 // TODO: can be removed?
-static const MTBDD sylvan_complement = 0x8000000000000000LL;
+static const MTBDD sylvan_complement = UINT64_C(0x8000000000000000);
 static const MTBDD sylvan_false      = 0;
-static const MTBDD sylvan_true       = 0x8000000000000000LL;
-static const MTBDD sylvan_invalid    = 0xffffffffffffffffLL;
-
+static const MTBDD sylvan_true       = UINT64_C(0x8000000000000000);
+static const MTBDD sylvan_invalid    = UINT64_MAX;
 
 #define sylvan_init_bdd         sylvan_init_mtbdd // TODO: better mtbdd_init!
 
@@ -249,6 +248,11 @@ MTBDD mtbdd_double(double value);
 
 /**
  * Create a Fraction leaf with the given numerator and denominator.
+ *
+ * The fraction is reduced before it is stored. The reduced numerator must fit
+ * in the range [-INT32_MAX, INT32_MAX], the reduced denominator must fit in a
+ * uint32_t, and the denominator must not be zero. Returns mtbdd_invalid when
+ * these requirements are not met.
  */
 MTBDD mtbdd_fraction(int64_t numer, uint64_t denom);
 
@@ -319,7 +323,7 @@ MTBDD mtbdd_ithvar(uint32_t var);
  * Set is a list of indices of variables.
  */
 static inline MTBDD
-mtbdd_set_empty() // Terminal indicator
+mtbdd_set_empty(void) // Terminal indicator
 {
     return mtbdd_true;
 }
@@ -482,11 +486,14 @@ TASK_DECL_3(MTBDD, mtbdd_uapply, MTBDD, mtbdd_uapply_op, size_t);
  * The function is either called with k==0 (apply to two arguments) or k>0 (k skipped BDD variables)
  * k == 0  =>  res := apply op to a and b
  * k  > 0  =>  res := apply op to op(a, a, k-1) and op(a, a, k-1)
+ * The number of skipped variables must fit in a non-negative int. Built-in
+ * abstraction operations process large values of k in size_t-width chunks.
  */
 LACE_TYPEDEF_CB(MTBDD, mtbdd_abstract_op, MTBDD, MTBDD, int);
 
 /**
  * Abstract the variables in <v> from <a> using the binary operation <op>.
+ * Returns mtbdd_invalid if the number of skipped variables exceeds INT_MAX.
  */
 TASK_DECL_3(MTBDD, mtbdd_abstract, MTBDD, MTBDD, mtbdd_abstract_op);
 #define mtbdd_abstract(a, v, op) RUN(mtbdd_abstract, a, v, op)
@@ -551,59 +558,59 @@ TASK_DECL_3(MTBDD, mtbdd_abstract_op_max, MTBDD, MTBDD, int);
  * Compute -a
  * (negation, where 0 stays 0, and x into -x)
  */
-#define mtbdd_negate(a) mtbdd_uapply(a, TASK(mtbdd_op_negate), 0)
+#define mtbdd_negate(a) mtbdd_uapply(a, mtbdd_op_negate_CALL, 0)
 
 /**
  * Compute ~a for partial MTBDDs.
  * Does not negate Boolean True/False.
  * (complement, where 0 is turned into 1, and non-0 into 0)
  */
-#define mtbdd_cmpl(a) mtbdd_uapply(a, TASK(mtbdd_op_cmpl), 0)
+#define mtbdd_cmpl(a) mtbdd_uapply(a, mtbdd_op_cmpl_CALL, 0)
 
 /**
  * Compute a + b
  */
-#define mtbdd_plus(a, b) mtbdd_apply(a, b, TASK(mtbdd_op_plus))
+#define mtbdd_plus(a, b) mtbdd_apply(a, b, mtbdd_op_plus_CALL)
 
 /**
  * Compute a - b
  */
-#define mtbdd_minus(a, b) mtbdd_apply(a, b, TASK(mtbdd_op_minus))
+#define mtbdd_minus(a, b) mtbdd_apply(a, b, mtbdd_op_minus_CALL)
 
 /**
  * Compute a * b
  */
-#define mtbdd_times(a, b) mtbdd_apply(a, b, TASK(mtbdd_op_times))
+#define mtbdd_times(a, b) mtbdd_apply(a, b, mtbdd_op_times_CALL)
 
 /**
  * Compute min(a, b)
  */
-#define mtbdd_min(a, b) mtbdd_apply(a, b, TASK(mtbdd_op_min))
+#define mtbdd_min(a, b) mtbdd_apply(a, b, mtbdd_op_min_CALL)
 
 /**
  * Compute max(a, b)
  */
-#define mtbdd_max(a, b) mtbdd_apply(a, b, TASK(mtbdd_op_max))
+#define mtbdd_max(a, b) mtbdd_apply(a, b, mtbdd_op_max_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the sum of all values
  */
-#define mtbdd_abstract_plus(dd, v) mtbdd_abstract(dd, v, TASK(mtbdd_abstract_op_plus))
+#define mtbdd_abstract_plus(dd, v) mtbdd_abstract(dd, v, mtbdd_abstract_op_plus_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the product of all values
  */
-#define mtbdd_abstract_times(dd, v) mtbdd_abstract(dd, v, TASK(mtbdd_abstract_op_times))
+#define mtbdd_abstract_times(dd, v) mtbdd_abstract(dd, v, mtbdd_abstract_op_times_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the minimum of all values
  */
-#define mtbdd_abstract_min(dd, v) mtbdd_abstract(dd, v, TASK(mtbdd_abstract_op_min))
+#define mtbdd_abstract_min(dd, v) mtbdd_abstract(dd, v, mtbdd_abstract_op_min_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the maximum of all values
  */
-#define mtbdd_abstract_max(dd, v) mtbdd_abstract(dd, v, TASK(mtbdd_abstract_op_max))
+#define mtbdd_abstract_max(dd, v) mtbdd_abstract(dd, v, mtbdd_abstract_op_max_CALL)
 
 /**
  * Compute IF <f> THEN <g> ELSE <h>.
@@ -800,7 +807,7 @@ VOID_TASK_DECL_3(mtbdd_enum_par, MTBDD, mtbdd_enum_cb, void*);
  * Usage:
  * TASK_2(MTBDD, g, MTBDD, in) { ... return g of <in> ... }
  * MTBDD x_vars = ...;  // the cube of variables x
- * MTBDD result = mtbdd_eval_compose(dd, x_vars, TASK(g));
+ * MTBDD result = mtbdd_eval_compose(dd, x_vars, g_CALL);
  */
 LACE_TYPEDEF_CB(MTBDD, mtbdd_eval_compose_cb, MTBDD);
 TASK_DECL_3(MTBDD, mtbdd_eval_compose, MTBDD, MTBDD, mtbdd_eval_compose_cb);
@@ -1025,7 +1032,7 @@ void mtbdd_reader_end(uint64_t *arr);
  */
 // Tom? Can be used to speedups?
 static inline MTBDD
-mtbdd_map_empty()
+mtbdd_map_empty(void)
 {
     return mtbdd_false;
 }

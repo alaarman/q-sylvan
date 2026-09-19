@@ -711,117 +711,41 @@ QMDD run_c_struct(C_struct c_s, int* measurements, bool* results, bool experimen
     return qmdd;
 }
 
-// TODO: move this main to separate file?
 /**
- * Runs QASM circuit given by <filename> and prints the results.
- * Using the -m flag activates gate-gate multiplication runs, gate-statevector runs are used otherwise.
- * 
- * PARAMETERS:
- * - filename: the path to the file containing the QASM circuit code
- * 
- * FLAGS:
- * [-r runs (int)] (optional) the number of runs to perform
- * [-s seed (int)] (optional) the randomness seed to be used
- * [-m matrix (int)] (optional) the boundaray value of nodes in a tree before multiplying with the state vector
- * [-g greedy] (optional) runs the circuit matrix-vector method using a greedy algorithm
- * [-b balance (int)] (optional) runs the circuit switching between matrix-matrix method and greedy method
- * [-o optimize] (optional) optimize the circuit if true. This option will remove negating gates before running
- * [-e experiment] (optional) prints the nodcount and palindrome signals
- * [-t time] (optional) prints the time taken to run the circuit
- * 
- * NOTE:
- * Since multiplying a gate-QMDD with a gate-QMDD is more expensive than multiplying a gate-QMDD with
- * a statevector-QMDD, gate-gate multiplication is usually slower. However, circuits which use a lot of 
- * uncomputation can lead to smaller resulting gate QMDDs and possibly lead to faster runs.
+ * Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+ * that calls lace_start() is not one. The circuit is therefore simulated in a
+ * Lace task, which receives the parsed circuit and the relevant options
+ * through this struct and reports its statistics back in it.
  */
-int main(int argc, char *argv[])
+typedef struct sim_args_s {
+    // input
+    C_struct c_s;
+    unsigned int runs;
+    int matrix;
+    int balance;
+    int greedy;
+    int experiments;
+    double start;
+    // output
+    double runtime;
+    uint64_t final_nodecount;
+    double final_magnitude;
+} sim_args_t;
+
+VOID_TASK_1(run_simulation, sim_args_t*, args)
 {
-    t_start = wctime();
-    // Initialise flag parameters
-    int flag_help = -1;
-    char *filename;
-    int workers = 1;
-    int wgt_norm_strat = NORM_MAX;
-    unsigned int runs = 1;
-    unsigned int seed = 0;
-    int matrix = 0;
-    int balance = 0;
-    int greedy = 0;
-    int optimize = 0;
+    C_struct c_s = args->c_s;
+    unsigned int runs = args->runs;
+    int matrix = args->matrix;
+    int balance = args->balance;
+    int greedy = args->greedy;
+    int experiments = args->experiments;
     int intermediate_measuring = 0;
-    int experiments = 0;
     bool intermediate_experiments;
-    char *csv_outputfile = NULL;
+    double start = args->start, end;
     QMDD qmdd = EVBDD_TERMINAL;
     uint64_t res;
 
-    poptContext con;
-    struct poptOption optiontable[] = {
-        { "help", 'h', POPT_ARG_NONE, &flag_help, 'h', "Display available options.", NULL },
-        { "workers", 'w', POPT_ARG_INT, &workers, 'w', "Number of workers (cores). Default = 1.", NULL },
-        { "runs", 'r', POPT_ARG_INT, &runs, 'r', "Number of runs to perform. Default = 1.", NULL },
-        { "seed", 's', POPT_ARG_INT, &seed, 's', "Randomness seed to be used (!= 0). Default seeded with time().", NULL },
-        { "matrix", 'm', POPT_ARG_INT, &matrix, 'm', "Boundaray value of nodes in a DD before multiplying with the state vector.", NULL },
-        { "greedy", 'g', POPT_ARG_NONE, &greedy, 'g', "Runs the circuit matrix-vector method using a greedy algorithm.", NULL },
-        { "balance", 'b', POPT_ARG_INT, &balance, 'b', "Runs the circuit switching between matrix-matrix method and greedy method", NULL },
-        { "optimize", 'o', POPT_ARG_NONE, &optimize, 'o', "Optimize the circuit. This option will remove negating gates before running.", NULL },
-        { "experiment", 'e', POPT_ARG_NONE, &experiments, 'e', "Prints the nodecount and palindrome signals.", NULL },
-        { "norm-strat", 9, POPT_ARG_INT, &wgt_norm_strat, 9, "Weight norm strat as int: <0(low)|1(largest)|2(l2)>.", NULL },
-        { "csv-output", 10, POPT_ARG_STRING, &csv_outputfile, 10, "Write stats to given filename (or append if file exists.", NULL },
-        {NULL, 0, 0, NULL, 0, NULL, NULL}
-    };
-    con = poptGetContext("q-sylvan-sim", argc, (const char **)argv, optiontable, 0);
-    poptSetOtherOptionHelp(con, "[OPTIONS..] <circuit.qasm>");
-    
-    if (argc < 2) {
-        poptPrintUsage(con, stderr, 0);
-        exit(1);
-    }
-    filename = argv[1];
-
-    char c;  
-    while ((c = poptGetNextOpt(con)) > 0) {
-        switch (c) {
-            case 'h':
-                poptPrintHelp(con, stdout, 0);
-                return 0;
-        }
-    }
-    INFO("Option workers=%d\n", workers);
-    INFO("Option norm-strat=%d\n", wgt_norm_strat);
-    INFO("Option matrix=%d\n", matrix);
-    INFO("Option balance=%d\n", balance);
-    INFO("Option greedy=%d\n", greedy);
-    INFO("Option experiments=%d\n", experiments);
-    INFO("Option rseed=%d\n", seed);
-
-    // Set randomness seed
-    if (seed == 0)
-        srand(time(NULL));
-    else
-         srand(seed);
-    // Check if a file is given, if not, return an error
-    if(access(filename, F_OK) != 0)
-    {
-        fprintf(stderr, "Invalid QASM file.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    double start,end;
-    start = wctime();
-
-    // Standard Lace initialization
-    lace_start(workers, 0);
-
-    // Simple Sylvan initialization
-    sylvan_set_sizes(1LL<<25, 1LL<<25, 1LL<<16, 1LL<<16);
-    sylvan_init_package();
-    qsylvan_init_simulator(1LL<<23, 1LL<<23, -1, COMP_HASHMAP, wgt_norm_strat);
-    qmdd_set_testing_mode(true); // turn on internal sanity tests
-
-    // Create a circuit struct representing the QASM circuit in the given file
-    C_struct c_s = make_c_struct(filename, optimize);
-    
     int* measurements = malloc(c_s.qubits * sizeof(int));
     bool* bit_res = malloc(c_s.bits * sizeof(bool));
     bool* bit_print;
@@ -893,6 +817,135 @@ int main(int argc, char *argv[])
     double final_magnitude   = qmdd_get_magnitude(qmdd, c_s.qubits);
     INFO("Nodecount of final state: %" PRIu64 "\n", final_nodecount);
     INFO("Magnitude of final state: %.05lf\n", final_magnitude);
+
+    args->runtime = runtime;
+    args->final_nodecount = final_nodecount;
+    args->final_magnitude = final_magnitude;
+}
+
+// TODO: move this main to separate file?
+/**
+ * Runs QASM circuit given by <filename> and prints the results.
+ * Using the -m flag activates gate-gate multiplication runs, gate-statevector runs are used otherwise.
+ * 
+ * PARAMETERS:
+ * - filename: the path to the file containing the QASM circuit code
+ * 
+ * FLAGS:
+ * [-r runs (int)] (optional) the number of runs to perform
+ * [-s seed (int)] (optional) the randomness seed to be used
+ * [-m matrix (int)] (optional) the boundaray value of nodes in a tree before multiplying with the state vector
+ * [-g greedy] (optional) runs the circuit matrix-vector method using a greedy algorithm
+ * [-b balance (int)] (optional) runs the circuit switching between matrix-matrix method and greedy method
+ * [-o optimize] (optional) optimize the circuit if true. This option will remove negating gates before running
+ * [-e experiment] (optional) prints the nodcount and palindrome signals
+ * [-t time] (optional) prints the time taken to run the circuit
+ * 
+ * NOTE:
+ * Since multiplying a gate-QMDD with a gate-QMDD is more expensive than multiplying a gate-QMDD with
+ * a statevector-QMDD, gate-gate multiplication is usually slower. However, circuits which use a lot of 
+ * uncomputation can lead to smaller resulting gate QMDDs and possibly lead to faster runs.
+ */
+int main(int argc, char *argv[])
+{
+    t_start = wctime();
+    // Initialise flag parameters
+    int flag_help = -1;
+    char *filename;
+    int workers = 1;
+    int wgt_norm_strat = NORM_MAX;
+    unsigned int runs = 1;
+    unsigned int seed = 0;
+    int matrix = 0;
+    int balance = 0;
+    int greedy = 0;
+    int optimize = 0;
+    int experiments = 0;
+    char *csv_outputfile = NULL;
+
+    poptContext con;
+    struct poptOption optiontable[] = {
+        { "help", 'h', POPT_ARG_NONE, &flag_help, 'h', "Display available options.", NULL },
+        { "workers", 'w', POPT_ARG_INT, &workers, 'w', "Number of workers (cores). Default = 1.", NULL },
+        { "runs", 'r', POPT_ARG_INT, &runs, 'r', "Number of runs to perform. Default = 1.", NULL },
+        { "seed", 's', POPT_ARG_INT, &seed, 's', "Randomness seed to be used (!= 0). Default seeded with time().", NULL },
+        { "matrix", 'm', POPT_ARG_INT, &matrix, 'm', "Boundaray value of nodes in a DD before multiplying with the state vector.", NULL },
+        { "greedy", 'g', POPT_ARG_NONE, &greedy, 'g', "Runs the circuit matrix-vector method using a greedy algorithm.", NULL },
+        { "balance", 'b', POPT_ARG_INT, &balance, 'b', "Runs the circuit switching between matrix-matrix method and greedy method", NULL },
+        { "optimize", 'o', POPT_ARG_NONE, &optimize, 'o', "Optimize the circuit. This option will remove negating gates before running.", NULL },
+        { "experiment", 'e', POPT_ARG_NONE, &experiments, 'e', "Prints the nodecount and palindrome signals.", NULL },
+        { "norm-strat", 9, POPT_ARG_INT, &wgt_norm_strat, 9, "Weight norm strat as int: <0(low)|1(largest)|2(l2)>.", NULL },
+        { "csv-output", 10, POPT_ARG_STRING, &csv_outputfile, 10, "Write stats to given filename (or append if file exists.", NULL },
+        {NULL, 0, 0, NULL, 0, NULL, NULL}
+    };
+    con = poptGetContext("q-sylvan-sim", argc, (const char **)argv, optiontable, 0);
+    poptSetOtherOptionHelp(con, "[OPTIONS..] <circuit.qasm>");
+    
+    if (argc < 2) {
+        poptPrintUsage(con, stderr, 0);
+        exit(1);
+    }
+    filename = argv[1];
+
+    char c;  
+    while ((c = poptGetNextOpt(con)) > 0) {
+        switch (c) {
+            case 'h':
+                poptPrintHelp(con, stdout, 0);
+                return 0;
+        }
+    }
+    INFO("Option workers=%d\n", workers);
+    INFO("Option norm-strat=%d\n", wgt_norm_strat);
+    INFO("Option matrix=%d\n", matrix);
+    INFO("Option balance=%d\n", balance);
+    INFO("Option greedy=%d\n", greedy);
+    INFO("Option experiments=%d\n", experiments);
+    INFO("Option rseed=%d\n", seed);
+
+    // Set randomness seed
+    if (seed == 0)
+        srand(time(NULL));
+    else
+         srand(seed);
+    // Check if a file is given, if not, return an error
+    if(access(filename, F_OK) != 0)
+    {
+        fprintf(stderr, "Invalid QASM file.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    double start;
+    start = wctime();
+
+    // Standard Lace initialization
+    lace_start(workers, 0);
+
+    // Simple Sylvan initialization
+    sylvan_set_sizes(1LL<<25, 1LL<<25, 1LL<<16, 1LL<<16);
+    sylvan_init_package();
+    qsylvan_init_simulator(1LL<<23, 1LL<<23, -1, COMP_HASHMAP, wgt_norm_strat);
+    qmdd_set_testing_mode(true); // turn on internal sanity tests
+
+    // Create a circuit struct representing the QASM circuit in the given file
+    C_struct c_s = make_c_struct(filename, optimize);
+    
+    sim_args_t args;
+    args.c_s = c_s;
+    args.runs = runs;
+    args.matrix = matrix;
+    args.balance = balance;
+    args.greedy = greedy;
+    args.experiments = experiments;
+    args.start = start;
+
+    // Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+    // that calls lace_start() is not one.
+    RUN(run_simulation, &args);
+
+    double runtime = args.runtime;
+    uint64_t final_nodecount = args.final_nodecount;
+    double final_magnitude   = args.final_magnitude;
     
     if (csv_outputfile != NULL) {
         INFO("Writing stats to %s\n", csv_outputfile);

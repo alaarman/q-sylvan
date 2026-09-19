@@ -38,6 +38,31 @@ int run_qmdd_tests()
 }
 
 
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+TASK_0(int, run_qmdd_tests_task)
+{
+    return run_qmdd_tests();
+}
+
+
+TASK_0(int, test_table_size_increase_task)
+{
+    // check that wgt_tablesize doubles after gc, but not beyond max_wgt_tablesize
+    uint64_t wgt_tablesize = min_wgt_tablesize;
+    for (int i = 0; i < 10; i++) {
+        test_assert(sylvan_get_edge_weight_table_size() == wgt_tablesize);
+        evbdd_gc_wgt_table();
+        wgt_tablesize = 2*wgt_tablesize;
+        if (wgt_tablesize > max_wgt_tablesize) {
+            wgt_tablesize = max_wgt_tablesize;
+        }
+    }
+
+    return 0;
+}
+
+
 int test_table_size_increase() 
 {
     // Standard Lace initialization
@@ -52,38 +77,16 @@ int test_table_size_increase()
     qsylvan_init_simulator(min_wgt_tablesize, max_wgt_tablesize, -1, COMP_HASHMAP, NORM_MAX);
     qmdd_set_testing_mode(true); // turn on internal sanity tests
 
-    // check that wgt_tablesize doubles after gc, but not beyond max_wgt_tablesize
-    uint64_t wgt_tablesize = min_wgt_tablesize;
-    for (int i = 0; i < 10; i++) {
-        test_assert(sylvan_get_edge_weight_table_size() == wgt_tablesize);
-        evbdd_gc_wgt_table();
-        wgt_tablesize = 2*wgt_tablesize;
-        if (wgt_tablesize > max_wgt_tablesize) {
-            wgt_tablesize = max_wgt_tablesize;
-        }
-    }
+    int res = RUN(test_table_size_increase_task);
 
     sylvan_quit();
     lace_stop();
-    return 0;
+    return res;
 }
 
 
-int test_custom_gate_gc_protection()
+TASK_0(int, test_custom_gate_gc_protection_task)
 {
-    // Standard Lace initialization
-    int workers = 1;
-    lace_start(workers, 0);
-
-    // Initialize Q-Sylvan with tolerance 0 (this creates larger QMDDs such that
-    // garbage collection of the edge weight table is triggered earlier)
-    double tol = 1e-14;
-    sylvan_set_sizes(1LL<<25, 1LL<<25, 1LL<<16, 1LL<<16);
-    sylvan_init_package();
-    qsylvan_init_simulator(min_wgt_tablesize, max_wgt_tablesize, -1, COMP_HASHMAP, NORM_MAX);
-    qmdd_set_testing_mode(true); // turn on internal sanity tests
-
-
     QMDD qRef, qTest, qInit;
     BDDVAR nqubits, t;
     int tmp_gateid;
@@ -137,10 +140,29 @@ int test_custom_gate_gc_protection()
     test_assert(evbdd_equivalent(qRef, qTest, nqubits, true, false));
     test_assert(qTest == qRef);
 
+    return 0;
+}
+
+
+int test_custom_gate_gc_protection()
+{
+    // Standard Lace initialization
+    int workers = 1;
+    lace_start(workers, 0);
+
+    // Initialize Q-Sylvan with tolerance 0 (this creates larger QMDDs such that
+    // garbage collection of the edge weight table is triggered earlier)
+    double tol = 1e-14;
+    sylvan_set_sizes(1LL<<25, 1LL<<25, 1LL<<16, 1LL<<16);
+    sylvan_init_package();
+    qsylvan_init_simulator(min_wgt_tablesize, max_wgt_tablesize, -1, COMP_HASHMAP, NORM_MAX);
+    qmdd_set_testing_mode(true); // turn on internal sanity tests
+
+    int res = RUN(test_custom_gate_gc_protection_task);
 
     sylvan_quit();
     lace_stop();
-    return 0;
+    return res;
 }
 
 
@@ -160,7 +182,7 @@ int test_with(int wgt_backend, int norm_strat)
     qmdd_set_testing_mode(true); // turn on internal sanity tests
 
     printf("wgt backend = %d, norm strat = %d:\n", wgt_backend, norm_strat);
-    int res = run_qmdd_tests();
+    int res = RUN(run_qmdd_tests_task);
 
     sylvan_quit();
     lace_stop();

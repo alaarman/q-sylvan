@@ -373,6 +373,18 @@ void alternating_eqcheck(quantum_circuit_t *U, quantum_circuit_t *V)
     free(ops_v);
 }
 
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+VOID_TASK_0(run_eqcheck)
+{
+    if (strcmp(eqcheck_alg, "pauli") == 0)
+        pauli_echeck(circuit_U, circuit_V);
+    else if (strcmp(eqcheck_alg, "alternating") == 0)
+        alternating_eqcheck(circuit_U, circuit_V);
+    else
+        fprintf(stderr, "Invalid arg for algorithm (should be caught by argp)\n");
+}
+
 int main(int argc, char *argv[])
 {
     argp_parse(&argp, argc, argv, 0, 0, 0);
@@ -386,12 +398,7 @@ int main(int argc, char *argv[])
     clock_t cpu_t1 = clock();
     double wall_t1 = wctime();
 
-    if (strcmp(eqcheck_alg, "pauli") == 0)
-        pauli_echeck(circuit_U, circuit_V);
-    else if (strcmp(eqcheck_alg, "alternating") == 0)
-        alternating_eqcheck(circuit_U, circuit_V);
-    else
-        fprintf(stderr, "Invalid arg for algorithm (should be caught by argp)\n");
+    RUN(run_eqcheck);
         
     clock_t cpu_t2 = clock();
     double wall_t2 = wctime();

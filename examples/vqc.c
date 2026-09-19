@@ -33,6 +33,13 @@ void ry_cz_ansatz(int nqubits, int depth)
     evbdd_unprotect(&state);
 }
 
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+VOID_TASK_2(ry_cz_ansatz_task, int, nqubits, int, depth)
+{
+    ry_cz_ansatz(nqubits, depth);
+}
+
 int main()
 {
     // Standard Lace initialization
@@ -45,7 +52,7 @@ int main()
     qsylvan_init_defaults(1LL<<20);
 
     srand(time(NULL));
-    ry_cz_ansatz(10, 5);
+    RUN(ry_cz_ansatz_task, 10, 5);
 
     sylvan_quit();
     return 0;

@@ -1,16 +1,27 @@
-#include <errno.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "sylvan.h"
 #include "sylvan_int.h"
+#include <sylvan_platform.h>
 
 #include "test_assert.h"
 
-__thread uint64_t seed = 1;
+static void*
+test_alloc_array(size_t count, size_t size)
+{
+    if (count == 0) count = 1;
+    if (size == 0) size = 1;
+    if (count > SIZE_MAX / size) return NULL;
+    return malloc(count * size);
+}
+
+#define TEST_ALLOC_ARRAY(type, count) ((type*)test_alloc_array((size_t)(count), sizeof(type)))
+
+SYLVAN_TLS uint64_t seed = 1;
 
 uint64_t
 xorshift_rand(void)
@@ -25,15 +36,15 @@ xorshift_rand(void)
 }
 
 double
-uniform_deviate(uint64_t seed)
+uniform_deviate(uint64_t value)
 {
-    return seed * (1.0 / ((double)(UINT64_MAX) + 1.0));
+    return value * (1.0 / ((double)(UINT64_MAX) + 1.0));
 }
 
 int
 rng(int low, int high)
 {
-    return low + uniform_deviate(xorshift_rand()) * (high-low);
+    return low + (int)(uniform_deviate(xorshift_rand()) * (double)(high-low));
 }
 
 /**
@@ -129,7 +140,7 @@ TASK_0(int, test_zdd_from_mtbdd)
     int count = rng(10,100);
     for (int i=0; i<count; i++) {
         uint8_t arr[8];
-        for (int j=0; j<8; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<8; j++) arr[j] = (uint8_t)rng(0, 2);
         BDD bdd_set = sylvan_cube(bdd_dom, arr);
         ZDD zdd_set = zdd_cube(zdd_dom, arr, zdd_true);
         test_assert(zdd_from_mtbdd(bdd_set, bdd_dom) == zdd_set);
@@ -145,11 +156,12 @@ TASK_0(int, test_zdd_merge_domains)
      * Test zdd_merge_domains with random sets
      */
 
-    // Create random domain of 6..14 variables
+    // Create random domain of 20..50 variables
     int nvars = rng(20,50);
 
     // Create random subdomain 1
-    uint32_t subdom1_arr[nvars];
+    uint32_t *subdom1_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    test_assert(subdom1_arr != NULL);
     int nsub1 = 0;
     for (int i=0; i<nvars; i++) if (rng(0,2)) subdom1_arr[nsub1++] = i;
     BDD bdd_subdom1 = mtbdd_fromarray(subdom1_arr, nsub1);
@@ -157,7 +169,8 @@ TASK_0(int, test_zdd_merge_domains)
     test_assert(zdd_subdom1 == zdd_set_from_mtbdd(bdd_subdom1));
 
     // Create random subdomain 2
-    uint32_t subdom2_arr[nvars];
+    uint32_t *subdom2_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    test_assert(subdom2_arr != NULL);
     int nsub2 = 0;
     for (int i=0; i<nvars; i++) if (rng(0,2)) subdom2_arr[nsub2++] = i;
     BDD bdd_subdom2 = mtbdd_fromarray(subdom2_arr, nsub2);
@@ -169,6 +182,32 @@ TASK_0(int, test_zdd_merge_domains)
     ZDD zdd_subdom = zdd_set_union(zdd_subdom1, zdd_subdom2);
     test_assert(zdd_subdom == zdd_set_from_mtbdd(bdd_subdom));
 
+    free(subdom2_arr);
+    free(subdom1_arr);
+    return 0;
+}
+
+TASK_0(int, test_zdd_extend_domain)
+{
+    BDD subdomain = mtbdd_fromarray((uint32_t[]){1}, 1);
+    BDD domain = mtbdd_fromarray((uint32_t[]){0,1,2}, 3);
+    ZDD newvars = zdd_set_from_array((uint32_t[]){0,2}, 2);
+    ZDD set = zdd_from_mtbdd(sylvan_ithvar(1), subdomain);
+    ZDD expected = zdd_from_mtbdd(sylvan_ithvar(1), domain);
+
+    test_assert(RUN(zdd_extend_domain, set, newvars, 2) == expected);
+    test_assert(RUN(zdd_extend_domain, set, newvars, 3) == zdd_invalid);
+    return 0;
+}
+
+TASK_0(int, test_zdd_refs_growth)
+{
+    ZDD refs[4096];
+    for (size_t i=0; i<4096; i++) {
+        refs[i] = zdd_true;
+        zdd_refs_pushptr(&refs[i]);
+    }
+    zdd_refs_popptr(4096);
     return 0;
 }
 
@@ -201,7 +240,7 @@ TASK_0(int, test_zdd_merge_domains)
 //         int count = rng(10,200);
 //         for (int i=0; i<count; i++) {
 //             uint8_t arr[nsub];
-//             for (int j=0; j<nsub; j++) arr[j] = rng(0, 2);
+//             for (int j=0; j<nsub; j++) arr[j] = (uint8_t)rng(0, 2);
 //             bdd_set = sylvan_union_cube(bdd_set, bdd_subdom, arr);
 //             zdd_set = zdd_union_cube(zdd_set, zdd_subdom, arr);
 //         }
@@ -229,7 +268,7 @@ TASK_0(int, test_zdd_union_cube)
     int count = rng(100,1000);
     for (int i=0; i<count; i++) {
         uint8_t arr[8];
-        for (int j=0; j<8; j++) arr[j] = rng(0, 3);
+        for (int j=0; j<8; j++) arr[j] = (uint8_t)rng(0, 3);
         bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
         zdd_set = zdd_union_cube(zdd_set, zdd_dom, arr, zdd_true);
         test_assert(zdd_from_mtbdd(bdd_set, bdd_dom) == zdd_set);
@@ -251,7 +290,7 @@ TASK_0(int, test_zdd_satcount)
     BDD bdd_set = sylvan_false;
     for (int i=0; i<count; i++) {
         uint8_t arr[8];
-        for (int j=0; j<8; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<8; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
     }
 
@@ -269,38 +308,33 @@ TASK_0(int, test_zdd_enum)
      */
 
     int nvars = rng(8,12);
-    uint8_t arr[nvars];
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    test_assert(arr != NULL);
+    test_assert(dom_arr != NULL);
 
     // Create random source set
-    uint32_t dom_arr[nvars];
     for (int i=0; i<nvars; i++) dom_arr[i] = i*2;
     ZDD zdd_dom = zdd_set_from_array(dom_arr, nvars);
 
     ZDD zdd_set = zdd_false;
     int count = rng(0,1000);
     for (int i=0; i<count; i++) {
-        for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
         zdd_set = zdd_union_cube(zdd_set, zdd_dom, arr, zdd_true);
     }
 
-    enum_max = zdd_satcount(zdd_set);
-    enum_len = nvars;
-    enum_idx = 0;
-
-    enum_arrs = malloc(sizeof(uint8_t*[enum_max]));
+    size_t expected = (size_t)zdd_satcount(zdd_set);
+    size_t seen = 0;
     ZDD res = zdd_enum_first(zdd_set, zdd_dom, arr, NULL);
-    for (int i=0; i<enum_max; i++) {
-        test_assert(res != zdd_false);
-        enum_arrs[i] = malloc(sizeof(uint8_t[nvars]));
-        memcpy(enum_arrs[i], arr, nvars);
+    while (res != zdd_false) {
+        seen++;
         res = zdd_enum_next(zdd_set, zdd_dom, arr, NULL);
     }
-    assert(res == zdd_false);
+    test_assert(seen == expected);
 
-    // zdd_enum_seq(zdd_set, zdd_dom, TASK(test_zdd_enum_cb), NULL);
-    for (int i=0; i<enum_max; i++) free(enum_arrs[i]);
-    free(enum_arrs);
-
+    free(dom_arr);
+    free(arr);
     return 0;
 }
 
@@ -312,7 +346,10 @@ TASK_0(int, test_zdd_and)
 
     // Create random domain of 6..14 variables
     int nvars = rng(6,14);
-    uint32_t dom_arr[nvars];
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    test_assert(dom_arr != NULL);
+    test_assert(arr != NULL);
     for (int i=0; i<nvars; i++) dom_arr[i] = i;
     BDD bdd_dom = mtbdd_fromarray(dom_arr, nvars);
 
@@ -321,10 +358,9 @@ TASK_0(int, test_zdd_and)
 
     int count = rng(0,100);
     for (int i=0; i<count; i++) {
-        uint8_t arr[nvars];
-        for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set_a = sylvan_union_cube(bdd_set_a, bdd_dom, arr);
-        for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set_b = sylvan_union_cube(bdd_set_b, bdd_dom, arr);
     }
 
@@ -333,12 +369,12 @@ TASK_0(int, test_zdd_and)
     ZDD zdd_set_a = zdd_from_mtbdd(bdd_set_a, bdd_dom);
     ZDD zdd_set_b = zdd_from_mtbdd(bdd_set_b, bdd_dom);
     ZDD zdd_set = zdd_from_mtbdd(bdd_set, bdd_dom);
-    // ZDD zdd_dom = zdd_set_from_mtbdd(bdd_dom);
 
     ZDD zdd_test_result = zdd_and(zdd_set_a, zdd_set_b);
-    
     test_assert(zdd_set == zdd_test_result);
 
+    free(arr);
+    free(dom_arr);
     return 0;
 }
 
@@ -350,7 +386,10 @@ TASK_0(int, test_zdd_or)
 
     // Create random domain of 6..14 variables
     int nvars = rng(6,14);
-    uint32_t dom_arr[nvars];
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    test_assert(dom_arr != NULL);
+    test_assert(arr != NULL);
     for (int i=0; i<nvars; i++) dom_arr[i] = i;
     BDD bdd_dom = mtbdd_fromarray(dom_arr, nvars);
 
@@ -359,10 +398,9 @@ TASK_0(int, test_zdd_or)
 
     int count = rng(0,100);
     for (int i=0; i<count; i++) {
-        uint8_t arr[nvars];
-        for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set_a = sylvan_union_cube(bdd_set_a, bdd_dom, arr);
-        for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set_b = sylvan_union_cube(bdd_set_b, bdd_dom, arr);
     }
 
@@ -371,12 +409,12 @@ TASK_0(int, test_zdd_or)
     ZDD zdd_set_a = zdd_from_mtbdd(bdd_set_a, bdd_dom);
     ZDD zdd_set_b = zdd_from_mtbdd(bdd_set_b, bdd_dom);
     ZDD zdd_set = zdd_from_mtbdd(bdd_set, bdd_dom);
-    //ZDD zdd_dom = zdd_from_mtbdd(bdd_dom, bdd_dom);
 
     ZDD zdd_test_result = zdd_or(zdd_set_a, zdd_set_b);
-
     test_assert(zdd_set == zdd_test_result);
 
+    free(arr);
+    free(dom_arr);
     return 0;
 }
 
@@ -392,7 +430,7 @@ TASK_0(int, test_zdd_not)
     BDD bdd_set = sylvan_false;
     for (int i=0; i<count; i++) {
         uint8_t arr[8];
-        for (int j=0; j<8; j++) arr[j] = rng(0, 2);
+        for (int j=0; j<8; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
     }
 
@@ -414,19 +452,21 @@ TASK_0(int, test_zdd_ite)
 
     // Create random domain of 6..12 variables
     int nvars = rng(6, 12);
-    uint32_t dom_arr[nvars];
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    test_assert(dom_arr != NULL);
+    test_assert(arr != NULL);
     for (int i=0; i<nvars; i++) dom_arr[i] = i;
     BDD bdd_dom = mtbdd_fromarray(dom_arr, nvars);
 
     // Create three random sets
     BDD set_a, set_b, set_c;
     set_a = set_b = set_c = mtbdd_false;
-    uint8_t arr[nvars];
 
     {
         int count = rng(0, 100);
         for (int i=0; i<count; i++) {
-            for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+            for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
             set_a = sylvan_union_cube(set_a, bdd_dom, arr);
         }
     }
@@ -434,7 +474,7 @@ TASK_0(int, test_zdd_ite)
     {
         int count = rng(0, 100);
         for (int i=0; i<count; i++) {
-            for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+            for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
             set_b = sylvan_union_cube(set_b, bdd_dom, arr);
         }
     }
@@ -442,7 +482,7 @@ TASK_0(int, test_zdd_ite)
     {
         int count = rng(0, 100);
         for (int i=0; i<count; i++) {
-            for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+            for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
             set_c = sylvan_union_cube(set_c, bdd_dom, arr);
         }
     }
@@ -456,6 +496,8 @@ TASK_0(int, test_zdd_ite)
     ZDD zdd_test_result = zdd_ite(zdd_set_a, zdd_set_b, zdd_set_c, zdd_dom);
     test_assert(zdd_from_mtbdd(bdd_test_result, bdd_dom) == zdd_test_result);
 
+    free(arr);
+    free(dom_arr);
     return 0;
 }
 
@@ -467,13 +509,20 @@ TASK_0(int, test_zdd_exists)
 
     // Create random domain of 6..12 variables
     int nvars = rng(6, 12);
-    uint32_t dom_arr[nvars];
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint32_t *subdom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint32_t *q_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    test_assert(dom_arr != NULL);
+    test_assert(subdom_arr != NULL);
+    test_assert(q_arr != NULL);
+    test_assert(arr != NULL);
+
     for (int i=0; i<nvars; i++) dom_arr[i] = i;
     BDD bdd_dom = mtbdd_fromarray(dom_arr, nvars);
     ZDD zdd_dom = zdd_set_from_array(dom_arr, nvars);
 
     // Create random subdomain and quotiented variables (qdom)
-    uint32_t subdom_arr[nvars], q_arr[nvars];
     int nsub = 0, nq = 0;
     for (int i=0; i<nvars; i++) {
         if (rng(0,2)) subdom_arr[nsub++] = i;
@@ -487,16 +536,13 @@ TASK_0(int, test_zdd_exists)
     // Create random set on subdomain
     BDD bdd_set = sylvan_false;
     ZDD zdd_set = zdd_false;
-    {
-        uint8_t arr[nvars];
-        int count = rng(10,200);
-        for (int i=0; i<count; i++) {
-            for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
-            bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
-            zdd_set = zdd_union_cube(zdd_set, zdd_dom, arr, zdd_true);
-        }
-        test_assert(zdd_set == zdd_from_mtbdd(bdd_set, bdd_dom));
+    int count = rng(10,200);
+    for (int i=0; i<count; i++) {
+        for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
+        bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
+        zdd_set = zdd_union_cube(zdd_set, zdd_dom, arr, zdd_true);
     }
+    test_assert(zdd_set == zdd_from_mtbdd(bdd_set, bdd_dom));
 
     BDD bdd_qset = sylvan_exists(bdd_set, bdd_qdom);
     ZDD zdd_test_result = zdd_exists(zdd_set, zdd_qdom);
@@ -504,6 +550,10 @@ TASK_0(int, test_zdd_exists)
     ZDD zdd_test_result2 = zdd_project(zdd_set, zdd_subdom);
     test_assert(zdd_test_result2 == zdd_from_mtbdd(bdd_qset, bdd_subdom));
 
+    free(arr);
+    free(q_arr);
+    free(subdom_arr);
+    free(dom_arr);
     return 0;
 }
 
@@ -526,7 +576,7 @@ TASK_0(int, test_zdd_exists)
 //         int count = rng(4,100);
 //         for (int i=0; i<count; i++) {
 //             uint8_t arr[nvars];
-//             for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+//             for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
 //             bdd_set = sylvan_union_cube(bdd_set, bdd_dom, arr);
 //             zdd_set = zdd_union_cube(zdd_set, zdd_dom, arr);
 //         }
@@ -558,7 +608,7 @@ TASK_0(int, test_zdd_exists)
 //         int count = rng(100, 200);
 //         for (int i=0; i<count; i++) {
 //             uint8_t arr[len];
-//             for (int j=0; j<len; j++) arr[j] = rng(0, 2);
+//             for (int j=0; j<len; j++) arr[j] = (uint8_t)rng(0, 2);
 //             bdd_rel = sylvan_union_cube(bdd_rel, bdd_vars, arr);
 //             zdd_rel = zdd_union_cube(zdd_rel, zdd_vars, arr);
 //         }
@@ -614,7 +664,7 @@ TASK_0(int, test_zdd_exists)
 //         int count = rng(10,200);
 //         for (int i=0; i<count; i++) {
 //             uint8_t arr[nsub1];
-//             for (int j=0; j<nsub1; j++) arr[j] = rng(0, 2);
+//             for (int j=0; j<nsub1; j++) arr[j] = (uint8_t)rng(0, 2);
 //             bdd_set1 = sylvan_union_cube(bdd_set1, bdd_subdom1, arr);
 //             zdd_set1 = zdd_union_cube(zdd_set1, zdd_subdom1, arr);
 //         }
@@ -628,7 +678,7 @@ TASK_0(int, test_zdd_exists)
 //         int count = rng(10,200);
 //         for (int i=0; i<count; i++) {
 //             uint8_t arr[nsub2];
-//             for (int j=0; j<nsub2; j++) arr[j] = rng(0, 2);
+//             for (int j=0; j<nsub2; j++) arr[j] = (uint8_t)rng(0, 2);
 //             bdd_set2 = sylvan_union_cube(bdd_set2, bdd_subdom2, arr);
 //             zdd_set2 = zdd_union_cube(zdd_set2, zdd_subdom2, arr);
 //         }
@@ -677,8 +727,8 @@ TASK_0(int, test_zdd_isop_random)
     MTBDD bdd_set = mtbdd_false;
     int cubecount = rng(1,200);
     for (int j=0; j<cubecount; j++) {
-        uint8_t arr[11];
-        for (int j=0; j<11; j++) arr[j] = rng(0, 2);
+        uint8_t arr[12];
+        for (int j=0; j<12; j++) arr[j] = (uint8_t)rng(0, 2);
         bdd_set = sylvan_or(bdd_set, sylvan_cube(bdd_dom, arr));
     }
 
@@ -688,7 +738,7 @@ TASK_0(int, test_zdd_isop_random)
     MTBDD remade_bdd = zdd_cover_to_bdd(isop_zdd);
 
     // manually count cubes
-    int arr[12];
+    int arr[13];
     ZDD res = zdd_cover_enum_first(isop_zdd, arr);
     int count1 = 0;
     while (res != zdd_false) {
@@ -697,7 +747,7 @@ TASK_0(int, test_zdd_isop_random)
     }
 
     // count cubes by counting paths
-    long zdd_cubes = zdd_pathcount(isop_zdd);
+    long zdd_cubes = (long)zdd_pathcount(isop_zdd);
 
     // printf("%6d cubes, %6ld PIs\n", cubecount, zdd_cubes);
 
@@ -718,34 +768,40 @@ TASK_0(int, test_zdd_read_write)
     int nvars = rng(8,12);
 
     // Create random source sets
-    uint32_t dom_arr[nvars];
+    uint32_t *dom_arr = TEST_ALLOC_ARRAY(uint32_t, nvars);
+    uint8_t *arr = TEST_ALLOC_ARRAY(uint8_t, nvars);
+    test_assert(dom_arr != NULL);
+    test_assert(arr != NULL);
     for (int i=0; i<nvars; i++) dom_arr[i] = i*2;
     ZDD zdd_dom = zdd_set_from_array(dom_arr, nvars);
 
     int set_count = rng(1,10);
-    ZDD zdd_set[set_count];
+    ZDD *zdd_set = TEST_ALLOC_ARRAY(ZDD, set_count);
+    ZDD *test = TEST_ALLOC_ARRAY(ZDD, set_count);
+    test_assert(zdd_set != NULL);
+    test_assert(test != NULL);
+
     for (int k=0; k<set_count; k++) {
         zdd_set[k] = zdd_false;
         int count = rng(4,100);
         for (int i=0; i<count; i++) {
-            uint8_t arr[nvars];
-            for (int j=0; j<nvars; j++) arr[j] = rng(0, 2);
+            for (int j=0; j<nvars; j++) arr[j] = (uint8_t)rng(0, 2);
             zdd_set[k] = zdd_union_cube(zdd_set[k], zdd_dom, arr, zdd_true);
         }
     }
 
     FILE *f = tmpfile();
-    if (f == NULL) {
-        printf("Something went wrong with tmpfile()! %s\n", strerror(errno));
-        exit(1);
-    }
-
+    test_assert(f != NULL);
     zdd_writer_tobinary(f, zdd_set, set_count);
     rewind(f);
-    ZDD test[set_count];
     test_assert(zdd_reader_frombinary(f, test, set_count) == 0);
     for (int i=0; i<set_count; i++) test_assert(test[i] == zdd_set[i]);
 
+    fclose(f);
+    free(test);
+    free(zdd_set);
+    free(arr);
+    free(dom_arr);
     return 0;
 }
 
@@ -754,7 +810,7 @@ TASK_0(int, runtests)
     // Testing without garbage collection
     sylvan_gc_disable();
 
-    int test_iterations = 10;
+    int test_iterations = 100;
 
     printf("test_zdd_eval...\n");
     for (int i=0; i<test_iterations; i++) if (CALL(test_zdd_eval)) return 1;
@@ -766,6 +822,10 @@ TASK_0(int, runtests)
     for (int k=0; k<test_iterations; k++) if (CALL(test_zdd_satcount)) return 1;
     printf("test_zdd_merge_domains...\n");
     for (int k=0; k<test_iterations; k++) if (CALL(test_zdd_merge_domains)) return 1;
+    printf("test_zdd_extend_domain...\n");
+    if (CALL(test_zdd_extend_domain)) return 1;
+    printf("test_zdd_refs_growth...\n");
+    if (CALL(test_zdd_refs_growth)) return 1;
     printf("test_zdd_union_cube...\n");
     for (int k=0; k<test_iterations; k++) if (CALL(test_zdd_union_cube)) return 1;
     printf("test_zdd_enum...\n");

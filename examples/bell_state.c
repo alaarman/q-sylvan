@@ -1,6 +1,8 @@
 #include <qsylvan.h>
 
-void sample_bell_state()
+// Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+// that calls lace_start() is not one.
+VOID_TASK_0(sample_bell_state)
 {
     srand(time(NULL));
 
@@ -30,7 +32,7 @@ int main()
     sylvan_init_package();
     qsylvan_init_defaults(1LL<<20);
 
-    sample_bell_state();
+    RUN(sample_bell_state);
 
     sylvan_quit();
     lace_stop();

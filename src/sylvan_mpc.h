@@ -230,62 +230,62 @@ mtbdd_to_matrix_array_mpc(MTBDD M, int n, row_column_mode_t mode, mpc_ptr **W);
 /**
  * Compute a + b
  */
-#define mpc_plus(a, b) mtbdd_apply(a, b, TASK(mpc_op_plus))
+#define mpc_plus(a, b) mtbdd_apply(a, b, mpc_op_plus_CALL)
 
 /**
  * Compute a - b
  */
-#define mpc_minus(a, b) mtbdd_apply(a, b, TASK(mpc_op_minus))
+#define mpc_minus(a, b) mtbdd_apply(a, b, mpc_op_minus_CALL)
 
 /**
  * Compute a * b
  */
-#define mpc_times(a, b) mtbdd_apply(a, b, TASK(mpc_op_times))
+#define mpc_times(a, b) mtbdd_apply(a, b, mpc_op_times_CALL)
 
 /**
  * Compute a / b
  */
-//#define mpc_divide(a, b) mtbdd_apply(a, b, TASK(mpc_op_divide))
+//#define mpc_divide(a, b) mtbdd_apply(a, b, mpc_op_divide_CALL)
 
 /**
  * Compute min(a, b)
  */
-#define mpc_min(a, b) mtbdd_apply(a, b, TASK(mpc_op_min))
+#define mpc_min(a, b) mtbdd_apply(a, b, mpc_op_min_CALL)
 
 /**
  * Compute max(a, b)
  */
-#define mpc_max(a, b) mtbdd_apply(a, b, TASK(mpc_op_max))
+#define mpc_max(a, b) mtbdd_apply(a, b, mpc_op_max_CALL)
 
 /**
  * Compute -a
  */
-#define mpc_negative(a) mtbdd_uapply(a, TASK(mpc_op_neg), 0);
+#define mpc_negative(a) mtbdd_uapply(a, mpc_op_neg_CALL, 0);
 
 /**
  * Compute abs(a)
  */
-//#define gmp_abs(a) mtbdd_uapply(a, TASK(gmp_op_abs), 0);
+//#define gmp_abs(a) mtbdd_uapply(a, gmp_op_abs_CALL, 0);
 
 /**
  * Abstract the variables in <v> from <a> by taking the sum of all values
  */
-//#define gmp_abstract_plus(dd, v) mtbdd_abstract(dd, v, TASK(gmp_abstract_op_plus))
+//#define gmp_abstract_plus(dd, v) mtbdd_abstract(dd, v, gmp_abstract_op_plus_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the product of all values
  */
-//#define gmp_abstract_times(dd, v) mtbdd_abstract(dd, v, TASK(gmp_abstract_op_times))
+//#define gmp_abstract_times(dd, v) mtbdd_abstract(dd, v, gmp_abstract_op_times_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the minimum of all values
  */
-//#define gmp_abstract_min(dd, v) mtbdd_abstract(dd, v, TASK(gmp_abstract_op_min))
+//#define gmp_abstract_min(dd, v) mtbdd_abstract(dd, v, gmp_abstract_op_min_CALL)
 
 /**
  * Abstract the variables in <v> from <a> by taking the maximum of all values
  */
-//#define gmp_abstract_max(dd, v) mtbdd_abstract(dd, v, TASK(gmp_abstract_op_max))
+//#define gmp_abstract_max(dd, v) mtbdd_abstract(dd, v, gmp_abstract_op_max_CALL)
 
 /**
  * Multiply <a> and <b>, and abstract variables <vars> using summation.
@@ -306,7 +306,7 @@ mtbdd_to_matrix_array_mpc(MTBDD M, int n, row_column_mode_t mode, mpc_ptr **W);
  * Parameter <dd> is the MTBDD to convert; parameter <value> is an GMP mpq leaf
  */
 //TASK_DECL_2(MTBDD, gmp_op_threshold, MTBDD*, MTBDD*);
-//#define gmp_threshold(dd, value) mtbdd_apply(dd, value, TASK(gmp_op_threshold));
+//#define gmp_threshold(dd, value) mtbdd_apply(dd, value, gmp_op_threshold_CALL);
 
 // TODO: strict = restrict?
 
@@ -315,7 +315,7 @@ mtbdd_to_matrix_array_mpc(MTBDD M, int n, row_column_mode_t mode, mpc_ptr **W);
  * Parameter <dd> is the MTBDD to convert; parameter <value> is an GMP mpq leaf
  */
 //TASK_DECL_2(MTBDD, gmp_op_strict_threshold, MTBDD*, MTBDD*);
-//#define gmp_strict_threshold(dd, value) mtbdd_apply(dd, value, TASK(gmp_op_strict_threshold));
+//#define gmp_strict_threshold(dd, value) mtbdd_apply(dd, value, gmp_op_strict_threshold_CALL);
 
 /**
  * Convert to a Boolean MTBDD, translate terminals >= value to 1 and to 0 otherwise;

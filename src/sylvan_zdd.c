@@ -15,12 +15,11 @@
  */
 
 #include <sylvan_int.h>
-// #include <sylvan_config.h>
+#include <sylvan_platform.h>
 
 #include <assert.h>
 #include <inttypes.h>
 #include <math.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,7 +154,7 @@ zdd_unprotect(ZDD *a)
 }
 
 size_t
-zdd_count_protected()
+zdd_count_protected(void)
 {
     return protect_count(&zdd_protected);
 }
@@ -194,7 +193,7 @@ typedef struct zdd_refs_internal
     zdd_refs_task_t sbegin, send, scur;
 } *zdd_refs_internal_t;
 
-DECLARE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
+SYLVAN_TLS zdd_refs_internal_t zdd_refs_key;
 
 VOID_TASK_2(zdd_refs_mark_p_par, ZDD**, begin, size_t, count)
 {
@@ -246,10 +245,9 @@ VOID_TASK_2(zdd_refs_mark_s_par, zdd_refs_task_t, begin, size_t, count)
 
 VOID_TASK_0(zdd_refs_mark_task)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
-    SPAWN(zdd_refs_mark_p_par, zdd_refs_key->pbegin, zdd_refs_key->pcur-zdd_refs_key->pbegin);
-    SPAWN(zdd_refs_mark_r_par, zdd_refs_key->rbegin, zdd_refs_key->rcur-zdd_refs_key->rbegin);
-    CALL(zdd_refs_mark_s_par, zdd_refs_key->sbegin, zdd_refs_key->scur-zdd_refs_key->sbegin);
+    SPAWN(zdd_refs_mark_p_par, zdd_refs_key->pbegin, (size_t)(zdd_refs_key->pcur-zdd_refs_key->pbegin));
+    SPAWN(zdd_refs_mark_r_par, zdd_refs_key->rbegin, (size_t)(zdd_refs_key->rcur-zdd_refs_key->rbegin));
+    CALL(zdd_refs_mark_s_par, zdd_refs_key->sbegin, (size_t)(zdd_refs_key->scur-zdd_refs_key->sbegin));
     SYNC(zdd_refs_mark_r_par);
     SYNC(zdd_refs_mark_p_par);
 }
@@ -261,95 +259,106 @@ VOID_TASK_0(zdd_refs_mark)
 
 VOID_TASK_0(zdd_refs_init_task)
 {
-    zdd_refs_internal_t s = (zdd_refs_internal_t)malloc(sizeof(struct zdd_refs_internal));
+    /* The cursors pcur/rcur/scur in this struct are stored to by every
+     * push, pop, pushptr, popptr, spawn and sync -- on the order of 10^9
+     * times per run for a workload that makes many small BDD operations.
+     * The struct is 72 bytes, so a plain malloc packs several workers'
+     * cursors into one cache line and every worker's push invalidates its
+     * neighbours'.  Give each worker a line of its own. */
+    zdd_refs_internal_t s = (zdd_refs_internal_t)sylvan_alloc_padded(sizeof(struct zdd_refs_internal));
+    if (s == NULL) { fprintf(stderr, "sylvan: out of memory in zdd_refs_init_key\n"); exit(1); }
     s->pcur = s->pbegin = (ZDD**)malloc(sizeof(ZDD*) * 1024);
     s->pend = s->pbegin + 1024;
     s->rcur = s->rbegin = (ZDD*)malloc(sizeof(ZDD) * 1024);
     s->rend = s->rbegin + 1024;
     s->scur = s->sbegin = (zdd_refs_task_t)malloc(sizeof(struct zdd_refs_task) * 1024);
     s->send = s->sbegin + 1024;
-    SET_THREAD_LOCAL(zdd_refs_key, s);
+    zdd_refs_key = s;
+}
+
+VOID_TASK_0(zdd_refs_free)
+{
+    free(zdd_refs_key->pbegin);
+    free(zdd_refs_key->rbegin);
+    free(zdd_refs_key->sbegin);
+    sylvan_free_padded(zdd_refs_key);
 }
 
 VOID_TASK_0(zdd_refs_init)
 {
-    INIT_THREAD_LOCAL(zdd_refs_key);
     TOGETHER(zdd_refs_init_task);
 }
 
 void
-zdd_refs_ptrs_up(zdd_refs_internal_t zdd_refs_key)
+zdd_refs_ptrs_up(zdd_refs_internal_t refs)
 {
-    size_t size = zdd_refs_key->pend - zdd_refs_key->pbegin;
-    zdd_refs_key->pbegin = (ZDD**)realloc(zdd_refs_key->pbegin, sizeof(ZDD*) * size*2);
-    zdd_refs_key->pcur = zdd_refs_key->pbegin + size;
-    zdd_refs_key->pend = zdd_refs_key->pend + size * 2;
+    size_t size = (size_t)(refs->pend - refs->pbegin);
+    refs->pbegin = (ZDD**)realloc(refs->pbegin, sizeof(ZDD*) * size*2);
+    refs->pcur = refs->pbegin + size;
+    refs->pend = refs->pbegin + (size * 2);
 }
 
-ZDD __attribute__((noinline))
-zdd_refs_refs_up(zdd_refs_internal_t zdd_refs_key, ZDD res)
+ZDD SYLVAN_NOINLINE
+zdd_refs_refs_up(zdd_refs_internal_t refs, ZDD res)
 {
-    long size = zdd_refs_key->rend - zdd_refs_key->rbegin;
-    zdd_refs_key->rbegin = (ZDD*)realloc(zdd_refs_key->rbegin, sizeof(ZDD) * size * 2);
-    zdd_refs_key->rcur = zdd_refs_key->rbegin + size;
-    zdd_refs_key->rend = zdd_refs_key->rbegin + (size * 2);
+    size_t size = (size_t)(refs->rend - refs->rbegin);
+    refs->rbegin = (ZDD*)realloc(refs->rbegin, sizeof(ZDD) * size * 2);
+    refs->rcur = refs->rbegin + size;
+    refs->rend = refs->rbegin + (size * 2);
     return res;
 }
 
-void __attribute__((noinline))
-zdd_refs_tasks_up(zdd_refs_internal_t zdd_refs_key)
+void SYLVAN_NOINLINE
+zdd_refs_tasks_up(zdd_refs_internal_t refs)
 {
-    long size = zdd_refs_key->send - zdd_refs_key->sbegin;
-    zdd_refs_key->sbegin = (zdd_refs_task_t)realloc(zdd_refs_key->sbegin, sizeof(struct zdd_refs_task) * size * 2);
-    zdd_refs_key->scur = zdd_refs_key->sbegin + size;
-    zdd_refs_key->send = zdd_refs_key->sbegin + (size * 2);
+    size_t size = (size_t)(refs->send - refs->sbegin);
+    refs->sbegin = (zdd_refs_task_t)realloc(refs->sbegin, sizeof(struct zdd_refs_task) * size * 2);
+    refs->scur = refs->sbegin + size;
+    refs->send = refs->sbegin + (size * 2);
 }
 
-void __attribute__((unused))
+void
 zdd_refs_pushptr(ZDD *ptr)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
+    // If you get a segfault here (null dereference) then you're running this from outside Lace threads
     *zdd_refs_key->pcur++ = ptr;
     if (zdd_refs_key->pcur == zdd_refs_key->pend) zdd_refs_ptrs_up(zdd_refs_key);
 }
 
-void __attribute__((unused))
+void
 zdd_refs_popptr(size_t amount)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
     zdd_refs_key->pcur -= amount;
 }
 
-ZDD __attribute__((unused))
+ZDD
 zdd_refs_push(ZDD zdd)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
+    // If you get a segfault here (null dereference) then you're running this from outside Lace threads
     *(zdd_refs_key->rcur++) = zdd;
     if (zdd_refs_key->rcur == zdd_refs_key->rend) return zdd_refs_refs_up(zdd_refs_key, zdd);
     else return zdd;
 }
 
-void __attribute__((unused))
+void
 zdd_refs_pop(long amount)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
     zdd_refs_key->rcur -= amount;
 }
 
-void __attribute__((unused))
+void
 zdd_refs_spawn(Task *t)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
+    // If you get a segfault here (null dereference) then you're running this from outside Lace threads
     zdd_refs_key->scur->t = t;
     zdd_refs_key->scur->f = t->f;
     zdd_refs_key->scur += 1;
     if (zdd_refs_key->scur == zdd_refs_key->send) zdd_refs_tasks_up(zdd_refs_key);
 }
 
-ZDD __attribute__((unused))
+ZDD
 zdd_refs_sync(ZDD result)
 {
-    LOCALIZE_THREAD_LOCAL(zdd_refs_key, zdd_refs_internal_t);
     zdd_refs_key->scur -= 1;
     return result;
 }
@@ -361,8 +370,9 @@ zdd_refs_sync(ZDD result)
 static int zdd_initialized = 0;
 
 static void
-zdd_quit()
+zdd_quit(void)
 {
+    TOGETHER(zdd_refs_free);
     if (zdd_protected_created) {
         protect_free(&zdd_protected);
         zdd_protected_created = 0;
@@ -372,7 +382,7 @@ zdd_quit()
 }
 
 void
-sylvan_init_zdd()
+sylvan_init_zdd(void)
 {
     sylvan_init_mt();
 
@@ -380,8 +390,8 @@ sylvan_init_zdd()
     zdd_initialized = 1;
 
     sylvan_register_quit(zdd_quit);
-    sylvan_gc_add_mark(TASK(zdd_gc_mark_protected));
-    sylvan_gc_add_mark(TASK(zdd_refs_mark));
+    sylvan_gc_add_mark(zdd_gc_mark_protected_CALL);
+    sylvan_gc_add_mark(zdd_refs_mark_CALL);
 
     if (!zdd_protected_created) {
         protect_create(&zdd_protected, 4096);
@@ -902,8 +912,8 @@ TASK_IMPL_3(ZDD, zdd_extend_domain, ZDD, set, ZDD, newvars, int, value)
     /**
      * Terminal cases
      */
-    if (value == 0) return set; // uhm?
-    if (value != 1 && value != 1) return zdd_invalid; // uhm??
+    if (value == 0) return set;
+    if (value != 1 && value != 2) return zdd_invalid;
     if (set == zdd_false) return zdd_false;
     if (newvars == zdd_true) return set;
 
@@ -921,7 +931,7 @@ TASK_IMPL_3(ZDD, zdd_extend_domain, ZDD, set, ZDD, newvars, int, value)
      * Check the cache
      */
     ZDD result;
-    if (cache_get3(CACHE_ZDD_EXTEND_DOMAIN, set, newvars, value, &result)) {
+    if (cache_get3(CACHE_ZDD_EXTEND_DOMAIN, set, newvars, (uint64_t)(unsigned int)value, &result)) {
         sylvan_stats_count(ZDD_EXTEND_DOMAIN_CACHED);
         return result;
     }
@@ -933,7 +943,7 @@ TASK_IMPL_3(ZDD, zdd_extend_domain, ZDD, set, ZDD, newvars, int, value)
     const uint32_t set_var = set_node == NULL || zddnode_isleaf(set_node) ? 0xffffffff : zddnode_getvariable(set_node);
     const zddnode_t nv_node = ZDD_GETNODE(newvars);
     const uint32_t nv_var = zddnode_getvariable(nv_node);
-    const uint32_t nv_next = zddnode_high(newvars, nv_node);
+    const ZDD nv_next = zddnode_high(newvars, nv_node);
 
     if (nv_var < set_var) {
         if (value == 1) {
@@ -957,7 +967,7 @@ TASK_IMPL_3(ZDD, zdd_extend_domain, ZDD, set, ZDD, newvars, int, value)
     /**
      * Put in cache
      */
-    if (cache_put3(CACHE_ZDD_EXTEND_DOMAIN, set, newvars, value, result)) {
+    if (cache_put3(CACHE_ZDD_EXTEND_DOMAIN, set, newvars, (uint64_t)(unsigned int)value, result)) {
         sylvan_stats_count(ZDD_EXTEND_DOMAIN_CACHEDPUT);
     }
 
@@ -1926,7 +1936,7 @@ VOID_TASK_2(zdd_writer_add_visitor_post, ZDD, dd, sylvan_skiplist_t, sl)
 }
 
 sylvan_skiplist_t
-zdd_writer_start()
+zdd_writer_start(void)
 {
     size_t sl_size = nodes->table_size > 0x7fffffff ? 0x7fffffff : nodes->table_size;
     return sylvan_skiplist_alloc(sl_size);
@@ -1934,7 +1944,7 @@ zdd_writer_start()
 
 VOID_TASK_IMPL_2(zdd_writer_add, sylvan_skiplist_t, sl, ZDD, dd)
 {
-    zdd_visit_seq(dd, (zdd_visit_pre_cb)TASK(zdd_writer_add_visitor_pre), (zdd_visit_post_cb)TASK(zdd_writer_add_visitor_post), (void*)sl);
+    zdd_visit_seq(dd, (zdd_visit_pre_cb)zdd_writer_add_visitor_pre_CALL, (zdd_visit_post_cb)zdd_writer_add_visitor_post_CALL, (void*)sl);
 }
 
 void
@@ -2266,7 +2276,7 @@ TASK_IMPL_1(MTBDD, zdd_cover_to_bdd, ZDD, zdd)
 
     const zddnode_t zdd_node = ZDD_GETNODE(zdd);
     const uint32_t zdd_var = zddnode_getvariable(zdd_node);
-    const uint32_t pv = zdd_var & ~1;
+    const uint32_t pv = zdd_var & ~UINT32_C(1);
     const uint32_t nv = pv + 1;
     const uint32_t v = pv/2;
 
@@ -2281,7 +2291,8 @@ TASK_IMPL_1(MTBDD, zdd_cover_to_bdd, ZDD, zdd)
             zdd_nv = zdd_false;
             zdd_dc = zdd_false;
         } else if (zdd2 == zdd_true) {
-            // um? this should not even happen?
+            // while technically there is no problem with this, it does mean
+            // that the cover is not redundant.
             zdd_nv = zdd_false;
             zdd_dc = zdd_true;
         } else {
@@ -2302,7 +2313,7 @@ TASK_IMPL_1(MTBDD, zdd_cover_to_bdd, ZDD, zdd)
 
     mtbdd_refs_spawn(SPAWN(zdd_cover_to_bdd, zdd_pv));
     mtbdd_refs_spawn(SPAWN(zdd_cover_to_bdd, zdd_nv));
-    MTBDD Fdc = mtbdd_refs_push(zdd_cover_to_bdd(zdd_dc));
+    MTBDD Fdc = mtbdd_refs_push(CALL(zdd_cover_to_bdd, zdd_dc));
     MTBDD Fnv = mtbdd_refs_push(mtbdd_refs_sync(SYNC(zdd_cover_to_bdd)));
     MTBDD Fpv = mtbdd_refs_push(mtbdd_refs_sync(SYNC(zdd_cover_to_bdd)));
 
@@ -2336,7 +2347,7 @@ zdd_cover_enum_first(ZDD dd, int32_t *arr)
         // this cannot return False; following high edges must always lead to zdd_true!
         assert(res != zdd_false);
 
-        *arr = dd_var;
+        *arr = (int32_t)dd_var;
         return res;
     }
 }

@@ -45,9 +45,7 @@ Bdd::operator=(const Bdd& right)
 bool
 Bdd::operator<=(const Bdd& other) const
 {
-    // TODO: better implementation, since we are not interested in the BDD result
-    BDD r = sylvan_ite(this->bdd, sylvan_not(other.bdd), sylvan_false);
-    return r == sylvan_false;
+    return sylvan_subset(this->bdd, other.bdd) == 1;
 }
 
 bool
@@ -220,11 +218,15 @@ Bdd::Xnor(const Bdd &g) const
 }
 
 bool
+Bdd::Disjoint(const Bdd &g) const
+{
+    return sylvan_disjoint(bdd, g.bdd) == 1;
+}
+
+bool
 Bdd::Leq(const Bdd &g) const
 {
-    // TODO: better implementation, since we are not interested in the BDD result
-    BDD r = sylvan_ite(bdd, sylvan_not(g.bdd), sylvan_false);
-    return r == sylvan_false;
+    return sylvan_subset(bdd, g.bdd) == 1;
 }
 
 Bdd
@@ -268,8 +270,8 @@ Bdd::Permute(const std::vector<uint32_t>& from, const std::vector<uint32_t>& to)
 {
     /* Create a map */
     BddMap map;
-    for (int i=from.size()-1; i>=0; i--) {
-        map.put(from[i], Bdd::bddVar(to[i]));
+    for (size_t i=from.size(); i>0; i--) {
+        map.put(from[i-1], Bdd::bddVar(to[i-1]));
     }
 
     return sylvan_compose(bdd, map.bdd);
@@ -331,29 +333,29 @@ Bdd::PickOneCube(const BddSet &variables) const
 {
     std::vector<bool> result = std::vector<bool>();
 
-    BDD bdd = this->bdd;
+    BDD current = bdd;
     BDD vars = variables.set.bdd;
 
-    if (bdd == sylvan_false) return result;
+    if (current == sylvan_false) return result;
 
     for (; !sylvan_set_isempty(vars); vars = sylvan_set_next(vars)) {
         uint32_t var = sylvan_set_first(vars);
-        if (bdd == sylvan_true) {
+        if (current == sylvan_true) {
             // pick 0
             result.push_back(false);
         } else {
-            if (sylvan_var(bdd) != var) {
+            if (sylvan_var(current) != var) {
                 // pick 0
                 result.push_back(false);
             } else {
-                if (sylvan_low(bdd) == sylvan_false) {
+                if (sylvan_low(current) == sylvan_false) {
                     // pick 1
                     result.push_back(true);
-                    bdd = sylvan_high(bdd);
+                    current = sylvan_high(current);
                 } else {
                     // pick 0
                     result.push_back(false);
-                    bdd = sylvan_low(bdd);
+                    current = sylvan_low(current);
                 }
             }
         }
@@ -388,8 +390,8 @@ Bdd
 Bdd::VectorCube(const std::vector<Bdd> variables)
 {
     Bdd result = Bdd::bddOne();
-    for (int i=variables.size()-1; i>=0; i--) {
-        result *= variables[i];
+    for (size_t i=variables.size(); i>0; i--) {
+        result *= variables[i-1];
     }
     return result;
 }
@@ -401,8 +403,8 @@ Bdd
 Bdd::VariablesCube(std::vector<uint32_t> variables)
 {
     BDD result = sylvan_true;
-    for (int i=variables.size()-1; i>=0; i--) {
-        result = sylvan_makenode(variables[i], sylvan_false, result);
+    for (size_t i=variables.size(); i>0; i--) {
+        result = sylvan_makenode(variables[i-1], sylvan_false, result);
     }
     return result;
 }
@@ -849,8 +851,8 @@ Mtbdd::Permute(const std::vector<uint32_t>& from, const std::vector<uint32_t>& t
 {
     /* Create a map */
     MtbddMap map;
-    for (int i=from.size()-1; i>=0; i--) {
-        map.put(from[i], Bdd::bddVar(to[i]));
+    for (size_t i=from.size(); i>0; i--) {
+        map.put(from[i-1], Bdd::bddVar(to[i-1]));
     }
 
     return mtbdd_compose(mtbdd, map.mtbdd);

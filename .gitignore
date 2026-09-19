@@ -25,3 +25,13 @@ qsylvan.pc
 
 # Python stuff
 __pycache__/
+
+# CMake files
+build/
+cmake-build-*/
+out/
+
+# IDE files
+.idea/
+.vs/
+CMakeSettings.json

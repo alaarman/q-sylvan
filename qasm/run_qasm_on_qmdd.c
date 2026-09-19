@@ -399,6 +399,25 @@ void simulate_circuit(quantum_circuit_t* circuit)
 }
 
 
+/**
+ * Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
+ * that calls lace_start() is not one. Both the simulation and writing the
+ * stats (which computes amplitudes) touch the EVBDD/QMDD tables.
+ */
+VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
+{
+    simulate_circuit(circuit);
+
+    if (json_outputfile != NULL) {
+        FILE *fp = fopen(json_outputfile, "w");
+        fprint_stats(fp, circuit);
+        fclose(fp);
+    } else {
+        fprint_stats(stdout, circuit);
+    }
+}
+
+
 int main(int argc, char *argv[])
 {
     argp_parse(&argp, argc, argv, 0, 0, 0);
@@ -418,15 +437,7 @@ int main(int argc, char *argv[])
     qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, COMP_HASHMAP, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
 
-    simulate_circuit(circuit);
-
-    if (json_outputfile != NULL) {
-        FILE *fp = fopen(json_outputfile, "w");
-        fprint_stats(fp, circuit);
-        fclose(fp);
-    } else {
-        fprint_stats(stdout, circuit);
-    }
+    RUN(run_simulation, circuit);
 
     sylvan_quit();
     lace_stop();

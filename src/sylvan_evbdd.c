@@ -132,7 +132,7 @@ typedef struct evbdd_refs_internal
     evbdd_refs_task_t sbegin, send, scur;
 } *evbdd_refs_internal_t;
 
-DECLARE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
+SYLVAN_TLS evbdd_refs_internal_t evbdd_refs_key;
 
 VOID_TASK_2(evbdd_refs_mark_p_par, const EVBDD**, begin, size_t, count)
 {
@@ -184,10 +184,9 @@ VOID_TASK_2(evbdd_refs_mark_s_par, evbdd_refs_task_t, begin, size_t, count)
 
 VOID_TASK_0(evbdd_refs_mark_task)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
-    SPAWN(evbdd_refs_mark_p_par, evbdd_refs_key->pbegin, evbdd_refs_key->pcur-evbdd_refs_key->pbegin);
-    SPAWN(evbdd_refs_mark_r_par, evbdd_refs_key->rbegin, evbdd_refs_key->rcur-evbdd_refs_key->rbegin);
-    CALL(evbdd_refs_mark_s_par, evbdd_refs_key->sbegin, evbdd_refs_key->scur-evbdd_refs_key->sbegin);
+    SPAWN(evbdd_refs_mark_p_par, evbdd_refs_key->pbegin, (size_t)(evbdd_refs_key->pcur-evbdd_refs_key->pbegin));
+    SPAWN(evbdd_refs_mark_r_par, evbdd_refs_key->rbegin, (size_t)(evbdd_refs_key->rcur-evbdd_refs_key->rbegin));
+    CALL(evbdd_refs_mark_s_par, evbdd_refs_key->sbegin, (size_t)(evbdd_refs_key->scur-evbdd_refs_key->sbegin));
     SYNC(evbdd_refs_mark_r_par);
     SYNC(evbdd_refs_mark_p_par);
 }
@@ -200,30 +199,34 @@ VOID_TASK_0(evbdd_refs_mark)
 
 VOID_TASK_0(evbdd_refs_init_task)
 {
-    evbdd_refs_internal_t s = (evbdd_refs_internal_t)malloc(sizeof(struct evbdd_refs_internal));
+    /* The cursors pcur/rcur/scur in this struct are written by every push,
+     * pop, pushptr, popptr, spawn and sync. A plain malloc packs several
+     * workers' cursors into one cache line, so every worker's push
+     * invalidates its neighbours'. Give each worker a line of its own
+     * (same reasoning as mtbdd_refs_init_key in sylvan_mtbdd.c). */
+    evbdd_refs_internal_t s = (evbdd_refs_internal_t)sylvan_alloc_padded(sizeof(struct evbdd_refs_internal));
+    if (s == NULL) { fprintf(stderr, "sylvan: out of memory in evbdd_refs_init_task\n"); exit(1); }
     s->pcur = s->pbegin = (const EVBDD**)malloc(sizeof(EVBDD*) * 1024);
     s->pend = s->pbegin + 1024;
     s->rcur = s->rbegin = (EVBDD*)malloc(sizeof(EVBDD) * 1024);
     s->rend = s->rbegin + 1024;
     s->scur = s->sbegin = (evbdd_refs_task_t)malloc(sizeof(struct evbdd_refs_task) * 1024);
     s->send = s->sbegin + 1024;
-    SET_THREAD_LOCAL(evbdd_refs_key, s);
+    evbdd_refs_key = s;
 }
 
 VOID_TASK_0(evbdd_refs_init)
 {
-    INIT_THREAD_LOCAL(evbdd_refs_key);
     TOGETHER(evbdd_refs_init_task);
-    sylvan_gc_add_mark(TASK(evbdd_refs_mark));
+    sylvan_gc_add_mark(evbdd_refs_mark_CALL);
 }
 
 VOID_TASK_0(evbdd_refs_cleanup_task)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     free(evbdd_refs_key->pbegin);
     free(evbdd_refs_key->rbegin);
     free(evbdd_refs_key->sbegin);
-    free(evbdd_refs_key);
+    sylvan_free_padded(evbdd_refs_key);
 }
 
 /**
@@ -270,7 +273,6 @@ evbdd_refs_tasks_up(evbdd_refs_internal_t evbdd_refs_key)
 void __attribute__((unused))
 evbdd_refs_pushptr(const EVBDD *ptr)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     *evbdd_refs_key->pcur++ = ptr;
     if (evbdd_refs_key->pcur == evbdd_refs_key->pend) evbdd_refs_ptrs_up(evbdd_refs_key);
 }
@@ -278,14 +280,12 @@ evbdd_refs_pushptr(const EVBDD *ptr)
 void __attribute__((unused))
 evbdd_refs_popptr(size_t amount)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     evbdd_refs_key->pcur -= amount;
 }
 
 EVBDD __attribute__((unused))
 evbdd_refs_push(EVBDD a)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     *(evbdd_refs_key->rcur++) = a;
     if (evbdd_refs_key->rcur == evbdd_refs_key->rend) return evbdd_refs_refs_up(evbdd_refs_key, a);
     else return a;
@@ -294,14 +294,12 @@ evbdd_refs_push(EVBDD a)
 void __attribute__((unused))
 evbdd_refs_pop(long amount)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     evbdd_refs_key->rcur -= amount;
 }
 
 void
 evbdd_refs_spawn(Task *t)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     evbdd_refs_key->scur->t = t;
     evbdd_refs_key->scur->f = t->f;
     evbdd_refs_key->scur += 1;
@@ -311,7 +309,6 @@ evbdd_refs_spawn(Task *t)
 EVBDD
 evbdd_refs_sync(EVBDD result)
 {
-    LOCALIZE_THREAD_LOCAL(evbdd_refs_key, evbdd_refs_internal_t);
     evbdd_refs_key->scur -= 1;
     return result;
 }
@@ -460,8 +457,8 @@ sylvan_init_evbdd(size_t min_wgt_tablesize, size_t max_wgt_tablesize,
     else larger_wgt_indices = false;
 
     sylvan_register_quit(evbdd_quit);
-    sylvan_gc_add_mark(TASK(evbdd_gc_mark_external_refs));
-    sylvan_gc_add_mark(TASK(evbdd_gc_mark_protected));
+    sylvan_gc_add_mark(evbdd_gc_mark_external_refs_CALL);
+    sylvan_gc_add_mark(evbdd_gc_mark_protected_CALL);
 
     refs_create(&evbdd_refs, 1024);
     if (!evbdd_protected_created) {

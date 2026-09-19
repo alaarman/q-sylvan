@@ -1,15 +1,16 @@
-if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    # add argp library for OSX
+if(APPLE)
+    # add argp library for macOS
     find_package(Argp REQUIRED)
     include_directories(${ARGP_INCLUDE_PATH})
 endif()
 
 macro(set_compilation_settings NAME)
-    set_target_properties(${NAME} PROPERTIES COMPILE_OPTIONS "-Wno-unused")
     target_include_directories(${NAME} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
     target_link_libraries(${NAME} PRIVATE qsylvan::sylvan ${ARGP_LIBRARIES})
     target_compile_features(${NAME} PRIVATE c_std_11 cxx_std_11)
-    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror -Wno-deprecated)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(${NAME} PRIVATE -Wall -Wextra -Wno-unused -Wno-deprecated)
+    endif()
 endmacro(set_compilation_settings)
 
 macro(add_example NAME SOURCE)
@@ -36,4 +37,5 @@ add_example(test_algs test_algs.c)
 target_sources(test_algs PRIVATE ${ALGORITHM_EXAMPLES})
 
 add_executable(circuit_equivalence circuit_equivalence.c)
-target_link_libraries(circuit_equivalence qsylvan qsylvan_qasm_parser)
+set_compilation_settings(circuit_equivalence)
+target_link_libraries(circuit_equivalence PRIVATE qsylvan_qasm_parser)

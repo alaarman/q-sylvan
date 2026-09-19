@@ -176,13 +176,12 @@ sylvan_edge_weights_free()
 
 // Keep estimate for number of entries for gc purposes
 size_t table_entries_est;
-DECLARE_THREAD_LOCAL(table_entries_local, size_t); // these are added to _est
+SYLVAN_TLS size_t table_entries_local = 0; // these are added to _est
 static const uint64_t table_entries_local_buffer = 1000; // every 1000 entries
 
 void
 init_edge_weight_storage_gc()
 {
-    LOCALIZE_THREAD_LOCAL(table_entries_local, size_t);
     // NOTE: the sum of the local counters sometimes exceeds the actual total
     // number of entries (when just counting the global value with atomic adds
     // after every insert). This might be because 'ctable_entries_local = 0' 
@@ -202,7 +201,6 @@ wgt_table_entries_estimate()
 
 void wgt_table_gc_inc_entries_estimate()
 {
-    LOCALIZE_THREAD_LOCAL(table_entries_local, size_t);
     table_entries_local += 1;
     if (table_entries_local >= table_entries_local_buffer) {
         __sync_fetch_and_add(&table_entries_est, table_entries_local);
@@ -221,7 +219,6 @@ wgt_table_gc_init_new(void (*init_wgt_table_entries)())
     init_edge_weight_storage(table_size, tolerance, wgt_backend, &wgt_storage_new);
 
     // reset estimate entries counters
-    LOCALIZE_THREAD_LOCAL(table_entries_local, size_t);
     table_entries_est = 0;
     table_entries_local = 0;
     (void) table_entries_local;
