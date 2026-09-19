@@ -121,6 +121,14 @@ sylvan_test_warnings(test_limdd_canon)
 
 add_test(NAME test_limdd_canon COMMAND test_limdd_canon)
 
+add_executable(test_limdd_gc)
+target_sources(test_limdd_gc PRIVATE test_limdd_gc.c)
+target_link_libraries(test_limdd_gc PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_gc PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_gc)
+
+add_test(NAME test_limdd_gc COMMAND test_limdd_gc)
+
 # ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
 
 foreach(_qmdd_test

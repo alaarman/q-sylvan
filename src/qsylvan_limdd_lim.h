@@ -184,6 +184,22 @@ LIMDD_LIM limdd_lim_inverse(LIMDD_LIM lim);
  */
 EVBDD_WGT limdd_wgt_i_pow(unsigned k);
 
+/* --- garbage collection --------------------------------------------------- */
+
+/**
+ * Mark `lim` live, and with it the Pauli word it names.
+ *
+ * The two tables are collected together because nothing else refers to a Pauli
+ * word: it is reachable only through the LIMs that use it.
+ */
+void limdd_gc_mark_lim(LIMDD_LIM lim);
+
+/** Forget which buckets of both tables are occupied. */
+void limdd_gc_clear_lims(void);
+
+/** Rebuild both hash arrays, and re-mark the reserved LIMs. */
+void limdd_gc_rehash_lims(void);
+
 /** Print `lim` as "(re,im) * IXYZ" to `out`, without a trailing newline. */
 void limdd_lim_fprint(FILE *out, LIMDD_LIM lim);
 

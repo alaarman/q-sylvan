@@ -216,6 +216,30 @@ LIMDD limdd_node_high(LIMDD_TARG p);
 uint64_t limdd_node_stab_raw(LIMDD_TARG p);
 void limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v);
 
+/* --- garbage collection ---------------------------------------------------
+ *
+ * These are the node table's half of limdd_gc; see qsylvan_limdd_gc.h for what
+ * drives them. llmsset keeps data at a fixed index across a collection, which
+ * is what lets the stabiliser cache above survive one.
+ */
+
+/** Mark bucket `p` as live. Returns 1 if this call marked it, 0 if already. */
+int limdd_gc_mark_node(LIMDD_TARG p);
+
+/** Forget which buckets are occupied, so marking can rebuild the set. */
+void limdd_gc_clear_nodes(void);
+
+/** Rebuild the hash array over the marked buckets. */
+void limdd_gc_rehash_nodes(void);
+
+/**
+ * Drop the cached stabiliser group of every bucket that marking did not reach.
+ *
+ * Their buckets are about to be handed out again, and a group left behind
+ * would then be read as the new occupant's.
+ */
+void limdd_gc_purge_stab_cache(void);
+
 /**
  * The amplitude that `e` assigns to the basis state `bits`, where bits[k] is
  * qubit k. `nqubits` entries are read.

@@ -230,6 +230,17 @@ LIMDD_LIM limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
  */
 LIMDD_LIM limdd_stab_element(LIMDD_STAB s, uint64_t k);
 
+/* --- garbage collection --------------------------------------------------- */
+
+/** Mark `s` live, with its list cells and every generator in it. */
+void limdd_gc_mark_stab(LIMDD_STAB s);
+
+/** Forget which buckets are occupied. */
+void limdd_gc_clear_stabs(void);
+
+/** Rebuild the hash array over the marked buckets. */
+void limdd_gc_rehash_stabs(void);
+
 /** Print the generators to `out`, one per line, each indented by `indent`. */
 void limdd_stab_fprint(FILE *out, LIMDD_STAB s, const char *indent);
 

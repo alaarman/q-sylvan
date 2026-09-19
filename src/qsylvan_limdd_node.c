@@ -250,6 +250,40 @@ limdd_eval(LIMDD e, const bool *bits, size_t nqubits)
     return eval_edge(e, b, 0);
 }
 
+int
+limdd_gc_mark_node(LIMDD_TARG p)
+{
+    assert(limdd_nodes != NULL);
+    if (p == LIMDD_TERMINAL) return 0;   /* reserved, never swept */
+    return llmsset_mark(limdd_nodes, p);
+}
+
+void
+limdd_gc_clear_nodes(void)
+{
+    llmsset_clear_data(limdd_nodes);
+}
+
+void
+limdd_gc_rehash_nodes(void)
+{
+    llmsset_clear_hashes(limdd_nodes);
+    if (llmsset_rehash(limdd_nodes) != 0) {
+        fprintf(stderr, "sylvan: LIMDD nodes could not all be rehashed\n");
+        exit(1);
+    }
+}
+
+void
+limdd_gc_purge_stab_cache(void)
+{
+    for (uint64_t b = 2; b < limdd_nodes->table_size; b++) {
+        const uint64_t word = limdd_nodes->bitmap2[b / 64];
+        const uint64_t mask = UINT64_C(0x8000000000000000) >> (b & 63);
+        if (!(word & mask)) atomic_store_explicit(&node_stab[b], 0, memory_order_relaxed);
+    }
+}
+
 void
 limdd_nodes_init(size_t nqubits, size_t node_tablesize,
                  size_t pauli_tablesize, size_t lim_tablesize,
@@ -270,6 +304,17 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
         fprintf(stderr, "sylvan: could not allocate the LIMDD stabiliser cache\n");
         exit(1);
     }
+
+    /*
+     * The edge weight table is collected by copying: survivors move to a new
+     * table and every EVBDD is rewritten with their new indices. A LIMDD
+     * cannot be rewritten that way -- a LIM is interned under (Pauli, weight),
+     * so new weight indices mean new LIM indices, new node contents and new
+     * node indices, i.e. the whole forest. Left on, an EVBDD operation
+     * anywhere in the program would silently invalidate every live LIMDD.
+     * See qsylvan_limdd_gc.h.
+     */
+    evbdd_set_auto_gc_wgt_table(false);
 
     zero_edge = limdd_bundle(LIMDD_LIM_ZERO, LIMDD_TERMINAL);
     one_edge  = limdd_bundle(LIMDD_LIM_IDENTITY, LIMDD_TERMINAL);

@@ -621,6 +621,33 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
 }
 
 void
+limdd_gc_mark_stab(LIMDD_STAB s)
+{
+    assert(stab_table != NULL);
+    for (; s != LIMDD_STAB_TRIVIAL; s = stab_tail(s)) {
+        limdd_gc_mark_lim(stab_head(s));
+        /* Lists share tails, so a cell already marked means the rest is too. */
+        if (llmsset_mark(stab_table, s) == 0) return;
+    }
+}
+
+void
+limdd_gc_clear_stabs(void)
+{
+    llmsset_clear_data(stab_table);
+}
+
+void
+limdd_gc_rehash_stabs(void)
+{
+    llmsset_clear_hashes(stab_table);
+    if (llmsset_rehash(stab_table) != 0) {
+        fprintf(stderr, "sylvan: LIMDD generator sets could not all be rehashed\n");
+        exit(1);
+    }
+}
+
+void
 limdd_stab_init(size_t stab_tablesize)
 {
     stab_table = llmsset_create(stab_tablesize, stab_tablesize);

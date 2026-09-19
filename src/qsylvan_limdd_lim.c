@@ -43,9 +43,11 @@ static size_t    lim_nqubits = 0;
 static EVBDD_WGT i_pow[4];
 
 static void
-die(const char *what)
+die(const char *what, llmsset_t dbs)
 {
-    fprintf(stderr, "sylvan: LIMDD %s table is full\n", what);
+    fprintf(stderr, "sylvan: LIMDD %s table is full (%llu of %llu buckets used)\n",
+            what, (unsigned long long)llmsset_count_marked(dbs),
+            (unsigned long long)dbs->table_size);
     exit(1);
 }
 
@@ -63,7 +65,7 @@ limdd_pauli_intern(limdd_pauli_t p)
 
     int created;
     uint64_t ref = llmsset_lookup(pauli_table, p.x, p.z, &created);
-    if (ref == 0) die("Pauli");
+    if (ref == 0) die("Pauli", pauli_table);
     return ref;
 }
 
@@ -117,7 +119,7 @@ limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w)
 
     int created;
     uint64_t lim = llmsset_lookup(lim_table, pref, w, &created);
-    if (lim == 0) die("LIM");
+    if (lim == 0) die("LIM", lim_table);
     return lim;
 }
 
@@ -185,6 +187,35 @@ limdd_lim_fprint(FILE *out, LIMDD_LIM lim)
 }
 
 void
+limdd_gc_mark_lim(LIMDD_LIM lim)
+{
+    assert(lim_table != NULL);
+    if (lim == 0) return;
+    if (llmsset_mark(lim_table, lim) == 0) return;   /* already seen */
+
+    const uint64_t *bucket = (const uint64_t *)llmsset_index_to_ptr(lim_table, lim);
+    llmsset_mark(pauli_table, bucket[0]);
+}
+
+void
+limdd_gc_clear_lims(void)
+{
+    llmsset_clear_data(lim_table);
+    llmsset_clear_data(pauli_table);
+}
+
+void
+limdd_gc_rehash_lims(void)
+{
+    llmsset_clear_hashes(lim_table);
+    llmsset_clear_hashes(pauli_table);
+    if (llmsset_rehash(pauli_table) != 0 || llmsset_rehash(lim_table) != 0) {
+        fprintf(stderr, "sylvan: LIMDD labels could not all be rehashed\n");
+        exit(1);
+    }
+}
+
+void
 limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
 {
     if (nqubits > LIMDD_MAX_QUBITS) {
@@ -223,7 +254,7 @@ limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
     int created;
     const LIMDD_PAULI_REF id_ref = limdd_pauli_intern(limdd_pauli_identity());
     LIMDD_LIM_ZERO = llmsset_lookup(lim_table, id_ref, EVBDD_ZERO, &created);
-    if (LIMDD_LIM_ZERO == 0) die("LIM");
+    if (LIMDD_LIM_ZERO == 0) die("LIM", lim_table);
 }
 
 void

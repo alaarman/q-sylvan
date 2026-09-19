@@ -58,6 +58,7 @@ target_sources(qsylvan
     qsylvan_limdd_node.c
     qsylvan_limdd_stab.c
     qsylvan_limdd_canon.c
+    qsylvan_limdd_gc.c
   PUBLIC
     FILE_SET HEADERS
     BASE_DIRS
@@ -96,6 +97,7 @@ target_sources(qsylvan
       qsylvan_limdd_node.h
       qsylvan_limdd_stab.h
       qsylvan_limdd_canon.h
+      qsylvan_limdd_gc.h
       "${CMAKE_CURRENT_BINARY_DIR}/sylvan_config.h"
 )
 

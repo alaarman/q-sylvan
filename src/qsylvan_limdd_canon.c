@@ -117,12 +117,44 @@ lim_with_pauli_at(LIMDD_LIM a, uint32_t var, bool x, bool z)
 }
 
 /**
+ * A total order on LIMs, by VALUE.
+ *
+ * Comparing interned indices instead would be cheaper and wrong. An index
+ * records when a label was first seen, not what it is, so the same two labels
+ * can compare either way depending on what the program interned earlier -- and
+ * a collection that sweeps one of them and hands back a different index when
+ * it reappears changes the answer outright. The order below depends on nothing
+ * but the label.
+ */
+static int
+lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
+{
+    if (a == b) return 0;
+
+    const limdd_pauli_t pa = limdd_lim_pauli(a), pb = limdd_lim_pauli(b);
+    if (pa.x != pb.x) return pa.x < pb.x ? -1 : 1;
+    if (pa.z != pb.z) return pa.z < pb.z ? -1 : 1;
+
+    complex_t ca, cb;
+    weight_value(limdd_lim_weight(a), &ca);
+    weight_value(limdd_lim_weight(b), &cb);
+    if (ca.r != cb.r) return ca.r < cb.r ? -1 : 1;
+    if (ca.i != cb.i) return ca.i < cb.i ? -1 : 1;
+    return 0;
+}
+
+/**
  * Which of the two candidate nodes is kept.
  *
  * Any fixed total order gives a canonical form; this one compares the two
- * children then the label. What matters is that the two candidates form the
- * same unordered pair however the state was presented, so that taking the
- * smaller always lands on the same node.
+ * children then the label. What matters is that the order depends only on the
+ * two candidates, so that taking the smaller lands on the same node however
+ * the state was presented and whatever the tables have seen before.
+ *
+ * Child indices are safe to compare: both nodes already exist when this runs,
+ * so their indices are fixed, and a collection leaves them where they are. The
+ * labels are not -- they are interned during this very call -- so they go
+ * through lim_cmp.
  */
 static bool
 node_less(LIMDD_TARG lo_a, LIMDD_TARG hi_a, LIMDD_LIM lab_a,
@@ -130,7 +162,7 @@ node_less(LIMDD_TARG lo_a, LIMDD_TARG hi_a, LIMDD_LIM lab_a,
 {
     if (lo_a != lo_b) return lo_a < lo_b;
     if (hi_a != hi_b) return hi_a < hi_b;
-    return lab_a < lab_b;
+    return lim_cmp(lab_a, lab_b) < 0;
 }
 
 /** Intern (var, I->lo, lab->hi) and make sure its group is cached. */
