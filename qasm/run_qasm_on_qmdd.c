@@ -21,6 +21,8 @@
 
 #include "qsylvan.h"
 #include "qsylvan_limdd_canon.h"
+#include "qsylvan_limdd_ops.h"
+#include "qsylvan_limdd_gc.h"
 #include "qsylvan_qasm_parser.h"
 
 /**********************<Arguments (configured via argp)>***********************/
@@ -401,6 +403,101 @@ QMDD measure(QMDD state, quantum_op_t *meas, quantum_circuit_t* circuit)
 }
 
 
+
+/* --- LIMDD simulation ---------------------------------------------------- */
+
+/**
+ * The Clifford+T gate set, which is what the LIMDD path supports.
+ *
+ * Arbitrary-angle rotations are deliberately absent. With floating point
+ * weights they would work, but the point of running LIMDDs here is to pair
+ * them with exact coefficients, and e^(i*theta) is in Q[i,sqrt2] only for
+ * theta a multiple of pi/4. Refusing is better than quietly producing a
+ * number whose exactness is a fiction.
+ *
+ * Returns false and leaves *state alone if the gate is not supported.
+ */
+static bool
+limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
+{
+    const uint32_t t = gate->targets[0];
+    uint32_t id = 0;
+
+    if      (strcmp(gate->name, "id")   == 0) return true;
+    else if (strcmp(gate->name, "x")    == 0) id = GATEID_X;
+    else if (strcmp(gate->name, "y")    == 0) id = GATEID_Y;
+    else if (strcmp(gate->name, "z")    == 0) id = GATEID_Z;
+    else if (strcmp(gate->name, "h")    == 0) id = GATEID_H;
+    else if (strcmp(gate->name, "s")    == 0) id = GATEID_S;
+    else if (strcmp(gate->name, "sdg")  == 0) id = GATEID_Sdag;
+    else if (strcmp(gate->name, "t")    == 0) id = GATEID_T;
+    else if (strcmp(gate->name, "tdg")  == 0) id = GATEID_Tdag;
+    else if (strcmp(gate->name, "cx")   == 0 || strcmp(gate->name, "cy") == 0 ||
+             strcmp(gate->name, "cz")   == 0 || strcmp(gate->name, "ch") == 0) {
+        const uint32_t c = gate->ctrls[0];
+        if (c >= t) {
+            fprintf(stderr, "limdd: control %u is not above target %u; the "
+                            "recursion cannot resolve it (try --reorder-swaps)\n", c, t);
+            return false;
+        }
+        const uint32_t cid = (gate->name[1] == 'x') ? GATEID_X
+                           : (gate->name[1] == 'y') ? GATEID_Y
+                           : (gate->name[1] == 'z') ? GATEID_Z : GATEID_H;
+        *state = limdd_cgate(*state, cid, UINT64_C(1) << c, t, nqubits);
+        return true;
+    }
+    else {
+        fprintf(stderr, "limdd: gate '%s' is outside Clifford+T\n", gate->name);
+        return false;
+    }
+
+    *state = limdd_gate(*state, id, t, nqubits);
+    return true;
+}
+
+static int
+limdd_simulate_circuit(quantum_circuit_t *circuit)
+{
+    const BDDVAR n = circuit->qreg_size;
+    if (n > LIMDD_MAX_QUBITS) {
+        fprintf(stderr, "limdd: %u qubits, but a Pauli word is two uint64 so "
+                        "the limit is %d\n", n, LIMDD_MAX_QUBITS);
+        return 1;
+    }
+
+    const double t_start = wctime();
+    LIMDD state = limdd_all_zero_state(n);
+    limdd_protect(&state);
+
+    for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
+        if (op->type == op_gate) {
+            if (!limdd_apply_gate(&state, op, n)) { limdd_unprotect(&state); return 1; }
+        }
+        else if (op->type == op_measurement) {
+            /*
+             * The same quantity the QMDD path reports: the probability of
+             * measuring |0> on the TOP qubit, as a fraction of the state's
+             * norm. Reporting P(1), or P on the measured qubit, would make
+             * the two columns look like they disagree when they do not.
+             */
+            const double p1 = limdd_prob_qubit_one(state, 0, n);
+            const double tot = limdd_norm_squared(state, n);
+            stats.first_qubit_prob = (tot > 0.0) ? (tot - p1) / tot : 1e10;
+            break;
+        }
+        if (count_nodes) {
+            const uint64_t c = limdd_countnodes(state);
+            if (c > stats.max_nodes) stats.max_nodes = c;
+        }
+    }
+
+    stats.simulation_time = wctime() - t_start;
+    stats.norm = limdd_norm_squared(state, n);
+    stats.final_nodes = limdd_countnodes(state);
+    limdd_unprotect(&state);
+    return 0;
+}
+
 void simulate_circuit(quantum_circuit_t* circuit)
 {
     double t_start = wctime();
@@ -483,7 +580,29 @@ void simulate_circuit(quantum_circuit_t* circuit)
  */
 VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
 {
-    simulate_circuit(circuit);
+    if (dd_kind != DD_QMDD) {
+        /* Inside the task: llmsset claims buckets from a per-worker region,
+         * and the thread that called lace_start is not a worker. */
+        limdd_set_high_determinism(dd_kind == DD_LIMDD);
+        /*
+         * Four tables plus a word per node bucket, so the node table's own
+         * size is not a safe default here: at 2^25 that is over 2 GB before a
+         * single node exists. Capped, and raisable with --node-tab-size.
+         */
+        size_t lt = min_tablesize;
+        if (lt > (1LL<<23)) lt = 1LL<<23;
+        /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
+         * they reach it, so a value larger than the diagram is deep sends
+         * them past the terminal. */
+        limdd_nodes_init(circuit->qreg_size, lt, lt, lt, lt);
+        if (limdd_simulate_circuit(circuit) != 0) {
+            limdd_nodes_quit();
+            exit(1);
+        }
+        limdd_nodes_quit();
+    } else {
+        simulate_circuit(circuit);
+    }
 
     if (json_outputfile != NULL) {
         FILE *fp = fopen(json_outputfile, "w");
@@ -513,21 +632,6 @@ int main(int argc, char *argv[])
     sylvan_init_package();
     qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
-
-    if (dd_kind != DD_QMDD) {
-        /*
-         * The LIMDD layer can build and canonicalise nodes, but it has no gate
-         * application yet, so there is nothing here to simulate a circuit
-         * with. Refusing is better than quietly running QMDDs and reporting
-         * the numbers under a LIMDD heading.
-         */
-        limdd_set_high_determinism(dd_kind == DD_LIMDD);
-        fprintf(stderr, "error: --dd=%s is not available yet: LIMDD has no "
-                        "gate application, so it cannot simulate a circuit. "
-                        "The canonical form itself is reachable through the "
-                        "library API.\n", dd_kind_name);
-        return 1;
-    }
 
     RUN(run_simulation, circuit);
 

@@ -114,6 +114,15 @@ double limdd_prob_qubit_one(LIMDD e, uint32_t qubit, uint32_t nqubits);
 /** The squared norm of `e`, which a normalised state has equal to 1. */
 double limdd_norm_squared(LIMDD e, uint32_t nqubits);
 
+/**
+ * How many nodes the diagram rooted at `e` actually uses.
+ *
+ * Not the same as limdd_node_table_count, which counts everything the table
+ * has ever held; this walks the reachable nodes, so it is comparable with
+ * evbdd_countnodes on the QMDD side.
+ */
+uint64_t limdd_countnodes(LIMDD e);
+
 /** The all-zero basis state on `nqubits` qubits. */
 LIMDD limdd_all_zero_state(uint32_t nqubits);
 

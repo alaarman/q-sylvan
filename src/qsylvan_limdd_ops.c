@@ -278,6 +278,54 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
 
 /* --- states and probabilities -------------------------------------------- */
 
+/* --- counting the live nodes --------------------------------------------- */
+
+typedef struct {
+    LIMDD_TARG *slot;
+    size_t      cap;      /* power of two */
+    size_t      used;
+} seen_t;
+
+static bool
+seen_add(seen_t *s, LIMDD_TARG t)
+{
+    size_t i = (size_t)((t * UINT64_C(0x9E3779B97F4A7C15)) & (s->cap - 1));
+    for (;;) {
+        if (s->slot[i] == 0) { s->slot[i] = t; s->used++; return true; }
+        if (s->slot[i] == t) return false;
+        i = (i + 1) & (s->cap - 1);
+    }
+}
+
+static void
+count_rec(LIMDD e, seen_t *s)
+{
+    if (limdd_edge_is_zero(e)) return;
+    const LIMDD_TARG t = limdd_target(e);
+    if (t == LIMDD_TERMINAL) return;
+    if (!seen_add(s, t)) return;
+    count_rec(limdd_node_low(t), s);
+    count_rec(limdd_node_high(t), s);
+}
+
+uint64_t
+limdd_countnodes(LIMDD e)
+{
+    /* Sized from the table so the probe sequence never fills; the walk visits
+     * at most that many distinct nodes. */
+    seen_t s;
+    s.cap = 1;
+    while (s.cap < 4 * (limdd_node_table_count() + 8)) s.cap <<= 1;
+    s.slot = calloc(s.cap, sizeof(LIMDD_TARG));
+    if (s.slot == NULL) return 0;
+    s.used = 0;
+
+    count_rec(e, &s);
+    const uint64_t n = s.used;
+    free(s.slot);
+    return n;
+}
+
 LIMDD
 limdd_all_zero_state(uint32_t nqubits)
 {
