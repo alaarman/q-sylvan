@@ -44,6 +44,8 @@ void qmdd_gates_init();
 // throughout the entire run of the circuit.
 // TODO: maybe just use GATEID_dynamic for this
 
+void qmdd_gates_qisq2_init();
+
 void qmdd_phase_gates_init(int n);
 
 static inline uint32_t GATEID_Rk(int k) { return k + n_predef_gates; };

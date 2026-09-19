@@ -23,6 +23,14 @@ void init_wgt_storage_functions(wgt_storage_backend_t backend)
         wgt_store_num_entries = &cmap_count_entries;
         wgt_store_get_tol     = &cmap_get_tolerance;
         break;
+    case QISQ2_MAP:
+        wgt_store_create      = &qisq2_map_create;
+        wgt_store_free        = &qisq2_map_free;
+        wgt_store_find_or_put = &qisq2_map_find_or_put;
+        wgt_store_get         = &qisq2_map_get;
+        wgt_store_num_entries = &qisq2_map_count_entries;
+        wgt_store_get_tol     = &qisq2_map_get_tolerance;
+        break;
     default:
         fprintf(stderr, "Unrecognized edge weight type %d\n", backend);
         exit(1);

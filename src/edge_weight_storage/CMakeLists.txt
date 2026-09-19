@@ -1,6 +1,7 @@
 add_library(edge_weight_storage
         wgt_storage_interface.c wgt_storage_interface.h
         cmap.c cmap.h
+        qisq2_map.c qisq2_map.h
         fast_hash.h fast_hash.c
         flt.h
         MurmurHash3.h MurmurHash3.c
@@ -12,6 +13,10 @@ target_include_directories(edge_weight_storage
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/..>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
+
+# qisq2_map.h includes gmp.h and is public, so this propagates to anything
+# linking the storage library.
+target_link_libraries(edge_weight_storage PUBLIC GMP::GMP)
 
 # Match the main library: PIC when Q-Sylvan is shared or explicitly asks for it.
 if(BUILD_SHARED_LIBS OR SYLVAN_ENABLE_PIC)

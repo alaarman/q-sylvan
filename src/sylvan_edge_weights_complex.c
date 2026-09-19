@@ -25,6 +25,10 @@ comp_cart_to_polar(fl_t r, fl_t i, fl_t *magnitude, fl_t *angle)
 
 
 /*****************<Implementation of edge_weights interface>*******************/
+void weight_complex_copy(complex_t *a, complex_t *a_copy){
+    a_copy->r = a->r;
+    a_copy->i = a->i;
+}
 
 complex_t *
 weight_complex_malloc()
@@ -85,6 +89,13 @@ void
 weight_complex_abs(complex_t *a)
 {
     a->r = flt_sqrt( (a->r*a->r) + (a->i*a->i) );
+    a->i = 0.0;
+}
+
+void
+weight_complex_abs_sqr(complex_t *a)
+{
+    a->r = (a->r*a->r) + (a->i*a->i);
     a->i = 0.0;
 }
 

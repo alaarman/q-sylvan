@@ -1,6 +1,7 @@
 #include <qsylvan_gates.h>
 #include <sylvan_int.h>
 #include <sylvan_edge_weights_complex.h>
+#include <sylvan_edge_weights_qisq2.h>
 
 
 static long double Pi;    // set value of global Pi
@@ -222,3 +223,78 @@ qmdd_phase_gates_init(int n)
         gates[gate_id][2] = EVBDD_ZERO; gates[gate_id][3] = weight_lookup(&cartesian);
     }
 }
+
+
+// ---------------- < gate definitions for qisq2 > ----------------
+
+void
+qmdd_gates_qisq2_init()
+{
+        // initialize 2x2 gates (complex values from gates currently stored in 
+    // same table as complex amplitude values)
+    uint32_t k;
+
+    k = GATEID_I;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = EVBDD_ONE;
+
+    k = GATEID_proj0;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = EVBDD_ZERO;
+
+    k = GATEID_proj1;
+    gates[k][0] = EVBDD_ZERO; gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = EVBDD_ONE;
+
+    k = GATEID_X;
+    gates[k][0] = EVBDD_ZERO; gates[k][1] = EVBDD_ONE;
+    gates[k][2] = EVBDD_ONE;  gates[k][3] = EVBDD_ZERO;
+
+    k = GATEID_Y;
+    gates[k][0] = EVBDD_ZERO; gates[k][1] = qisq2_lookup(0,1,0,1,-1,1,0,1);
+    gates[k][2] = qisq2_lookup(0,1,0,1, 1,1,0,1);  gates[k][3] = EVBDD_ZERO;
+
+    k = GATEID_Z;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = EVBDD_MIN_ONE;
+
+    k = GATEID_H;
+    gates[k][0] = gates[k][1] = gates[k][2] = qisq2_lookup(0,1,1,2,0,1,0,1);
+    gates[k][3] = qisq2_lookup(0,1,-1,2,0,1,0,1);;
+
+    k = GATEID_S;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = qisq2_lookup(0,1,0,1,1,1,0,1);
+
+    k = GATEID_Sdag;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = qisq2_lookup(0,1,0,1,-1,1,0,1);
+
+    k = GATEID_T;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = qisq2_lookup(0,1,1,2,0,1,1,2);
+
+    k = GATEID_Tdag;
+    gates[k][0] = EVBDD_ONE;  gates[k][1] = EVBDD_ZERO;
+    gates[k][2] = EVBDD_ZERO; gates[k][3] = qisq2_lookup(0,1,1,2,0,1,-1,2);
+
+    qisq2_lookup(1,2,0,1,1,2,0,1);
+
+    k = GATEID_sqrtX;
+    gates[k][0] = qisq2_lookup(1,2,0,1, 1,2,0,1); gates[k][1] = qisq2_lookup(1,2,0,1,-1,2,0,1);
+    gates[k][2] = qisq2_lookup(1,2,0,1,-1,2,0,1); gates[k][3] = qisq2_lookup(1,2,0,1,1,2,0,1);
+
+    k = GATEID_sqrtXdag;
+    gates[k][0] = qisq2_lookup(1,2,0,1,-1,2,0,1); gates[k][1] = qisq2_lookup(1,2,0,1,1,2,0,1);
+    gates[k][2] = qisq2_lookup(1,2,0,1,1,2,0,1); gates[k][3] = qisq2_lookup(1,2,0,1,-1,2,0,1);
+
+    k = GATEID_sqrtY;
+    gates[k][0] = qisq2_lookup(1,2,0,1,1,2,0,1); gates[k][1] = qisq2_lookup(-1,2,0,1,-1,2,0,1);
+    gates[k][2] = qisq2_lookup(1,2,0,1,1,2,0,1); gates[k][3] = qisq2_lookup( 1,2,0,1, 1,2,0,1);
+
+    k = GATEID_sqrtYdag;
+    gates[k][0] = qisq2_lookup(1,2,0,1,-1,2,0,1); gates[k][1] = qisq2_lookup(1,2,0,1,-1,2,0,1);
+    gates[k][2] = qisq2_lookup(-1,2,0,1,1,2,0,1); gates[k][3] = qisq2_lookup(1,2,0,1,-1,2,0,1);
+}
+
+// ---------------- </ gate definitions for qisq2 > ----------------

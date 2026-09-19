@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <time.h>
+#include <inttypes.h>
 
 #include "qsylvan.h"
 #include <sylvan.h>
 #include <sylvan_evbdd.h>
 #include <sylvan_edge_weights.h>
 #include <sylvan_edge_weights_complex.h>
+#include <sylvan_edge_weights_qisq2.h>
 
 #include "test_assert.h"
 
@@ -105,7 +107,131 @@ int test_complex_operations() // No influence on DD
     index4=wgt_div(index1, index2); weight_value(index4, &val4);
     test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
 
-    if(VERBOSE) printf("complex operations:            ok\n");
+    if(VERBOSE) printf("complex operations:             ok\n");
+    return 0;
+}
+
+int test_complex_operations_qisq2() // No influence on DD
+{
+    qisq2_t ref1, ref2, ref3, ref4, val1, val2, val3, val4;
+    AMP index1, index2, index3, index4;
+
+    // weight_eq / weight_approx_eq
+    ref1 = qisq2_make(3,5,0,1,0,1,0,1);
+    ref2 = qisq2_make(3,5,0,1,0,1,0,1);
+    //test_assert(weight_approx_eq(&ref1, &ref2));
+    test_assert(weight_eq(&ref1, &ref2));
+
+    ref1 = qisq2_make((2+4),10,0,1,0,1,0,1);
+    ref2 = qisq2_make(3,5,0,1,0,1,0,1);
+    //test_assert(weight_approx_eq(&ref1, &ref2));
+    test_assert(weight_eq(&ref1, &ref2));
+
+    ref1 = qisq2_make(299999999999999855,100000000000000000,0,1,0,1,0,1);
+    ref2 = qisq2_make(300000000000000123,100000000000000000,0,1,0,1,0,1);
+    //test_assert(weight_approx_eq(&ref1, &ref2));
+    test_assert(!weight_eq(&ref1, &ref2));
+
+    ref1 = qisq2_make((5+5),10,0,1,0,1,0,1);
+    ref2 = qisq2_make(1    , 1,0,1,0,1,0,1);
+    //test_assert(weight_approx_eq(&ref1, &ref2));
+    test_assert(weight_eq(&ref1, &ref2));
+    
+
+    // test EVBDD_ZERO
+    ref1 = qisq2_make(0,1,0,1,0,1,0,1);       index1 = weight_lookup(&ref1);
+    ref2 = qisq2_make(0,1,0,1,0,1,0,1);       index2 = weight_lookup(&ref2);
+    ref3 = qisq2_zero();                      index3 = weight_lookup(&ref3);
+    test_assert(index1 == index2);
+    test_assert(index1 == index3);
+    test_assert(index1 == EVBDD_ZERO);
+
+    // test EVBDD_ONE
+    ref1 = qisq2_make(1,1,0,1,0,1,0,1);       index1 = weight_lookup(&ref1);
+    ref2 = qisq2_make(1,1,0,1,0,1,0,1);       index2 = weight_lookup(&ref2);
+    test_assert(index1 == index2);
+    test_assert(index1 == EVBDD_ONE);
+
+    // qisq2_lookup, qisq2_value
+    ref1 = qisq2_make(1,2,0,1,0,1,0,1);             index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(1,2,0,1,0,1,0,1);             index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(0,1,1,2,0,1,0,1);             index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    ref4 = qisq2_make(0,1,1,2,0,1,0,1);             index4 = weight_lookup(&ref4);   weight_value(index4, &val4);
+    test_assert(index1 == index2);  test_assert(weight_eq(&val1, &val2));
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    // wgt_neg
+    ref1 = qisq2_make( 3,10, 4,5, 2,7, 3,8);         index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(-3,10,-4,5,-2,7,-3,8);        index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    index3 = wgt_neg(index1);       weight_value(index3, &val3);
+    index4 = wgt_neg(index2);       weight_value(index4, &val4);
+    test_assert(index1 == index4);  test_assert(weight_eq(&val1, &val4));
+    test_assert(index2 == index3);  test_assert(weight_eq(&val2, &val3));
+
+    // wgt_add
+    ref1 = qisq2_make(26, 5,0,1,1,1,0,1);         index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(-3,10,0,1,7,1,0,1);         index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(49,10,0,1,8,1,0,1);         index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_add(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    // wgt_sub
+    ref1 = qisq2_make(1,3,1,1,3,1, 0,1);         index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(1,3,0,1,1,1, 3,2);         index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(0,1,1,1,2,1,-3,2);         index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_sub(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+    
+    // wgt_mul
+    ref1 = qisq2_make(1,1,0,1,0,1,0,1);      index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(2,1,0,1,0,1,0,1);      index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(2,1,0,1,0,1,0,1);      index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_mul(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    ref1 = qisq2_make(  3,1,0,1, 5,1,0,1);      index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(  1,2,0,1, 7,1,0,1);      index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(-67,2,0,1,47,2,0,1);      index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_mul(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    ref1 = qisq2_make(0,1,1,2,0,1,0,1);   index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(0,1,1,2,0,1,0,1);   index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(1,2,0,1,0,1,0,1);   index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_mul(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    // wgt_div
+    ref1 = qisq2_make(13,10,0,1,-7,10,0,1);         index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make( 1, 1,0,1, 0, 1,0,1);         index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(13,10,0,1,-7,10,0,1);         index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_div(index1,index2);  weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    ref1 = qisq2_make(5,1,0,1,9,1,0,1);         index1 = weight_lookup(&ref1);   weight_value(index1, &val1);
+    ref2 = qisq2_make(-4,1,0,1,7,1,0,1);        index2 = weight_lookup(&ref2);   weight_value(index2, &val2);
+    ref3 = qisq2_make(43,65,0,1,-71,65,0,1);    index3 = weight_lookup(&ref3);   weight_value(index3, &val3);
+    index4=wgt_div(index1, index2); weight_value(index4, &val4);
+    test_assert(index3 == index4);  test_assert(weight_eq(&val3, &val4));
+
+    // wgt_abs
+    ref1 = qisq2_make(-1,2,0,1,0,1,0,1);        index1 = weight_lookup(&ref1);  weight_value(index1, &val1);
+    ref2 = qisq2_make(1,2,0,1,0,1,0,1);        index2 = weight_lookup(&ref2);  weight_value(index2, &val2);
+    index3=wgt_abs(index1);         weight_value(index3, &val3);
+    test_assert(index2 == index3);  test_assert(weight_eq(&val2,&val3));
+
+    // wgt_abs_sqr
+    ref1 = qisq2_make(1,3,0,1,0,1,0,1);        index1 = weight_lookup(&ref1);  weight_value(index1, &val1);
+    ref2 = qisq2_make(1,9,0,1,0,1,0,1);        index2 = weight_lookup(&ref2);  weight_value(index2, &val2);
+    index3=wgt_abs_sqr(index1);         weight_value(index3, &val3);
+    test_assert(index2 == index3);  test_assert(weight_eq(&val2,&val3));
+
+    ref1 = qisq2_make(1,3,0,1,1,1, 3,2);        index1 = weight_lookup(&ref1);  weight_value(index1, &val1);
+    ref2 = qisq2_make(101,18,3,1,0,1,0,2);        index2 = weight_lookup(&ref2);  weight_value(index2, &val2);
+    index3=wgt_abs_sqr(index1);         weight_value(index3, &val3);
+    test_assert(index2 == index3);  test_assert(weight_eq(&val2,&val3));
+
+    if(VERBOSE) printf("complex operations:             ok\n");
     return 0;
 }
 
@@ -372,25 +498,33 @@ int test_inner_product()
     return 0;
 }
 
-int run_qmdd_tests()
+int run_qmdd_tests(int wgt_backend)
 {
     // we are not testing garbage collection
     sylvan_gc_disable();
 
-    // basics
-    if (test_complex_operations()) return 1;
-    if (test_basis_state_creation()) return 1;
-    if (test_vector_addition()) return 1;
-    if (test_inner_product()) return 1;
+    if (wgt_backend==QISQ2_MAP){
+        if (test_complex_operations_qisq2()) return 1;
+        //if (test_basis_state_creation_qisq2()) return 1;
+        //if (test_vector_addition_qisq2()) return 1;
+        //if (test_inner_product_qisq2()) return 1;
+    }
+    else{
+        // basics
+        if (test_complex_operations()) return 1;
+        if (test_basis_state_creation()) return 1;
+        if (test_vector_addition()) return 1;
+        if (test_inner_product()) return 1;
+    }
 
     return 0;
 }
 
 // Sylvan operations must run inside a Lace worker (Lace >= 1.6); the thread
 // that calls lace_start() is not one.
-TASK_0(int, run_qmdd_tests_task)
+TASK_1(int, run_qmdd_tests_task, int, wgt_backend)
 {
-    return run_qmdd_tests();
+    return run_qmdd_tests(wgt_backend);
 }
 
 int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits) 
@@ -409,7 +543,7 @@ int test_with(int wgt_backend, int norm_strat, int wgt_indx_bits)
 
     printf("wgt backend = %d, norm strat = %d, wgt indx bits = %d:\n", 
             wgt_backend, norm_strat, wgt_indx_bits);
-    int res = RUN(run_qmdd_tests_task);
+    int res = RUN(run_qmdd_tests_task, wgt_backend);
 
     sylvan_quit();
     lace_stop();

@@ -53,6 +53,7 @@ target_sources(qsylvan
     sylvan_evbdd.c
     sylvan_edge_weights.c
     sylvan_edge_weights_complex.c
+    sylvan_edge_weights_qisq2.c
     qsylvan_limdd_pauli.c
     qsylvan_limdd_lim.c
     qsylvan_limdd_node.c
@@ -92,6 +93,7 @@ target_sources(qsylvan
       sylvan_evbdd_int.h
       sylvan_edge_weights.h
       sylvan_edge_weights_complex.h
+      sylvan_edge_weights_qisq2.h
       qsylvan_limdd_pauli.h
       qsylvan_limdd_lim.h
       qsylvan_limdd_node.h
@@ -110,12 +112,16 @@ target_sources(qsylvan
 
 # ── Edge weight storage (Q-Sylvan) ───────────────────────────────────────────
 
+# GMP is found before the storage library is added, because qisq2 numbers are
+# exact algebraic values held in GMP integers and qisq2_map.h -- a PUBLIC
+# header of that library -- includes gmp.h.
+find_package(GMP REQUIRED)
+
 add_subdirectory(edge_weight_storage)
 target_link_libraries(qsylvan PUBLIC edge_weight_storage)
 
-# ── GMP / MPFR / MPC support (required by Q-Sylvan) ──────────────────────────
+# ── MPFR / MPC support (required by Q-Sylvan) ────────────────────────────────
 
-find_package(GMP REQUIRED)
 target_sources(qsylvan
   PRIVATE sylvan_gmp.c
   PUBLIC FILE_SET HEADERS FILES sylvan_gmp.h

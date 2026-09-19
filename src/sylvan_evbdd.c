@@ -24,6 +24,8 @@
 #include <sylvan_evbdd.h>
 #include <sylvan_refs.h>
 
+#define max(x,y) (x > y ? x : y)
+
 static int granularity = 1; // operation cache access granularity
 
 
@@ -469,9 +471,16 @@ sylvan_init_evbdd(size_t min_wgt_tablesize, size_t max_wgt_tablesize,
     // TODO: pass edge weight type to sylvan_init_evbdd
     sylvan_edge_weights_tolerance_from_env();
     if (min_wgt_tablesize > max_wgt_tablesize) min_wgt_tablesize = max_wgt_tablesize;
-    sylvan_init_edge_weights(min_wgt_tablesize, max_wgt_tablesize, 
+    if (edge_weigth_backend==QISQ2_MAP){
+        sylvan_init_edge_weights(min_wgt_tablesize, max_wgt_tablesize, 
+                             wgt_tab_tolerance, WGT_QISQ2, 
+                             edge_weigth_backend);
+    }
+    else {
+        sylvan_init_edge_weights(min_wgt_tablesize, max_wgt_tablesize, 
                              wgt_tab_tolerance, WGT_COMPLEX_128, 
                              edge_weigth_backend);
+    }
     
     init_wgt_table_entries = init_wgt_tab_entries;
     if (init_wgt_table_entries != NULL) {
@@ -1024,6 +1033,38 @@ evbdd_countnodes(EVBDD a)
     return res;
 }
 
+
+/**
+ * Counts qisq size in the EVBDD by marking them.
+ */
+static uint64_t
+evbdd_qisqcount_mark(EVBDD a)
+{
+    if (EVBDD_TARGET(a) == EVBDD_TERMINAL){
+        EVBDD_WGT wgt = EVBDD_WEIGHT(a);
+        uint64_t size = qisq2_size(wgt_storage,wgt); 
+        return size;
+    } 
+    evbddnode_t n = EVBDD_GETNODE(EVBDD_TARGET(a));
+    if (evbddnode_getmark(n)) return 0;
+    evbddnode_setmark(n, 1);
+    EVBDD_WGT wgt = EVBDD_WEIGHT(a);
+    uint64_t size = qisq2_size(wgt_storage,wgt); 
+    uint64_t rec_low_size = evbdd_qisqcount_mark(evbddnode_getptrlow(n));
+    uint64_t rec_high_size = evbdd_qisqcount_mark(evbddnode_getptrhigh(n));
+    uint64_t tmp = max(rec_low_size,rec_high_size);
+    size = max(tmp,size);
+    return size;
+}
+
+uint64_t
+evbdd_qisqsize(EVBDD a)
+{
+    uint64_t res = evbdd_qisqcount_mark(a);
+    evbdd_unmark_rec(a);
+    return res;
+}
+
 /**************************</EVBDD utility functions>***************************/
 
 
@@ -1090,7 +1131,7 @@ static void
 evbdd_fprintdot_edge_label(FILE *out, EVBDD_WGT w)
 {
     fprintf(out, ", label=\"");
-    if (w == EVBDD_ONE) {}
+    if (w == EVBDD_ONE) { fprintf(out, "1"); }
     else if (w == EVBDD_ZERO) { fprintf(out, "0"); }
     else if (w == EVBDD_MIN_ONE) { fprintf(out, "-1"); }
     else { wgt_fprint(out, w); }

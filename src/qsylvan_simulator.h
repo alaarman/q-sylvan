@@ -225,7 +225,9 @@ TASK_DECL_3(double, qmdd_unnormed_prob, QMDD, BDDVAR, BDDVAR);
  * 
  * @return The amplitude <x|psi>.
  */
-complex_t qmdd_get_amplitude(QMDD qmdd, bool *basis_state, BDDVAR nqubits);
+typedef complex_t (*qmdd_get_amplitude_f)(QMDD qmdd, bool *basis_state, BDDVAR nqubits);
+extern qmdd_get_amplitude_f qmdd_get_amplitude;
+//complex_t qmdd_get_amplitude(QMDD qmdd, bool *basis_state, BDDVAR nqubits);
 
 /**
  * Computes the probability from a given edge weight index.
@@ -233,7 +235,9 @@ complex_t qmdd_get_amplitude(QMDD qmdd, bool *basis_state, BDDVAR nqubits);
  * @param a Edge weight index
  * @return The probability |value(a)|^2
  */
-double qmdd_amp_to_prob(AMP a);
+typedef double (*qmdd_amp_to_prob_f)(AMP a);
+extern qmdd_amp_to_prob_f qmdd_amp_to_prob;
+//double qmdd_amp_to_prob(AMP a);
 
 /**
  * Turns a given probability into a quantum amplitude, and stores it in the
@@ -242,11 +246,22 @@ double qmdd_amp_to_prob(AMP a);
  * @param a Probability
  * @return Edge weight table index of sqrt(a)
  */
-AMP qmdd_amp_from_prob(double a);
+typedef AMP (*qmdd_amp_from_prob_f)(double a);
+extern qmdd_amp_from_prob_f qmdd_amp_from_prob;
+//AMP qmdd_amp_from_prob(double a);
 
 /**
  * Computes the fidelity |<a|b>|^2 for QMDDs a and b, both with nvars variables.
  */
+typedef double (*qmdd_fid_from_amp_f)(AMP prod);
+extern qmdd_fid_from_amp_f qmdd_fid_from_amp;
+//double qmdd_fid_from_amp(AMP prod);
+
+/**
+ * Computes the fidelity |<a|b>|^2 for QMDDs a and b, both with nvars variables.
+ */
+//typedef double (*qmdd_fidelity_f)(QMDD a, QMDD b, BDDVAR nvars);
+//extern qmdd_fidelity_f qmdd_fidelity;
 double qmdd_fidelity(QMDD a, QMDD b, BDDVAR nvars);
 
 /**********************</Measurements and probabilities>***********************/

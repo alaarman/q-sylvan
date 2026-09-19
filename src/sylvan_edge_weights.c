@@ -4,6 +4,7 @@
 
 #include <sylvan_edge_weights.h>
 #include <sylvan_edge_weights_complex.h>
+#include <sylvan_edge_weights_qisq2.h>
 #include <sylvan_int.h>
 #include "edge_weight_storage/cmap.h"
 
@@ -36,6 +37,7 @@ weight_lookup_f 		weight_lookup;
 _weight_lookup_ptr_f	_weight_lookup_ptr;
 init_one_zero_f 		init_one_zero;
 weight_abs_f 			weight_abs;
+weight_abs_sqr_f        weight_abs_sqr;
 weight_neg_f 			weight_neg;
 weight_conj_f           weight_conj;
 weight_sqr_f 			weight_sqr;
@@ -46,6 +48,7 @@ weight_div_f 			weight_div;
 weight_eq_f 			weight_eq;
 weight_eps_close_f 		weight_eps_close;
 weight_greater_f		weight_greater;
+weight_copy_f		    weight_copy;
 
 wgt_norm_L2_f			wgt_norm_L2;
 wgt_get_low_L2normed_f	wgt_get_low_L2normed;
@@ -104,6 +107,7 @@ void init_edge_weight_functions(edge_weight_type_t edge_weight_type)
         _weight_lookup_ptr  = (_weight_lookup_ptr_f) &_weight_complex_lookup_ptr;
         init_one_zero       = (init_one_zero_f) &init_complex_one_zero;
         weight_abs          = (weight_abs_f) &weight_complex_abs;
+        weight_abs_sqr      = (weight_abs_sqr_f) &weight_complex_abs_sqr;
         weight_neg          = (weight_neg_f) &weight_complex_neg;
         weight_conj         = (weight_conj_f) &weight_complex_conj;
         weight_sqr          = (weight_sqr_f) &weight_complex_sqr;
@@ -114,9 +118,31 @@ void init_edge_weight_functions(edge_weight_type_t edge_weight_type)
         weight_eq           = (weight_eq_f) &weight_complex_eq;
         weight_eps_close    = (weight_eps_close_f) &weight_complex_eps_close;
         weight_greater      = (weight_greater_f) &weight_complex_greater;
+        weight_copy         = (weight_copy_f) &weight_complex_copy;
         wgt_norm_L2         = (wgt_norm_L2_f) &wgt_complex_norm_L2;
         wgt_get_low_L2normed= (wgt_get_low_L2normed_f) &wgt_complex_get_low_L2normed;
         weight_fprint       = (weight_fprint_f) &weight_complex_fprint;
+        break;
+    case WGT_QISQ2:
+        weight_malloc       = (weight_malloc_f) &weight_qisq2_malloc;
+        _weight_value       = (_weight_value_f) &_weight_qisq2_value;
+        weight_lookup       = (weight_lookup_f) &weight_qisq2_lookup;
+        _weight_lookup_ptr  = (_weight_lookup_ptr_f) &_weight_qisq2_lookup_ptr;
+        init_one_zero       = (init_one_zero_f) &init_qisq2_one_zero;
+        weight_abs          = (weight_abs_f) &weight_qisq2_abs;
+        weight_abs_sqr      = (weight_abs_sqr_f) &weight_qisq2_abs_sqr;
+        weight_neg          = (weight_neg_f) &weight_qisq2_neg;
+        weight_conj         = (weight_conj_f) &weight_qisq2_conj;
+        weight_sqr          = (weight_sqr_f) &weight_qisq2_sqr;
+        weight_add          = (weight_add_f) &weight_qisq2_add;
+        weight_sub          = (weight_sub_f) &weight_qisq2_sub;
+        weight_mul          = (weight_mul_f) &weight_qisq2_mul;
+        weight_div          = (weight_div_f) &weight_qisq2_div;
+        weight_eq           = (weight_eq_f) &weight_qisq2_eq;
+        weight_eps_close    = (weight_eps_close_f) &weight_qisq2_eps_close;
+        weight_greater      = (weight_greater_f) &weight_qisq2_greater;
+        weight_copy         = (weight_copy_f) &weight_qisq2_copy;
+        weight_fprint       = (weight_fprint_f) &weight_qisq2_fprint;
         break;
     default:
         printf("ERROR: Unrecognized weight type = %d\n", edge_weight_type);
@@ -248,8 +274,11 @@ wgt_table_gc_keep(EVBDD_WGT a)
     // move from current (old) to new
     weight_t wa = weight_malloc();
     _weight_value(wgt_storage, a, wa);
-    EVBDD_WGT res = _weight_lookup_ptr(wa, wgt_storage_new);
+    weight_t wa_copy = weight_malloc();
+    weight_copy(wa,wa_copy);
+    EVBDD_WGT res = _weight_lookup_ptr(wa_copy, wgt_storage_new);
     free(wa);
+    free(wa_copy);
     return res;
 }
 
@@ -391,6 +420,24 @@ wgt_abs(EVBDD_WGT a)
     weight_t w = weight_malloc();
     weight_value(a, w);
     weight_abs(w);
+    res = weight_lookup_ptr(w);
+    free(w);
+
+    return res;
+}
+
+EVBDD_WGT
+wgt_abs_sqr(EVBDD_WGT a)
+{
+    // special cases
+    if (a == EVBDD_ZERO || a == EVBDD_ONE) return a;
+    if (a == EVBDD_MIN_ONE) return EVBDD_ONE;
+
+    EVBDD_WGT res;
+
+    weight_t w = weight_malloc();
+    weight_value(a, w);
+    weight_abs_sqr(w);
     res = weight_lookup_ptr(w);
     free(w);
 

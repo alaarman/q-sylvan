@@ -17,6 +17,7 @@ typedef enum edge_weight_type {
     WGT_DOUBLE,
     WGT_COMPLEX_128,
     WGT_RATIONAL_128,
+    WGT_QISQ2,
     n_wgt_types
 } edge_weight_type_t;
 
@@ -82,6 +83,7 @@ typedef void (*init_one_zero_f)(void *wgt_store);
 
 /* Arithmetic operations on edge weights */
 typedef void (*weight_abs_f)(weight_t a); // a <-- |a|
+typedef void (*weight_abs_sqr_f)(weight_t a); // a <-- |a|^2
 typedef void (*weight_neg_f)(weight_t a); // a <-- -a
 typedef void (*weight_conj_f)(weight_t a); // a <-- a*
 typedef void (*weight_sqr_f)(weight_t a); // a <-- a^2
@@ -92,6 +94,7 @@ typedef void (*weight_div_f)(weight_t a, weight_t b); // a <-- a / b
 typedef bool (*weight_eq_f)(weight_t a, weight_t b); // returns true iff a == b
 typedef bool (*weight_eps_close_f)(weight_t a, weight_t b, double eps); // returns true iff dist(a,b) < eps
 typedef bool (*weight_greater_f)(weight_t a, weight_t b); // returns true iff |a| > |b|
+typedef void (*weight_copy_f)(weight_t a, weight_t b); // copies a into b
 
 /* Normalization methods */
 typedef EVBDD_WGT (*wgt_norm_L2_f)(EVBDD_WGT *low, EVBDD_WGT *high);
@@ -108,6 +111,7 @@ extern weight_lookup_f 		weight_lookup;
 extern _weight_lookup_ptr_f	_weight_lookup_ptr;
 extern init_one_zero_f 		init_one_zero;
 extern weight_abs_f 		weight_abs;
+extern weight_abs_sqr_f 	weight_abs_sqr;
 extern weight_neg_f 		weight_neg;
 extern weight_conj_f        weight_conj;
 extern weight_sqr_f 		weight_sqr;
@@ -118,6 +122,7 @@ extern weight_div_f 		weight_div;
 extern weight_eq_f 			weight_eq;
 extern weight_eps_close_f 	weight_eps_close;
 extern weight_greater_f		weight_greater;
+extern weight_copy_f		weight_copy;
 
 extern wgt_norm_L2_f		wgt_norm_L2;
 extern wgt_get_low_L2normed_f		wgt_get_low_L2normed;
@@ -149,6 +154,7 @@ void wgt_set_inverse_chaching(bool on);
 
 /* Arithmetic operations on EVBDD_WGT's */
 EVBDD_WGT wgt_abs(EVBDD_WGT a); // returns |a|
+EVBDD_WGT wgt_abs_sqr(EVBDD_WGT a); // returns |a|^2
 EVBDD_WGT wgt_neg(EVBDD_WGT a); // returns -a
 EVBDD_WGT wgt_conj(EVBDD_WGT a); // returns a*
 EVBDD_WGT wgt_add(EVBDD_WGT a, EVBDD_WGT b); // returns a + b

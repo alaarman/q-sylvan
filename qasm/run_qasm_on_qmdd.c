@@ -27,6 +27,8 @@
 static int workers = 1;
 static int rseed = 0;
 static bool count_nodes = false;
+static bool count_qisq2_size = false;
+static bool calc_measurement_prob = false;
 static bool output_vector = false;
 static size_t min_tablesize = 1LL<<25;
 static size_t max_tablesize = 1LL<<25;
@@ -36,7 +38,7 @@ static size_t min_wgt_tab_size = 1LL<<23;
 static size_t max_wgt_tab_size = 1LL<<23;
 static double tolerance = 1e-14;
 static int wgt_table_type = COMP_HASHMAP;
-static int wgt_norm_strat = NORM_MAX;
+static int wgt_norm_strat = NORM_L2;
 static bool wgt_inv_caching = true;
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
@@ -48,9 +50,12 @@ static struct argp_option options[] =
     {"workers", 'w', "<workers>", 0, "Number of workers/threads (default=1)", 0},
     {"rseed", 'r', "<random-seed>", 0, "Set random seed", 0},
     {"norm-strat", 's', "<low|max|min|l2>", 0, "Edge weight normalization strategy", 0},
+    {"edge-weight-type", 'e', "<float|qisq2>", 0, "Edge weight type (default float)", 0},
     {"tol", 't', "<tolerance>", 0, "Tolerance for deciding edge weights equal (default=1e-14)", 0},
     {"json", 'j', "<filename>", 0, "Write stats to given filename as json", 0},
     {"count-nodes", 'c', 0, 0, "Track maximum number of nodes", 0},
+    {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
+    {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
     {"state-vector", 'v', 0, 0, "Also output the complete state vector", 0},
     {"node-tab-size", 1000, "<size>", 0, "log2 of max node table size (max 40)", 0},
     {"wgt-tab-size", 1001, "<size>", 0, "log2 of max edge weigth table size (max 30 (23 if node table >2^30))", 0},
@@ -77,6 +82,11 @@ parse_opt(int key, char *arg, struct argp_state *state)
         else if (strcasecmp(arg, "l2")==0) wgt_norm_strat = NORM_L2;
         else argp_usage(state);
         break;
+    case 'e':
+        if (strcmp(arg, "float")==0) wgt_table_type = COMP_HASHMAP;
+        else if (strcasecmp(arg, "qisq2")==0) wgt_table_type = QISQ2_MAP;
+        else argp_usage(state);
+        break;
     case 't':
         tolerance = atof(arg);
         break;
@@ -85,6 +95,12 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 'c':
         count_nodes = true;
+        break;
+    case 'q':
+        count_qisq2_size = true;
+        break;
+    case 'm':
+        calc_measurement_prob = true;
         break;
     case 'v':
         output_vector = true;
@@ -130,9 +146,14 @@ typedef struct stats_s {
     uint64_t applied_gates;
     uint64_t final_nodes;
     uint64_t max_nodes;
+    uint64_t final_qisq_size;
+    uint64_t max_qisq_size;
     uint64_t shots;
     double simulation_time;
     double norm;
+    double normed_prob;
+    double unnormed_prob;
+    double first_qubit_prob;
     QMDD final_state;
 } stats_t;
 stats_t stats;
@@ -166,8 +187,13 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"benchmark\": \"%s\",\n", circuit->name);
     fprintf(stream, "    \"final_nodes\": %" PRIu64 ",\n", stats.final_nodes);
     fprintf(stream, "    \"max_nodes\": %" PRIu64 ",\n", stats.max_nodes);
+    fprintf(stream, "    \"final_qisq_size\": %" PRIu64 ",\n", stats.final_qisq_size);
+    fprintf(stream, "    \"max_qisq_size\": %" PRIu64 ",\n", stats.max_qisq_size);
     fprintf(stream, "    \"n_qubits\": %d,\n", circuit->qreg_size);
     fprintf(stream, "    \"norm\": %.5e,\n", stats.norm);
+    fprintf(stream, "    \"unnormed_measurement_prob\": %.5e,\n", stats.unnormed_prob);
+    fprintf(stream, "    \"normed_measurement_prob\": %.5e,\n", stats.normed_prob);
+    fprintf(stream, "    \"first_qubit_measurement_prob\": %.5e,\n", stats.first_qubit_prob);
     fprintf(stream, "    \"reorder\": %d,\n", reorder_qubits);
     fprintf(stream, "    \"seed\": %d,\n", rseed);
     fprintf(stream, "    \"shots\": %" PRIu64 ",\n", stats.shots);
@@ -175,6 +201,7 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"tolerance\": %.5e,\n", tolerance);
     fprintf(stream, "    \"wgt_inv_caching\": %d,\n", wgt_inv_caching);
     fprintf(stream, "    \"wgt_norm_strat\": %d,\n", wgt_norm_strat);
+    fprintf(stream, "    \"wgt_type\": %d,\n", wgt_table_type);
     fprintf(stream, "    \"min_node_tab_size\": %" PRId64 ",\n", min_tablesize);
     fprintf(stream, "    \"max_node_tab_size\": %" PRId64 ",\n", max_tablesize);
     fprintf(stream, "    \"min_wgt_tab_size\": %" PRId64 ",\n", min_wgt_tab_size);
@@ -389,13 +416,50 @@ void simulate_circuit(quantum_circuit_t* circuit)
             uint64_t count = evbdd_countnodes(state);
             if (count > stats.max_nodes) stats.max_nodes = count;
         }
+        if (count_qisq2_size) {
+            uint64_t count = evbdd_qisqsize(state);
+            if (count > stats.max_qisq_size) stats.max_qisq_size = count;
+        }
         op = op->next;
+    }
+    if (count_qisq2_size) {
+        uint64_t count = evbdd_qisqsize(state);
+        stats.final_qisq_size = count;
     }
     stats.simulation_time = wctime() - t_start;
     stats.final_state = state;
     stats.shots = 1;
     stats.final_nodes = evbdd_countnodes(state);
     stats.norm = qmdd_get_norm(state, circuit->qreg_size);
+
+    if (calc_measurement_prob){
+        srand(12345);
+        uint64_t k  = rand();
+        bool *x = int_to_bitarray(k, circuit->qreg_size, !(circuit->reversed_qubit_order));
+        complex_t c = qmdd_get_amplitude(stats.final_state, x, circuit->qreg_size);
+        stats.unnormed_prob = sqrt(c.r*c.r+c.r*c.i);
+        if (stats.norm != 0.0){
+            stats.normed_prob = stats.unnormed_prob/stats.norm;
+        }
+        else {
+            stats.normed_prob = 1e10;
+        }
+        free(x);
+    }
+    if (calc_measurement_prob){
+        EVBDD low_edge, high_edge;
+        evbddnode_t n = EVBDD_GETNODE(EVBDD_TARGET(state));
+        evbddnode_getchilderen(n,&low_edge,&high_edge);
+        double low_norm = qmdd_unnormed_prob(low_edge, 1, circuit->qreg_size);
+        double high_norm = qmdd_unnormed_prob(high_edge, 1, circuit->qreg_size);
+        if (low_norm != 0.0 || high_norm != 0.0){
+            stats.first_qubit_prob = low_norm/(low_norm+high_norm);
+        }
+        else {
+            stats.first_qubit_prob = 1e10;
+        }
+    }
+
 }
 
 
@@ -434,7 +498,7 @@ int main(int argc, char *argv[])
     // Simple Sylvan initialization
     sylvan_set_sizes(min_tablesize, max_tablesize, min_cachesize, max_cachesize);
     sylvan_init_package();
-    qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, COMP_HASHMAP, wgt_norm_strat);
+    qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
 
     RUN(run_simulation, circuit);

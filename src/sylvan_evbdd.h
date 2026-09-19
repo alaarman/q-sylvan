@@ -224,6 +224,7 @@ EVBDD evbdd_tensor_prod(EVBDD a, EVBDD b, BDDVAR nvars_a);
  * Count the number of EVBDD nodes.
  */
 uint64_t evbdd_countnodes(EVBDD a);
+uint64_t evbdd_qisqsize(EVBDD a);
 
 /**************************</EVBDD utility functions>***************************/
 
