@@ -97,7 +97,10 @@ qsylvan_init_simulator(size_t min_tablesize, size_t max_tablesize, double wgt_ta
             // TODO: implement max/min/L2 norms for qisq2, which needs an
             // absolute value that Q[i,sqrt2] does not contain.
             fprintf(stderr, "qsylvan: normalisation strategy %d is not "
-                            "implemented for qisq2 edge weights\n", norm_strat);
+                            "implemented for qisq2 edge weights; exact weights "
+                            "need the low strategy (-s low), since "
+                            "max, min and L2 all need an absolute value that "
+                            "Q[i,sqrt2] does not contain\n", norm_strat);
             exit(1);   // an error, so do not report success
         }
         sylvan_init_evbdd(min_tablesize, max_tablesize, wgt_tab_tolerance, edge_weigth_backend, norm_strat, &qmdd_gates_qisq2_init);

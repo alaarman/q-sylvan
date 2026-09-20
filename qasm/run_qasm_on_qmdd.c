@@ -54,6 +54,8 @@ static uint64_t canon_interval = 100000;
 static const char *canon_name = "always";
 static double rel_tolerance = -1;
 static double zero_tolerance = 1e-14;
+static bool zero_tolerance_set = false;   /* did the user ask for one? */
+static bool node_tab_size_set = false;    /* was --node-tab-size given? */
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
@@ -80,8 +82,8 @@ static struct argp_option options[] =
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
     {"canon", 1008, "<always|never|ops:K|adaptive>", 0, "LIMDD only: when to apply the canonical form. always (default) canonicalises inside every operation; never leaves it off; ops:K rebuilds after every K node-building operations; adaptive tunes the interval by how much the last rebuild helped.", 0},
-    {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default=off, i.e. the historical absolute rule)", 0},
-    {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default=1e-14)", 0},
+    {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
+    {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
     {0, 0, 0, 0, 0, 0}
 };
@@ -129,6 +131,7 @@ parse_opt(int key, char *arg, struct argp_state *state)
     case 1000:
         if (atoi(arg) > 40) argp_usage(state);
         max_tablesize = 1LL<<(atoi(arg));
+        node_tab_size_set = true;
         break;
     case 1001:
         if (atoi(arg) > 30) argp_usage(state);
@@ -160,6 +163,7 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1007:
         zero_tolerance = atof(arg);
+        zero_tolerance_set = true;
         break;
     case 'd':
         dd_kind_name = arg;
@@ -662,10 +666,12 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
         /*
          * Four tables plus a word per node bucket, so the node table's own
          * size is not a safe default here: at 2^25 that is over 2 GB before a
-         * single node exists. Capped, and raisable with --node-tab-size.
+         * single node exists. Capped by default; --node-tab-size lifts the
+         * cap, and is the only way to raise these tables, since unlike the
+         * weight table they are allocated once and never grow.
          */
-        size_t lt = min_tablesize;
-        if (lt > (1LL<<23)) lt = 1LL<<23;
+        size_t lt = node_tab_size_set ? max_tablesize : min_tablesize;
+        if (!node_tab_size_set && lt > (1LL<<23)) lt = 1LL<<23;
 
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
          * they reach it, so a value larger than the diagram is deep sends
@@ -696,6 +702,67 @@ int main(int argc, char *argv[])
     quantum_circuit_t* circuit = parse_qasm_file(qasm_inputfile);
     if (reorder_qubits)
         optimize_qubit_order(circuit, reorder_qubits == 2);
+
+    /*
+     * LIMDD needs the relative merging rule, and gets it unless asked
+     * otherwise.
+     *
+     * A LIMDD stores no weight on a low edge: the whole scale of a subdiagram
+     * rides on the parent, so weights range over many orders of magnitude
+     * instead of sitting near 1 the way a QMDD's do. A single ABSOLUTE
+     * threshold cannot serve that range -- every weight smaller than it merges
+     * with every other, which silently rewrites the state. On a 10-qubit,
+     * 300-gate Clifford+T circuit the absolute rule loses norm (0.94 rather
+     * than 1) and the answer moves with the weight table's size, since which
+     * entry a weight meets first depends on where it hashes. Relative merging
+     * bounds the error by the flow through a weight rather than by its
+     * magnitude, which is exactly the insensitivity a LIMDD needs; see
+     * cmap.c and Brand et al.
+     *
+     * QMDD keeps the historical absolute default: its normalisation holds
+     * weights near 1, and the paper's numbers were taken that way.
+     */
+    /*
+     * A LIMDD's weight table never grows, so allocate the whole of it.
+     *
+     * The table starts at min_wgt_tab_size and is enlarged by the EVBDD
+     * weight table collector, which runs from evbdd_makenode. A LIMDD does
+     * not go through that path -- and could not, since the collector walks
+     * EVBDD edges and cannot see a weight that lives inside a LIM -- so the
+     * table stays at its initial size however large a maximum is asked for,
+     * and a circuit that outgrows it dies with "Amplitude table full" rather
+     * than growing. Starting at the maximum is what --wgt-tab-size means for
+     * a LIMDD.
+     */
+    if (dd_kind != DD_QMDD) {
+        min_wgt_tab_size = max_wgt_tab_size;
+    }
+
+    if (dd_kind != DD_QMDD && rel_tolerance < 0) {
+        rel_tolerance = tolerance;
+        /*
+         * And no zero-collapse, unless asked for. The hybrid rule normally
+         * rounds anything tiny down to exactly zero, which suits a QMDD,
+         * where a weight that small is numerical dust. In a LIMDD it can be
+         * the entire scale of the state: the root weight of a 300-gate
+         * circuit is a product of a few hundred factors and is legitimately
+         * far below 1e-14. Collapsing it deletes the state rather than
+         * cleaning it up, and costs about 1% of the norm on q_10 at one
+         * weight table size out of six.
+         */
+        if (!zero_tolerance_set) zero_tolerance = 0.0;
+    }
+
+    /*
+     * The normalisation strategy is a QMDD notion: which of a node's two
+     * weights is divided out. A LIMDD has no such choice -- the low edge
+     * carries the identity and all scale goes up -- so the strategy is unused,
+     * and demanding one the backend supports would refuse exact weights for no
+     * reason. qisq2 has no absolute value and so rejects max, min and L2.
+     */
+    if (dd_kind != DD_QMDD && !qsylvan_norm_supported(wgt_table_type, wgt_norm_strat)) {
+        wgt_norm_strat = NORM_LOW;
+    }
 
     if (rseed == 0) rseed = time(NULL);
     srand(rseed);
