@@ -26,6 +26,24 @@
  * and Y exchange them -- and the rest of the LIM multiplies into both. That
  * is limdd_cofactors, and every operation here is built on it.
  *
+ * LEVELS ARE CONTEXT
+ *
+ * An edge does not say what level it is read at, and once a diagram is fully
+ * reduced an edge may skip levels -- point from level k at a node of level
+ * k' > k, each skipped level holding |0>+|1> under whatever Pauli the label
+ * puts there (see qsylvan_limdd_node.h). limdd_cofactors handles that: at a
+ * skipped level both cofactors are the edge itself, and the four-way Pauli
+ * dispatch it already has does the rest.
+ *
+ * Two disciplines follow. Operations whose level the operands cannot supply
+ * -- addition, the norm, a probability -- carry the level as a parameter and,
+ * where they cache, in the cache key. A gate recovers its working level from
+ * the edge and the gate's own qubits (the first level that matters: the
+ * target's node, or the gate qubit or highest control if the edge skips
+ * it), hoists the label's entries above that level out of the recursion,
+ * and can therefore keep a level-free key. And a label must act only at or
+ * below its edge's level; every argument above rests on that.
+ *
  * WHY THE CACHE NEEDS THE LABELS DIVIDED OUT
  *
  * Keying the cache on the two edges as they arrive would almost never hit:
@@ -63,6 +81,11 @@ extern "C" {
  * `e`'s own LIM is pushed through the node it points at: the Pauli at `var`
  * chooses and signs the branches, and what is left of the LIM multiplies into
  * both. `*low` is the |0> component and `*high` the |1> one.
+ *
+ * `var` may lie above the target's level, in which case `e` skips it and the
+ * two cofactors are the same edge up to the sign or phase that the label's
+ * Pauli at `var` gives |0>+|1>. `var` may not lie below the target's level,
+ * and the label must act only at or below `var`.
  */
 void limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high);
 

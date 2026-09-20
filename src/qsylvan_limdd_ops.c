@@ -15,6 +15,7 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include <sylvan_int.h>
@@ -52,8 +53,9 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
     }
 
     const LIMDD_TARG t = limdd_target(e);
-    assert(t != LIMDD_TERMINAL && "no cofactors below the last qubit");
-    assert(limdd_node_var(t) == var);
+    const uint32_t lev = limdd_level(t);
+    assert(var < limdd_lims_nqubits() && "no cofactors below the last qubit");
+    assert(lev >= var && "an edge may skip levels, never climb them");
 
     const LIMDD_LIM l = limdd_label(e);
     limdd_pauli_t p = limdd_lim_pauli(l);
@@ -68,8 +70,16 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
     p.z &= ~bit;
     const LIMDD_LIM rest = limdd_lim_make(p, limdd_lim_weight(l));
 
-    const LIMDD x0 = lim_times_edge(rest, limdd_node_low(t));
-    const LIMDD x1 = lim_times_edge(rest, limdd_node_high(t));
+    /*
+     * At a level the edge skips, both cofactors are the edge itself: the
+     * level holds |0>+|1>, amplitude 1 on either branch. Feeding one edge
+     * into both slots of the dispatch below then does exactly what this
+     * level's Pauli does to |0>+|1> -- I and X give (V, V), Z gives (V, -V),
+     * Y gives (-iV, iV) -- so the skipped case needs no code of its own.
+     */
+    const bool skip = lev > var;
+    const LIMDD x0 = skip ? limdd_bundle(rest, t) : lim_times_edge(rest, limdd_node_low(t));
+    const LIMDD x1 = skip ? x0                    : lim_times_edge(rest, limdd_node_high(t));
 
     if (!px && !pz) {            /* I */
         *low = x0;
@@ -85,6 +95,34 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
         *low = limdd_scale(x1, limdd_wgt_i_pow(3));
         *high = limdd_scale(x0, limdd_wgt_i_pow(1));
     }
+}
+
+/**
+ * Split `e`'s label at `level`: the part acting on levels below it comes back
+ * in `*hoisted` with scalar 1, and the returned edge keeps the rest, scalar
+ * included. The two parts have disjoint support, so neither the split nor
+ * putting them back together picks up a phase.
+ *
+ * This is how a gate jumps over levels an edge skips. Levels below `level`
+ * are not touched by the gate, so whatever the label does there commutes
+ * with it and can wait outside the recursion. Leaving it in would hand
+ * makeedge children whose labels act above their own level.
+ */
+static inline LIMDD
+lim_split_above(LIMDD e, uint32_t level, LIMDD_LIM *hoisted)
+{
+    const LIMDD_LIM l = limdd_label(e);
+    limdd_pauli_t p = limdd_lim_pauli(l);
+    const uint64_t below = (level >= 64) ? ~UINT64_C(0) : ((UINT64_C(1) << level) - 1);
+    const limdd_pauli_t above = { p.x & below, p.z & below };
+    if (limdd_pauli_is_identity(above)) {
+        *hoisted = LIMDD_LIM_IDENTITY;
+        return e;
+    }
+    p.x &= ~below;
+    p.z &= ~below;
+    *hoisted = limdd_lim_make(above, EVBDD_ONE);
+    return limdd_bundle(limdd_lim_make(p, limdd_lim_weight(l)), limdd_target(e));
 }
 
 /* --- addition ------------------------------------------------------------ */
@@ -121,13 +159,16 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
     /*
      * cache_get3 ORs its second argument into the operation id, so a LIMDD
      * edge cannot go there: its LIM index occupies bits 40..62, exactly where
-     * the id lives, and operations would collide in each other's entries.
-     * Everything therefore goes in the two key slots, which are compared at
-     * full width. `var` is left out because it is implied -- it is the
-     * variable of na's node.
+     * the id lives, and operations would collide in each other's entries. The
+     * two edges therefore go in the key slots, which are compared at full
+     * width, and `var` -- small -- rides in the id.
+     *
+     * `var` is part of the key because the operands do not determine it:
+     * (I->terminal) + (I->terminal) is 2 at level n and 2 |+>^(n-k) at level
+     * k. Addition is the one operation whose level is genuinely context.
      */
     LIMDD res;
-    if (cache_get3(CACHE_LIMDD_PLUS, 0, na, nb, &res)) {
+    if (cache_get3(CACHE_LIMDD_PLUS, var, na, nb, &res)) {
         return lim_times_edge(A, res);
     }
 
@@ -140,7 +181,7 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
     const LIMDD hi = SYNC(limdd_plus);
 
     res = limdd_makeedge(var, lo, hi);
-    cache_put3(CACHE_LIMDD_PLUS, 0, na, nb, res);
+    cache_put3(CACHE_LIMDD_PLUS, var, na, nb, res);
 
     return lim_times_edge(A, res);
 }
@@ -166,9 +207,18 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
 {
     if (limdd_edge_is_zero(e)) return e;
 
-    LIMDD_TARG t = limdd_target(e);
-    const uint32_t var = (t == LIMDD_TERMINAL) ? nqubits : limdd_node_var(t);
-    assert(var <= target && "gate applied below its target");
+    /*
+     * The level to work at is the first one that matters: the target's own
+     * node, or the gate's qubit if the edge skips it. Levels above that are
+     * skipped and untouched by the gate, and the label's entries there are
+     * hoisted out of the recursion (see below). This is also what keeps the
+     * cache key sound without a level in it: `var` is a function of the edge
+     * and the target, so equal keys mean equal work whatever level the caller
+     * was at.
+     */
+    const uint32_t lev = limdd_level(limdd_target(e));
+    const uint32_t var = lev < target ? lev : target;
+    assert(var < nqubits);
 
     /*
      * The label is NOT divided out here, unlike in limdd_plus. Addition is
@@ -193,6 +243,14 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
 
     LIMDD res;
     if (cache_get3(opid, 0, e, 0, &res)) return res;
+
+    LIMDD_LIM hoisted;
+    const LIMDD inner = lim_split_above(e, var, &hoisted);
+    if (inner != e) {
+        res = lim_times_edge(hoisted, CALL(limdd_gate, inner, gateid, target, nqubits));
+        cache_put3(opid, 0, e, 0, res);
+        return res;
+    }
 
     LIMDD lo, hi;
     limdd_cofactors(e, var, &lo, &hi);
@@ -244,8 +302,18 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     assert(controls < (UINT64_C(1) << target)
            && "limdd_cgate needs every control above the target");
 
-    LIMDD_TARG t = limdd_target(e);
-    const uint32_t var = (t == LIMDD_TERMINAL) ? nqubits : limdd_node_var(t);
+    /*
+     * Work at the first level that matters: the target's node, or the
+     * highest control if the edge skips it. A skipped control is a control
+     * in superposition, and cofactoring it is exactly what entangles, so the
+     * recursion has to stop there even though there is no node. As in
+     * limdd_gate, `var` is a function of the key -- edge and controls -- so
+     * the key needs no level of its own.
+     */
+    const uint32_t lev = limdd_level(limdd_target(e));
+    const uint32_t top = (uint32_t)__builtin_ctzll(controls);
+    const uint32_t var = lev < top ? lev : top;
+    assert(var < nqubits);
 
     /* The label stays on, for the same reason as in limdd_gate. */
     assert(gateid < (1u << 20) && target < 64);
@@ -253,6 +321,14 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
 
     LIMDD res;
     if (cache_get3(opid, 0, e, controls, &res)) return res;
+
+    LIMDD_LIM hoisted;
+    const LIMDD inner = lim_split_above(e, var, &hoisted);
+    if (inner != e) {
+        res = lim_times_edge(hoisted, CALL(limdd_cgate, inner, gateid, controls, target, nqubits));
+        cache_put3(opid, 0, e, controls, res);
+        return res;
+    }
 
     LIMDD lo, hi;
     limdd_cofactors(e, var, &lo, &hi);
@@ -396,15 +472,25 @@ norm_sq(LIMDD e, uint32_t var, uint32_t nqubits)
 {
     if (limdd_edge_is_zero(e)) return 0.0;
 
-    if (limdd_target(e) == LIMDD_TERMINAL) {
-        assert(var == nqubits);
+    /*
+     * Every level the edge skips holds |0>+|1>, of squared norm 2, whatever
+     * Pauli the label puts there -- all four send it to a vector of squared
+     * norm 2. So the skipped levels contribute a power of two and nothing
+     * else, and the walk resumes at the target's own level.
+     */
+    const LIMDD_TARG t = limdd_target(e);
+    const uint32_t lev = limdd_level(t);
+    assert(lev >= var && lev <= nqubits);
+    const double skipped = ldexp(1.0, (int)(lev - var));
+
+    if (t == LIMDD_TERMINAL) {
         const complex_t w = weight_as_complex(limdd_lim_weight(limdd_label(e)));
-        return w.r * w.r + w.i * w.i;
+        return skipped * (w.r * w.r + w.i * w.i);
     }
 
     LIMDD lo, hi;
-    limdd_cofactors(e, var, &lo, &hi);
-    return norm_sq(lo, var + 1, nqubits) + norm_sq(hi, var + 1, nqubits);
+    limdd_cofactors(e, lev, &lo, &hi);
+    return skipped * (norm_sq(lo, lev + 1, nqubits) + norm_sq(hi, lev + 1, nqubits));
 }
 
 double
@@ -417,14 +503,28 @@ static double
 prob_one(LIMDD e, uint32_t var, uint32_t qubit, uint32_t nqubits)
 {
     if (limdd_edge_is_zero(e)) return 0.0;
-    if (limdd_target(e) == LIMDD_TERMINAL) return 0.0;
 
+    const LIMDD_TARG t = limdd_target(e);
+    const uint32_t lev = limdd_level(t);
+    assert(lev >= var);
+
+    /*
+     * A skipped qubit has exactly half its mass in |1>: each of I, X, Z and
+     * Y sends (1, 1) to a pair of equal magnitude. This covers the terminal
+     * too, whose level is nqubits > qubit; before levels could be skipped an
+     * edge reaching the terminal had passed the qubit and contributed 0
+     * here, which would now silently report a qubit in superposition as
+     * certainly |0>.
+     */
+    if (qubit < lev) return 0.5 * norm_sq(e, var, nqubits);
+
+    const double skipped = ldexp(1.0, (int)(lev - var));
     LIMDD lo, hi;
-    limdd_cofactors(e, var, &lo, &hi);
+    limdd_cofactors(e, lev, &lo, &hi);
 
-    if (var == qubit) return norm_sq(hi, var + 1, nqubits);
-    return prob_one(lo, var + 1, qubit, nqubits)
-         + prob_one(hi, var + 1, qubit, nqubits);
+    if (lev == qubit) return skipped * norm_sq(hi, lev + 1, nqubits);
+    return skipped * (prob_one(lo, lev + 1, qubit, nqubits)
+                    + prob_one(hi, lev + 1, qubit, nqubits));
 }
 
 double

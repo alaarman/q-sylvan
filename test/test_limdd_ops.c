@@ -39,6 +39,7 @@
 #include "qsylvan.h"
 #include "qsylvan_limdd_ops.h"
 #include "sylvan_edge_weights_complex.h"
+#include "sylvan_edge_weights_qisq2.h"
 #include "test_assert.h"
 
 #define NQUBITS 5
@@ -382,6 +383,133 @@ test_probabilities(void)
     return 0;
 }
 
+/* --- operations on diagrams that skip levels ----------------------------- */
+
+/** A random scalar, the same five values under either backend. */
+static EVBDD_WGT
+random_scalar(void)
+{
+    const unsigned w = rnd() % 5;
+    if (sylvan_get_edge_weight_type() == WGT_QISQ2) {
+        switch (w) {
+        case 0: return qisq2_lookup( 1,1, 0,1,  0,1, 0,1);   //  1
+        case 1: return qisq2_lookup( 0,1, 0,1,  1,1, 0,1);   //  i
+        case 2: return qisq2_lookup(-1,1, 0,1,  0,1, 0,1);   // -1
+        case 3: return qisq2_lookup( 1,2, 0,1,  1,2, 0,1);   //  (1+i)/2
+        default:return qisq2_lookup( 0,1, 0,1, -1,4, 0,1);   // -i/4
+        }
+    }
+    static const double re[5] = { 1.0, 0.0, -1.0, 0.5, 0.0 };
+    static const double im[5] = { 0.0, 1.0,  0.0, 0.5, -0.25 };
+    return complex_lookup(re[w], im[w]);
+}
+
+/** A random label acting on qubits `level`..n-1 only. */
+static LIMDD_LIM
+random_label_above(uint32_t level)
+{
+    const uint64_t mask = ((UINT64_C(1) << NQUBITS) - 1) & ~((UINT64_C(1) << level) - 1);
+    const limdd_pauli_t p = { rnd() & mask, rnd() & mask };
+    return limdd_lim_make(p, random_scalar());
+}
+
+/**
+ * A random edge to be read at `level`, built with makenode so that it may
+ * skip levels: it lands on a node anywhere from `level` down, or on the
+ * terminal, and every edge in it carries a random Pauli including on the
+ * levels it skips.
+ */
+static LIMDD
+random_skipping_edge(uint32_t level)
+{
+    if (level == NQUBITS || (rnd() % 4) == 0) {
+        return limdd_bundle(random_label_above(level), LIMDD_TERMINAL);
+    }
+    const uint32_t k = level + (uint32_t)(rnd() % (NQUBITS - level));
+    LIMDD lo = random_skipping_edge(k + 1);
+    lo = limdd_bundle(LIMDD_LIM_IDENTITY, limdd_target(lo));   /* low carries no label */
+    LIMDD hi = (rnd() % 6) == 0 ? limdd_zero_edge() : random_skipping_edge(k + 1);
+    const LIMDD_TARG t = limdd_makenode(k, lo, hi);
+    return limdd_bundle(random_label_above(level), t);
+}
+
+int
+test_ops_on_skipping_diagrams(void)
+{
+    /*
+     * Nothing builds a skipping diagram yet, so they are built by hand; the
+     * operations must then treat them as what they denote. Each result goes
+     * through eval, which test_limdd_node checks against the semantics.
+     */
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H, GATEID_S, GATEID_T };
+
+    for (int trial = 0; trial < 300; trial++) {
+        const LIMDD e = random_skipping_edge(0);
+        cx v[NBASIS];
+        limdd_to_vector(e, v);
+
+        /* every single-qubit gate on every qubit, skipped or not */
+        for (uint32_t q = 0; q < NQUBITS; q++) {
+            const uint32_t g = ids[rnd() % 6];
+            cx want[NBASIS];
+            memcpy(want, v, sizeof(want));
+            dense_gate(want, g, q, 0);
+            if (compare(limdd_gate(e, g, q, NQUBITS), want, "skipping/gate", trial)) {
+                fprintf(stderr, "  (gate %u on qubit %u, root level %u)\n",
+                        g, q, limdd_level(limdd_target(e)));
+                return 1;
+            }
+        }
+
+        /* a CNOT with random control above target */
+        {
+            const uint32_t c = rnd() % (NQUBITS - 1);
+            const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+            cx want[NBASIS];
+            memcpy(want, v, sizeof(want));
+            dense_gate(want, GATEID_X, t, UINT64_C(1) << c);
+            if (compare(limdd_cgate(e, GATEID_X, UINT64_C(1) << c, t, NQUBITS),
+                        want, "skipping/cnot", trial)) {
+                fprintf(stderr, "  (control %u, target %u)\n", c, t);
+                return 1;
+            }
+        }
+
+        /* addition with another skipping diagram */
+        {
+            const LIMDD f = random_skipping_edge(0);
+            cx vf[NBASIS], want[NBASIS];
+            limdd_to_vector(f, vf);
+            for (unsigned i = 0; i < NBASIS; i++) want[i] = cx_add(v[i], vf[i]);
+            if (compare(limdd_plus(e, f, 0), want, "skipping/plus", trial)) return 1;
+        }
+
+        /* norm and per-qubit probabilities, both unnormalised */
+        {
+            double n2 = 0.0;
+            for (unsigned i = 0; i < NBASIS; i++) n2 += v[i].re*v[i].re + v[i].im*v[i].im;
+            const double got = limdd_norm_squared(e, NQUBITS);
+            if (fabs(got - n2) > 1e-9 * (1.0 + n2)) {
+                fprintf(stderr, "trial %d: norm^2 is %g, dense says %g\n", trial, got, n2);
+                return 1;
+            }
+            for (uint32_t q = 0; q < NQUBITS; q++) {
+                double p1 = 0.0;
+                for (unsigned i = 0; i < NBASIS; i++) {
+                    if (i & (1u << q)) p1 += v[i].re*v[i].re + v[i].im*v[i].im;
+                }
+                const double gp = limdd_prob_qubit_one(e, q, NQUBITS);
+                if (fabs(gp - p1) > 1e-9 * (1.0 + n2)) {
+                    fprintf(stderr, "trial %d qubit %u: P(1) mass is %g, dense says %g\n",
+                            trial, q, gp, p1);
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 /**
  * Deferring the canonical form and applying it later must land in the same
  * place as never deferring it.
@@ -469,6 +597,8 @@ TASK_0(int, runtests)
     printf("deferred canonization equals eager:      ok\n");
     if (test_probabilities()) return 1;
     printf("norm and measurement probabilities:      ok\n");
+    if (test_ops_on_skipping_diagrams()) return 1;
+    printf("every op on hand-built skipping diagrams: ok\n");
 
     printf("(%zu nodes, %zu LIMs)\n", limdd_node_table_count(), limdd_lim_table_count());
     limdd_nodes_quit();
