@@ -174,7 +174,14 @@ limdd_node_stab(LIMDD_TARG p)
                                                    : stab_at_level(var + 1, limdd_target(high));
 
     const LIMDD_STAB s = limdd_stab_of_node(var, low, high, s0, s1);
-    limdd_node_set_stab_raw(p, s);
+    /*
+     * Not cached while the canonical form is off. limdd_stab_of_node needs
+     * canonical children, and a node built without them can have isomorphic
+     * children stored apart, which makes the group come back too small. Too
+     * small is harmless to use once, but cached it would survive into the
+     * rebuild -- and there a missing X_var is a missed skip.
+     */
+    if (high_determinism) limdd_node_set_stab_raw(p, s);
     return s;
 }
 
@@ -441,12 +448,29 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
 
     const LIMDD_LIM a = limdd_label(low);
 
+    /*
+     * THE SKIP RULE, the half that needs no group. Equal child edges mean the
+     * node would denote |0>(x)w + |1>(x)w = (|0>+|1>)(x)w -- which is what
+     * `low` already denotes when read at this level, so the level is simply
+     * not stored. Nothing has to be put on the label: `a` has no entry at
+     * `var`, and `low` is already reduced at `var`, since extending its group
+     * by X_var only adds a pivot in a column no reduced label has set.
+     */
+    if (low == high) return low;
+
     /* Divide the low label out; what is left is all the node keeps. */
     const LIMDD_LIM bp = limdd_lim_mul(limdd_lim_inverse(a), limdd_label(high));
 
     if (!high_determinism) {
-        /* Stop here: keep the label as it came out of the division, with no
-         * search for a canonical representative of its class. */
+        /*
+         * The other group-free case: |0>w - |1>w is (|0>-|1>)(x)w, the same
+         * skip with Z at this level. Everything else keeps the label as it
+         * came out of the division, with no search for its class.
+         */
+        if (v0 == v1 && limdd_pauli_is_identity(limdd_lim_pauli(bp))
+                     && limdd_lim_weight(bp) == EVBDD_MIN_ONE) {
+            return limdd_bundle(lim_with_pauli_at(a, var, false, true), v0);
+        }
         const LIMDD_TARG t = intern(var, v0, bp, v1, LIMDD_STAB_TRIVIAL,
                                     LIMDD_STAB_TRIVIAL);
         return limdd_bundle(a, t);
@@ -459,6 +483,27 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
     /* Candidate as given. */
     LIMDD_LIM g1; bool neg1;
     const LIMDD_LIM lab1 = limdd_stab_min_coset(bp, s0, s1, &g1, &neg1);
+
+    /*
+     * THE SKIP RULE, the half that needs the groups. lab1 == I with one
+     * target means bp lies in +-Stab(v0): the high branch is +- the low one,
+     * the node is (|0> +- |1>)(x)w, and this level is not stored. The sign
+     * rule has already resolved the +- to +, recording the flip in neg1, and
+     * that flip is exactly a Z at this level -- so this is the unswapped
+     * branch's own label formula with the intern() left out. |0>w + i|1>w,
+     * a product state but no Pauli image of |0>+|1>, gives lab1 = iI and
+     * correctly falls through.
+     *
+     * It must come BEFORE the swapped candidate: on this input lab1 and lab2
+     * tie, node_less then takes the swapped branch, and that deposits XZ at
+     * this level rather than Z. Same state, another label, and only the
+     * reduction against X_var would bring the two together again.
+     */
+    if (v0 == v1 && lab1 == LIMDD_LIM_IDENTITY) {
+        const LIMDD_LIM r = limdd_lim_mul(a, g1);
+        return limdd_edge_canonical(var,
+            limdd_bundle(lim_with_pauli_at(r, var, false, neg1), v0));
+    }
 
     /*
      * Candidate with the branches swapped. Applying X at this level gives

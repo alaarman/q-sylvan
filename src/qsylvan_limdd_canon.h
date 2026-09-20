@@ -50,6 +50,15 @@
  *                       with one zero child is always stored with the zero on
  *                       the high side. |0..0> and |10..0> are the same node.
  *
+ *   the level itself    When the two canonical children coincide the node
+ *                       would denote (|0>+|1>)(x)w, and it is not stored at
+ *                       all: the edge points straight at w, and the level is
+ *                       read as |0>+|1> (see qsylvan_limdd_node.h). The sign
+ *                       rule folds (|0>-|1>)(x)w into the same case, with a Z
+ *                       on the parent edge, so |+> and |-> registers cost no
+ *                       nodes. |0>+i|1> is a product state too but no Pauli
+ *                       image of |0>+|1>, and keeps its level.
+ *
  * THE LABEL TOO
  *
  * The label on the returned edge is reduced against the target's stabiliser
@@ -188,8 +197,10 @@ LIMDD limdd_canonize(LIMDD e);
 void limdd_canon_last(uint64_t *before, uint64_t *after);
 
 /**
- * The canonical edge denoting |0>(x)low + |1>(x)high, where both are edges at
- * level `var`+1.
+ * The canonical edge denoting |0>(x)low + |1>(x)high, where both are edges
+ * read at level `var`+1 -- they may point below that, and so may the edge
+ * returned, which is read at `var` and skips `var` itself when the two
+ * children turn out to be one state.
  *
  * Must be called from a Lace worker.
  */

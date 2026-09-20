@@ -398,6 +398,106 @@ test_bell_shares_a_node(void)
     return 0;
 }
 
+/* --- the skip rule ------------------------------------------------------- */
+
+/** Fails if any node reachable from `t` has two equal children. */
+static int
+no_skippable_node_below(LIMDD_TARG t)
+{
+    if (t == LIMDD_TERMINAL) return 0;
+    const LIMDD low = limdd_node_low(t), high = limdd_node_high(t);
+    if (low == high) {
+        fprintf(stderr, "node %llu at qubit %u has two equal children and was stored\n",
+                (unsigned long long)t, limdd_node_var(t));
+        return 1;
+    }
+    if (!limdd_edge_is_zero(low) && no_skippable_node_below(limdd_target(low))) return 1;
+    if (!limdd_edge_is_zero(high) && no_skippable_node_below(limdd_target(high))) return 1;
+    return 0;
+}
+
+int
+test_skip_rule(void)
+{
+    const LIMDD_LIM minus = limdd_lim_make(limdd_pauli_identity(), EVBDD_MIN_ONE);
+    const LIMDD_LIM imag  = limdd_lim_make(limdd_pauli_identity(), limdd_wgt_i_pow(1));
+
+    /* |+>^n is one edge straight to the terminal: no level is stored. */
+    LIMDD e = limdd_one_edge();
+    for (int q = NQUBITS - 1; q >= 0; q--) e = limdd_makeedge(q, e, e);
+    test_assert(e == limdd_one_edge());
+
+    /* |->^n is the same edge under Z on every qubit: the s = -1 case, which
+     * the sign rule turns into a skip with a Z pushed upwards. */
+    e = limdd_one_edge();
+    for (int q = NQUBITS - 1; q >= 0; q--) e = limdd_makeedge(q, e, relabel(e, minus));
+    test_assert(limdd_target(e) == LIMDD_TERMINAL);
+    test_assert(limdd_lim_pauli(limdd_label(e)).x == 0);
+    test_assert(limdd_lim_pauli(limdd_label(e)).z == (UINT64_C(1) << NQUBITS) - 1);
+    test_assert(limdd_lim_weight(limdd_label(e)) == EVBDD_ONE);
+
+    /* |0>+i|1> per qubit is a product state, but no Pauli image of |0>+|1>:
+     * every level stays. */
+    e = limdd_one_edge();
+    for (int q = NQUBITS - 1; q >= 0; q--) {
+        e = limdd_makeedge(q, e, relabel(e, imag));
+        test_assert(limdd_level(limdd_target(e)) == (uint32_t)q);
+    }
+
+    /* A dead branch is never skipped: |0>^n keeps every level. */
+    e = limdd_one_edge();
+    for (int q = NQUBITS - 1; q >= 0; q--) {
+        e = limdd_makeedge(q, e, limdd_zero_edge());
+        test_assert(limdd_level(limdd_target(e)) == (uint32_t)q);
+    }
+
+    /*
+     * In general: with `lo` canonical at var+1 and g fixing its state,
+     * |0>lo + |1>(g lo) is (|0>+|1>)(x)lo and must come back as `lo` itself;
+     * with -g it is (|0>-|1>)(x)lo, the same target under a Z.
+     */
+    for (int trial = 0; trial < 2000; trial++) {
+        const uint32_t var = rnd() % NQUBITS;
+        const LIMDD lo = random_edge(var + 1);
+        if (limdd_edge_is_zero(lo)) continue;
+
+        const LIMDD same = limdd_makeedge(var, lo, lo);
+        if (same != lo) return differ("equal children", var, same, lo);
+
+        const LIMDD_STAB s = limdd_edge_stab(var + 1, lo);
+        const size_t k = limdd_stab_ngens(s);
+        const LIMDD_LIM g = k ? limdd_stab_element(s, rnd() & (((uint64_t)1 << k) - 1))
+                              : LIMDD_LIM_IDENTITY;
+
+        const LIMDD plus = limdd_makeedge(var, lo, relabel(lo, g));
+        if (plus != lo) return differ("child times a stabiliser", var, plus, lo);
+
+        const LIMDD neg = limdd_makeedge(var, lo, relabel(relabel(lo, g), minus));
+        if (limdd_target(neg) != limdd_target(lo)) {
+            fprintf(stderr, "trial %d: |0>w - |1>w at qubit %u was not skipped\n", trial, var);
+            return 1;
+        }
+        cx w[NBASIS], got[NBASIS];
+        vector_of(lo, var + 1, w);
+        vector_of(neg, var, got);
+        const unsigned half = 1u << (NQUBITS - var - 1);
+        for (unsigned j = 0; j < half; j++) {
+            const cx mw = { -w[j].re, -w[j].im };
+            if (!cx_eq(got[2 * j], w[j]) || !cx_eq(got[2 * j + 1], mw)) {
+                fprintf(stderr, "trial %d: |0>w - |1>w skipped to the wrong state\n", trial);
+                return 1;
+            }
+        }
+    }
+
+    /* Nothing makeedge builds keeps a node whose two children coincide. */
+    for (int trial = 0; trial < 500; trial++) {
+        const LIMDD r = random_edge(0);
+        if (!limdd_edge_is_zero(r) && no_skippable_node_below(limdd_target(r))) return 1;
+    }
+    return 0;
+}
+
 /* --- edges as identities for states -------------------------------------- */
 
 int
@@ -656,6 +756,8 @@ TASK_0(int, runtests)
     printf("|0000> and |1000> share every node:           ok\n");
     if (test_bell_shares_a_node()) return 1;
     printf("the Bell state needs one node per level:      ok\n");
+    if (test_skip_rule()) return 1;
+    printf("the skip rule: |+>,|-> skip; i, zero do not:   ok\n");
     if (test_edge_equality()) return 1;
     printf("a label times a stabiliser reduces back:      ok\n");
     if (test_equal_states_equal_edges()) return 1;
