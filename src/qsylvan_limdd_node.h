@@ -50,18 +50,43 @@
  * parent, leaving the low edge labelled with the identity, or with zero when
  * that branch vanishes. One bit distinguishes those two cases.
  *
- * QUASI-REDUCED, NOT FULLY REDUCED
+ * FULLY REDUCED: LEVELS MAY BE SKIPPED
  *
- * Every path from the root to the terminal visits every level. In particular
- * limdd_makenode does NOT collapse a node whose children coincide.
+ * An edge does not record what level it is at; that comes from context. The
+ * root edge is at level 0, a node's child edges are at the node's level plus
+ * one, and the terminal counts as level nqubits (see limdd_level). An edge
+ * read at level k that points at a node of level k' > k SKIPS levels k..k'-1,
+ * and each skipped level denotes the unnormalised |0>+|1>: the edge means
  *
- * This is the one place where copying EVBDD would be wrong. An EVBDD skips a
- * level when the amplitude does not depend on that qubit and synthesises it
- * again on the way down, so `if (low == high) return low` is sound there. For
- * a LIMDD it is not: a node with low == high denotes |0>(x)v + |1>(x)v, which
- * is a state on one more qubit than v, not v. Dropping it would silently
- * change the state. The LIMDD normalisation rules are also stated over a
- * quasi-reduced structure, so keeping every level is what lets them apply.
+ *     L ( (|0>+|1>)_k (x) ... (x) (|0>+|1>)_{k'-1} (x) |v> )
+ *
+ * with L the edge's LIM and |v> the target's state. L is a word over all n
+ * qubits, so it has an entry at every skipped level too, and that entry acts
+ * on the |0>+|1> there: I and X leave it, Z turns it into |0>-|1>, and Y into
+ * -i(|0>-|1>). That is all a skipped level can carry -- the Pauli orbit of
+ * |0>+|1> -- and it is why a level may be skipped only where the node would
+ * have had two children that are one and the same state.
+ *
+ * Consequences worth keeping in mind:
+ *
+ *   - A node's two children may sit at different levels.
+ *   - `var` is stored in the node so that an edge can tell how many levels it
+ *     skips. It is the one thing context cannot supply.
+ *   - An edge into the terminal denotes the scalar 1 only when read at level
+ *     nqubits. Read at level 0, the same word (identity, terminal) is the
+ *     unnormalised |+>^n. Nothing about the edge distinguishes the two.
+ *   - Reading an edge at a level ABOVE its true one is a silent error: the
+ *     reader synthesises |0>+|1> on levels the label already acts on. A level
+ *     below the target's is caught by an assertion; a level below the edge's
+ *     own is not detectable from the edge alone.
+ *
+ * Skipping is limdd_makeedge's decision, not limdd_makenode's. makenode stores
+ * exactly what it is handed, and `if (low == high) return low` is still wrong
+ * here: a bare node index does not say at what level it is read, and only the
+ * parent, which knows the level and holds the label, can put the skipped
+ * level's Pauli where it belongs. The EVBDD version of that rule is sound
+ * because an EVBDD skips a level exactly when the amplitude ignores the
+ * qubit; the LIMDD version has to account for the LIM as well.
  *
  * VARIABLE ORDER
  *
@@ -100,7 +125,11 @@ typedef uint64_t LIMDD;
 /** A LIMDD node index. */
 typedef uint64_t LIMDD_TARG;
 
-/** The terminal node, representing the scalar 1. */
+/**
+ * The terminal node: the empty tensor product, at level nqubits. An edge into
+ * it read at level k denotes the label applied to the unnormalised |+>^(n-k),
+ * which is the scalar 1 only when k == nqubits.
+ */
 #define LIMDD_TERMINAL ((LIMDD_TARG)1)
 
 /** Widths of the two fields of an edge. */
@@ -155,7 +184,10 @@ limdd_target(LIMDD e)
  */
 LIMDD limdd_zero_edge(void);
 
-/** The edge labelled with the identity, pointing at the terminal. */
+/**
+ * The edge labelled with the identity, pointing at the terminal. Read at level
+ * nqubits it is the scalar 1; read at level k it is the unnormalised |+>^(n-k).
+ */
 LIMDD limdd_one_edge(void);
 
 /** True iff `e` denotes the zero vector. */
@@ -170,12 +202,14 @@ limdd_edge_is_zero(LIMDD e)
  *
  * `low` must be labelled with the identity or be the zero edge: the caller is
  * responsible for having factored any other low label out to the parent. It is
- * an error to pass anything else, and an assertion catches it.
+ * an error to pass anything else, and an assertion catches it. Both children
+ * must point strictly below `var`, i.e. var < limdd_level(target); they need
+ * not point at var+1, since an edge may skip levels.
  *
  * The node is interned structurally: equal (var, low, high) always give the
  * same index. That makes the STORAGE canonical. It does not by itself make the
- * diagram canonical -- that additionally needs the LIM normalisation rules,
- * which are not implemented yet.
+ * diagram canonical -- that is limdd_makeedge's job, and so is deciding
+ * whether this level should exist at all.
  *
  * Must be called from a Lace worker.
  */
@@ -192,6 +226,12 @@ LIMDD_TARG limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created);
 
 /** The variable of node `p`. `p` must not be the terminal. */
 uint32_t limdd_node_var(LIMDD_TARG p);
+
+/**
+ * The level an edge into `p` descends to: `p`'s variable, or nqubits for the
+ * terminal. An edge read at level k skips levels k..limdd_level(target)-1.
+ */
+uint32_t limdd_level(LIMDD_TARG p);
 
 /** The low edge of node `p`. */
 LIMDD limdd_node_low(LIMDD_TARG p);

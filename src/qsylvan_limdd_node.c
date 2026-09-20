@@ -98,6 +98,12 @@ limdd_node_var(LIMDD_TARG p)
     return (uint32_t)((limdd_getnode(p)->low & limdd_var_mask) >> LIMDD_VAR_SHIFT);
 }
 
+uint32_t
+limdd_level(LIMDD_TARG p)
+{
+    return p == LIMDD_TERMINAL ? (uint32_t)limdd_nqubits : limdd_node_var(p);
+}
+
 LIMDD
 limdd_node_low(LIMDD_TARG p)
 {
@@ -156,11 +162,16 @@ limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
 
     assert(low_targ <= LIMDD_TARG_MAX && high_targ <= LIMDD_TARG_MAX);
 
+    /* A child may skip levels but must lie strictly below this node. */
+    assert(limdd_lim_is_zero(low_lim)  || var < limdd_level(low_targ));
+    assert(limdd_lim_is_zero(high_lim) || var < limdd_level(high_targ));
+
     /*
-     * NOTE: no `if (low == high) return low`. See the header -- collapsing a
-     * node whose children coincide is sound for an EVBDD and wrong for a
-     * LIMDD, because the node denotes a state on one qubit more than its
-     * children do.
+     * No `if (low == high) return low` here, and there never will be: see the
+     * header. Skipping a level is limdd_makeedge's decision, made once the low
+     * label is factored out and the high label is canonical, and it is the
+     * parent edge that carries the skipped level's Pauli. makenode stores what
+     * it is handed.
      */
 
     struct limddnode n;
@@ -225,14 +236,19 @@ eval_edge(LIMDD e, uint64_t b, uint32_t level)
     if (k != 0) w = wgt_mul(w, limdd_wgt_i_pow(k));
 
     const LIMDD_TARG t = limdd_target(e);
-    if (t == LIMDD_TERMINAL) {
-        assert(level == limdd_nqubits);
-        return w;
-    }
+    const uint32_t lev = limdd_level(t);
+    assert(lev >= level && "an edge may skip levels, never climb them");
+    (void)level;   /* only the assertions consult it */
+    if (t == LIMDD_TERMINAL) return w;
 
-    assert(limdd_node_var(t) == level);
-    const LIMDD child = ((c >> level) & 1) ? limdd_node_high(t) : limdd_node_low(t);
-    const EVBDD_WGT sub = eval_edge(child, c, level + 1);
+    /*
+     * Levels level..lev-1 are skipped. Each holds |0>+|1>, whose amplitude is
+     * 1 on either branch, so beyond the phase already folded into k above --
+     * (-1)^c_j for a Z there, -i(-1)^c_j for a Y, nothing for I or X -- they
+     * contribute nothing, and the walk resumes at the target's own level.
+     */
+    const LIMDD child = ((c >> lev) & 1) ? limdd_node_high(t) : limdd_node_low(t);
+    const EVBDD_WGT sub = eval_edge(child, c, lev + 1);
     if (sub == EVBDD_ZERO) return EVBDD_ZERO;
 
     return wgt_mul(w, sub);

@@ -272,6 +272,56 @@ test_eval_superposition(void)
 }
 
 int
+test_eval_skips_levels(void)
+{
+    /*
+     * Diagrams that skip levels, built by hand with makenode so that only eval
+     * is under test. A skipped level holds the unnormalised |0>+|1>, and the
+     * edge's Pauli there acts on it: I and X leave it, Z makes it |0>-|1>, and
+     * Y makes it -i(|0>-|1>).
+     */
+    bool bits[NQUBITS];
+
+    /* (identity, terminal) read at level 0 is |+>^3: every amplitude is 1. */
+    const LIMDD all_plus = limdd_one_edge();
+    for (unsigned v = 0; v < (1u << NQUBITS); v++) {
+        set_bits(bits, v);
+        test_assert(amp_is(limdd_eval(all_plus, bits, NQUBITS), 1.0, 0.0));
+    }
+
+    /* Z on qubit 0 and X on qubit 1 of the same: (-1)^b0, the X invisible. */
+    const LIMDD zx = limdd_bundle(limdd_lim_make(pauli("ZXI"), EVBDD_ONE),
+                                  LIMDD_TERMINAL);
+    for (unsigned v = 0; v < (1u << NQUBITS); v++) {
+        set_bits(bits, v);
+        test_assert(amp_is(limdd_eval(zx, bits, NQUBITS), (v & 1) ? -1.0 : 1.0, 0.0));
+    }
+
+    /*
+     * A node at level 0 whose children both skip level 1 and land on a node
+     * at level 2. Low child: |+>_1 |+>_2. High child, with Y at level 1:
+     * -i |->_1 |+>_2, so its amplitude is -i at b1 = 0 and +i at b1 = 1.
+     */
+    const LIMDD one = limdd_one_edge();
+    const LIMDD_TARG n2 = limdd_makenode(2, one, one);
+    const LIMDD lo = limdd_bundle(LIMDD_LIM_IDENTITY, n2);
+    const LIMDD hi = limdd_bundle(limdd_lim_make(pauli("IYI"), EVBDD_ONE), n2);
+    const LIMDD_TARG n0 = limdd_makenode(0, lo, hi);
+    test_assert(limdd_level(n0) == 0 && limdd_level(n2) == 2);
+    test_assert(limdd_level(LIMDD_TERMINAL) == NQUBITS);
+    const LIMDD e = limdd_bundle(LIMDD_LIM_IDENTITY, n0);
+
+    for (unsigned v = 0; v < (1u << NQUBITS); v++) {
+        set_bits(bits, v);
+        const bool b0 = v & 1, b1 = (v >> 1) & 1;
+        const double re = b0 ? 0.0 : 1.0;
+        const double im = b0 ? (b1 ? 1.0 : -1.0) : 0.0;
+        test_assert(amp_is(limdd_eval(e, bits, NQUBITS), re, im));
+    }
+    return 0;
+}
+
+int
 test_bell_state_two_ways(void)
 {
     /*
@@ -366,13 +416,15 @@ TASK_0(int, runtests)
     if (test_edge_encoding()) return 1;
     printf("limdd edge fields round-trip:            ok\n");
     if (test_node_interning()) return 1;
-    printf("limdd nodes intern, quasi-reduced:       ok\n");
+    printf("limdd nodes intern:                      ok\n");
     if (test_eval_basis_states()) return 1;
     printf("limdd eval on basis states:              ok\n");
     if (test_eval_lim_acts()) return 1;
     printf("limdd eval honours edge labels:          ok\n");
     if (test_eval_superposition()) return 1;
     printf("limdd eval on |+++>:                     ok\n");
+    if (test_eval_skips_levels()) return 1;
+    printf("limdd eval across skipped levels:        ok\n");
     if (test_bell_state_two_ways()) return 1;
     printf("limdd shares a Bell state through a LIM: ok\n");
     if (test_concurrent_makenode()) return 1;

@@ -99,8 +99,12 @@ eval_at(LIMDD e, uint64_t b, uint32_t level)
 
     const LIMDD_TARG t = limdd_target(e);
     if (t == LIMDD_TERMINAL) return acc;
-    const LIMDD child = ((c >> level) & 1) ? limdd_node_high(t) : limdd_node_low(t);
-    return cx_mul(acc, eval_at(child, c, level + 1));
+    /* The edge may skip levels down to the target's own; it may never climb.
+     * A climbing edge is malformed, and NaN makes any comparison fail. */
+    const uint32_t var = limdd_node_var(t);
+    if (var < level) { cx bad = {NAN, NAN}; return bad; }
+    const LIMDD child = ((c >> var) & 1) ? limdd_node_high(t) : limdd_node_low(t);
+    return cx_mul(acc, eval_at(child, c, var + 1));
 }
 
 static void
