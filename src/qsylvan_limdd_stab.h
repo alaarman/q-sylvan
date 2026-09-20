@@ -134,11 +134,34 @@ limdd_stab_is_trivial(LIMDD_STAB s)
 bool limdd_stab_contains(LIMDD_STAB s, LIMDD_LIM g);
 
 /**
- * The stabiliser group of the node (var, low, high), from the groups of its
- * two child NODES.
+ * The group of (|0>+|1>)_from (x) ... (x) (|0>+|1>)_{to-1} (x) |v>, given
+ * `s` = Stab(|v>) for a state |v> on qubits to..n-1.
  *
- * `s0` and `s1` stabilise the nodes the two edges point at, not the states the
- * edges denote; the high edge's own label is accounted for here.
+ * That is `s` with one +X_j generator per level in [from, to): X fixes
+ * |0>+|1>, nothing else in the Pauli group does up to sign, and the two
+ * factors act on disjoint qubits, so the product is direct. It is the group
+ * an edge that skips levels from..to-1 has before its label is applied.
+ *
+ * O(to - from) list cells and no elimination. Every word of `s` lives on
+ * qubits >= to, so under the (X | Z) column order all its pivots lie at or
+ * beyond column `to`, while each X_j has a single bit at column j < to.
+ * Prepending X_from .. X_{to-1} in that order therefore keeps the list in
+ * RREF, and the handle is the one limdd_stab_make would give for the same
+ * generators -- a test checks that. An assertion checks the precondition.
+ *
+ * `from == to` returns `s`. Must be called from a Lace worker.
+ */
+LIMDD_STAB limdd_stab_extend_skipped(LIMDD_STAB s, uint32_t from, uint32_t to);
+
+/**
+ * The stabiliser group of the node (var, low, high), from the groups of what
+ * its two child edges point at.
+ *
+ * `s0` and `s1` are the groups of the two bare targets AS READ AT LEVEL
+ * var+1: the target node's own group, extended by X_j over every level the
+ * child edge skips (limdd_stab_extend_skipped). They are not the groups of the
+ * states the edges denote -- the high edge's own label is accounted for here.
+ * In a diagram that skips no levels they are simply the child nodes' groups.
  *
  * WHERE THE GROUP COMES FROM
  *
@@ -177,6 +200,14 @@ bool limdd_stab_contains(LIMDD_STAB s, LIMDD_LIM g);
  * Nodes built bottom-up by the canonical form satisfy this by construction,
  * since that is precisely what it establishes. Anything building nodes by hand
  * has to respect it.
+ *
+ * Once levels can be skipped the anti-diagonal test leans on a second
+ * invariant of the canonical form: NO STORED NODE IS SKIPPABLE, i.e. no
+ * node's two canonical child edges are equal. With that, two child edges into
+ * different targets cannot denote isomorphic states even when the targets sit
+ * at different levels -- if they did, the shallower one's cofactors would
+ * differ by exactly +-1 and it would have been skipped -- so comparing targets
+ * remains the right test.
  *
  * Must be called from a Lace worker.
  */

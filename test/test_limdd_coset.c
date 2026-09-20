@@ -143,13 +143,15 @@ in_class(LIMDD_LIM e, LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1)
 
 /* --- random stabiliser groups -------------------------------------------- */
 
+/** A random group whose words live on qubits lo..n-1 only. */
 static LIMDD_STAB
-random_group(size_t want)
+random_group_on(size_t want, uint32_t lo)
 {
     LIMDD_LIM g[NQUBITS];
     size_t k = 0;
     for (int attempt = 0; attempt < 64 && k < want; attempt++) {
-        const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
+        const uint64_t above = (lo >= 64) ? 0 : ~((UINT64_C(1) << lo) - 1);
+        const uint64_t mask = ((UINT64_C(1) << NQUBITS) - 1) & above;
         limdd_pauli_t p;
         p.x = rnd() & mask;
         p.z = rnd() & mask;
@@ -169,6 +171,12 @@ random_group(size_t want)
         g[k++] = cand;
     }
     return limdd_stab_make(g, k);
+}
+
+static LIMDD_STAB
+random_group(size_t want)
+{
+    return random_group_on(want, 0);
 }
 
 static LIMDD_LIM
@@ -227,6 +235,48 @@ test_matches_enumeration(void)
             return 1;
         }
         test_assert(in_class(got, b, s0, s1));
+    }
+    return 0;
+}
+
+int
+test_extended_groups(void)
+{
+    /*
+     * The groups makeedge sees once a child may skip levels: a group on
+     * qubits to..n-1 extended by X_j over [from, to). The minimisation must
+     * still match enumeration, and because the X columns lead the RREF the
+     * minimum must carry no X at any extended level -- that is what turns a
+     * Y on a skipped level into a Z.
+     */
+    for (int trial = 0; trial < 600; trial++) {
+        const uint32_t to0 = rnd() % (NQUBITS + 1), from0 = rnd() % (to0 + 1);
+        const uint32_t to1 = rnd() % (NQUBITS + 1), from1 = rnd() % (to1 + 1);
+        LIMDD_STAB s0 = limdd_stab_extend_skipped(random_group_on(1 + rnd() % 2, to0), from0, to0);
+        LIMDD_STAB s1 = limdd_stab_extend_skipped(random_group_on(1 + rnd() % 2, to1), from1, to1);
+        LIMDD_LIM b = random_lim();
+
+        LIMDD_LIM witness; bool neg;
+        LIMDD_LIM got = limdd_stab_min_coset(b, s0, s1, &witness, &neg);
+
+        size_t seen;
+        LIMDD_LIM want = brute_min(b, s0, s1, &seen);
+
+        if (got != want) {
+            fprintf(stderr, "trial %d: coset minimum over extended groups disagrees\n", trial);
+            fprintf(stderr, "  b        = "); limdd_lim_fprint(stderr, b);    fprintf(stderr, "\n");
+            fprintf(stderr, "  computed = "); limdd_lim_fprint(stderr, got);  fprintf(stderr, "\n");
+            fprintf(stderr, "  brute    = "); limdd_lim_fprint(stderr, want); fprintf(stderr, "\n");
+            fprintf(stderr, "  s0:\n"); limdd_stab_fprint(stderr, s0, "    ");
+            fprintf(stderr, "  s1:\n"); limdd_stab_fprint(stderr, s1, "    ");
+            return 1;
+        }
+        test_assert(in_class(got, b, s0, s1));
+
+        uint64_t ext = 0;
+        for (uint32_t j = from0; j < to0; j++) ext |= UINT64_C(1) << j;
+        for (uint32_t j = from1; j < to1; j++) ext |= UINT64_C(1) << j;
+        test_assert((limdd_lim_pauli(got).x & ext) == 0);
     }
     return 0;
 }
@@ -314,6 +364,8 @@ TASK_0(int, runtests)
     printf("coset min with no freedom is the sign rule:  ok\n");
     if (test_matches_enumeration()) return 1;
     printf("coset min matches enumeration (3000 cases):  ok\n");
+    if (test_extended_groups()) return 1;
+    printf("coset min over skipped-level groups (600):   ok\n");
     if (test_invariance()) return 1;
     printf("every class member maps to one representative: ok\n");
     if (test_witness()) return 1;

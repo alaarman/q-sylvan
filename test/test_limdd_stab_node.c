@@ -211,16 +211,23 @@ stab_elements(LIMDD_STAB s, uint32_t var, size_t *count)
  * a wrong group to start from. `*bad` names it.
  */
 static LIMDD_STAB
-stab_checked(LIMDD_TARG t, uint32_t var, int *bad, const char *what)
+stab_checked(LIMDD_TARG t, int *bad, const char *what)
 {
     if (t == LIMDD_TERMINAL) return LIMDD_STAB_TRIVIAL;
 
+    const uint32_t var = limdd_node_var(t);
     const LIMDD low = limdd_node_low(t);
     const LIMDD high = limdd_node_high(t);
+    /* limdd_stab_of_node wants each child's group as read at var+1, i.e.
+     * extended over any levels the child edge skips. */
     const LIMDD_STAB s0 = limdd_edge_is_zero(low)  ? LIMDD_STAB_TRIVIAL
-                          : stab_checked(limdd_target(low), var + 1, bad, what);
+                          : limdd_stab_extend_skipped(
+                                stab_checked(limdd_target(low), bad, what),
+                                var + 1, limdd_level(limdd_target(low)));
     const LIMDD_STAB s1 = limdd_edge_is_zero(high) ? LIMDD_STAB_TRIVIAL
-                          : stab_checked(limdd_target(high), var + 1, bad, what);
+                          : limdd_stab_extend_skipped(
+                                stab_checked(limdd_target(high), bad, what),
+                                var + 1, limdd_level(limdd_target(high)));
     if (*bad) return LIMDD_STAB_TRIVIAL;
 
     const LIMDD_STAB s = limdd_stab_of_node(var, low, high, s0, s1);
@@ -256,7 +263,7 @@ static int
 check_node(LIMDD_TARG t, const char *what)
 {
     int bad = 0;
-    stab_checked(t, 0, &bad, what);
+    stab_checked(t, &bad, what);
     return bad;
 }
 

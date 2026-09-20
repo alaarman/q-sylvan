@@ -310,7 +310,7 @@ test_canonical_under_stabiliser(void)
         LIMDD hi = random_edge(var + 1);
         if (limdd_edge_is_zero(lo) || limdd_edge_is_zero(hi)) continue;
 
-        const LIMDD_STAB sh = limdd_edge_stab(hi);
+        const LIMDD_STAB sh = limdd_edge_stab(var + 1, hi);
         const size_t k = limdd_stab_ngens(sh);
         if (k == 0) continue;
         const LIMDD_LIM h = limdd_stab_element(sh, rnd() & (((uint64_t)1 << k) - 1));
@@ -420,7 +420,7 @@ test_edge_equality(void)
             const LIMDD_LIM g = limdd_stab_element(s, i);
             const LIMDD alt = limdd_bundle(limdd_lim_mul(limdd_label(e), g),
                                            limdd_target(e));
-            if (limdd_edge_canonical(alt) != e) {
+            if (limdd_edge_canonical(0, alt) != e) {
                 fprintf(stderr, "trial %d: a label times a stabiliser did not "
                                 "reduce back to the edge\n", trial);
                 return 1;
@@ -524,14 +524,16 @@ cmp_u64(const void *a, const void *b)
  * free. This is where that claim is actually tested rather than assumed.
  */
 static int
-check_stab_below(LIMDD_TARG t, uint32_t var)
+check_stab_below(LIMDD_TARG t)
 {
     if (t == LIMDD_TERMINAL) return 0;
 
+    /* The node's own level, not the depth reached: a child edge may skip. */
+    const uint32_t var = limdd_node_var(t);
     const LIMDD low = limdd_node_low(t);
     const LIMDD high = limdd_node_high(t);
-    if (!limdd_edge_is_zero(low) && check_stab_below(limdd_target(low), var + 1)) return 1;
-    if (!limdd_edge_is_zero(high) && check_stab_below(limdd_target(high), var + 1)) return 1;
+    if (!limdd_edge_is_zero(low) && check_stab_below(limdd_target(low))) return 1;
+    if (!limdd_edge_is_zero(high) && check_stab_below(limdd_target(high))) return 1;
 
     const unsigned nq = NQUBITS - var;
     const unsigned nb = 1u << nq;
@@ -583,7 +585,7 @@ test_stab_of_canonical_nodes(void)
     for (int trial = 0; trial < 300; trial++) {
         const LIMDD e = random_edge(0);
         if (limdd_edge_is_zero(e)) continue;
-        if (check_stab_below(limdd_target(e), 0)) {
+        if (check_stab_below(limdd_target(e))) {
             fprintf(stderr, "  (trial %d)\n", trial);
             return 1;
         }

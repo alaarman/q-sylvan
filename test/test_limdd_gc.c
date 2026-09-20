@@ -179,13 +179,14 @@ cmp_u64(const void *a, const void *b)
 }
 
 static int
-check_stab_below(LIMDD_TARG t, uint32_t var)
+check_stab_below(LIMDD_TARG t)
 {
     if (t == LIMDD_TERMINAL) return 0;
 
+    const uint32_t var = limdd_node_var(t);
     const LIMDD low = limdd_node_low(t), high = limdd_node_high(t);
-    if (!limdd_edge_is_zero(low) && check_stab_below(limdd_target(low), var + 1)) return 1;
-    if (!limdd_edge_is_zero(high) && check_stab_below(limdd_target(high), var + 1)) return 1;
+    if (!limdd_edge_is_zero(low) && check_stab_below(limdd_target(low))) return 1;
+    if (!limdd_edge_is_zero(high) && check_stab_below(limdd_target(high))) return 1;
 
     const unsigned nb = 1u << (NQUBITS - var);
     cx vec[NBASIS], img[NBASIS];
@@ -350,7 +351,7 @@ TASK_0(int, runtests)
     for (int trial = 0; trial < 25; trial++) {
         const LIMDD e = random_edge(0);
         if (limdd_edge_is_zero(e)) continue;
-        if (check_stab_below(limdd_target(e), 0)) return 1;
+        if (check_stab_below(limdd_target(e))) return 1;
     }
     printf("recycled buckets get their own group:        ok\n");
 

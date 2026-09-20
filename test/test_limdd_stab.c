@@ -311,6 +311,57 @@ VOID_TASK_2(build_shared, size_t, lo, size_t, hi)
  * reduces the same groups over several rounds.
  */
 int
+test_extend_skipped(void)
+{
+    /*
+     * Extending a group over skipped levels is a prepend with no elimination,
+     * and must give the very handle that building the same generators the
+     * slow way gives -- that is what makes the shortcut legitimate.
+     */
+    for (int trial = 0; trial < 500; trial++) {
+        const uint32_t to = rnd() % (NQUBITS + 1);
+        const uint32_t from = rnd() % (to + 1);
+
+        /* A random group living on qubits to..n-1 only. */
+        const uint64_t above = (to >= 64) ? 0 : ~((UINT64_C(1) << to) - 1);
+        const uint64_t mask = ((UINT64_C(1) << NQUBITS) - 1) & above;
+        LIMDD_LIM g[NQUBITS + 1];
+        size_t k = 0;
+        for (int attempt = 0; attempt < 32 && k + to < NQUBITS; attempt++) {
+            limdd_pauli_t p = { rnd() & mask, rnd() & mask };
+            if (limdd_pauli_is_identity(p)) continue;
+            bool ok = true;
+            for (size_t i = 0; i < k; i++) {
+                if (limdd_pauli_commutation_phase(p, limdd_lim_pauli(g[i])) != 0) ok = false;
+            }
+            if (!ok) continue;
+            const LIMDD_LIM cand = limdd_lim_make(p, (rnd() & 1) ? EVBDD_MIN_ONE : EVBDD_ONE);
+            const LIMDD_LIM negc = limdd_lim_make(p, wgt_neg(limdd_lim_weight(cand)));
+            const LIMDD_STAB sofar = limdd_stab_make(g, k);
+            if (limdd_stab_contains(sofar, cand) || limdd_stab_contains(sofar, negc)) continue;
+            g[k++] = cand;
+        }
+        const LIMDD_STAB s = limdd_stab_make(g, k);
+
+        const LIMDD_STAB fast = limdd_stab_extend_skipped(s, from, to);
+
+        for (uint32_t j = from; j < to; j++) {
+            limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+            g[k++] = limdd_lim_make(xj, EVBDD_ONE);
+        }
+        const LIMDD_STAB slow = limdd_stab_make(g, k);
+
+        test_assert(fast == slow);
+        test_assert(limdd_stab_ngens(fast) == k);
+        for (uint32_t j = from; j < to; j++) {
+            limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+            test_assert(limdd_stab_contains(fast, limdd_lim_make(xj, EVBDD_ONE)));
+        }
+    }
+    return 0;
+}
+
+int
 test_concurrent(void)
 {
     const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
@@ -345,6 +396,8 @@ TASK_0(int, runtests)
     printf("stab handle depends only on the group:   ok\n");
     if (test_random_invariance()) return 1;
     printf("stab invariant over 2000 random bases:   ok\n");
+    if (test_extend_skipped()) return 1;
+    printf("stab extension over skipped levels:      ok\n");
     if (test_concurrent()) return 1;
     printf("stab construction agrees across workers: ok\n");
 

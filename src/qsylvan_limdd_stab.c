@@ -241,6 +241,25 @@ limdd_stab_make(const LIMDD_LIM *gens, size_t ngens)
     return s;
 }
 
+LIMDD_STAB
+limdd_stab_extend_skipped(LIMDD_STAB s, uint32_t from, uint32_t to)
+{
+    assert(from <= to && to <= limdd_lims_nqubits());
+#ifndef NDEBUG
+    /* The prepend is only RREF if nothing in `s` acts below `to`. */
+    const uint64_t below = (to >= 64) ? ~UINT64_C(0) : ((UINT64_C(1) << to) - 1);
+    for (LIMDD_STAB c = s; c != LIMDD_STAB_TRIVIAL; c = stab_tail(c)) {
+        const limdd_pauli_t p = limdd_lim_pauli(stab_head(c));
+        assert(((p.x | p.z) & below) == 0 && "group acts below the level it is extended to");
+    }
+#endif
+    for (uint32_t j = to; j-- > from; ) {
+        const limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+        s = stab_cons(limdd_lim_make(xj, EVBDD_ONE), s);
+    }
+    return s;
+}
+
 bool
 limdd_stab_contains(LIMDD_STAB s, LIMDD_LIM g)
 {

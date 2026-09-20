@@ -58,6 +58,17 @@
  * level divides the label out again -- but state equality does, and without it
  * two edges for one state can differ.
  *
+ * LEVELS
+ *
+ * An edge does not know what level it is read at, and once levels can be
+ * skipped the group it is reduced against depends on that: an edge read at
+ * level k whose target sits at level k' is also fixed by X_j for every
+ * skipped j in [k, k'). So limdd_edge_canonical and limdd_edge_stab take the
+ * level. makeedge uses `var` for the edge it returns and `var + 1` for the
+ * children it was handed; a root is at 0. Too LARGE a level is caught by an
+ * assertion against the target; too SMALL a level is not detectable, and
+ * silently reduces the label at levels the edge does not own.
+ *
  * Weight normalisation follows from the rules above rather than being a rule
  * of its own: the low edge carries the identity, so the node's weights are
  * (1, scalar of the high label) and all scale sits on the parent. The LIMDD
@@ -193,18 +204,27 @@ LIMDD limdd_makeedge(uint32_t var, LIMDD low, LIMDD high);
 LIMDD_STAB limdd_node_stab(LIMDD_TARG p);
 
 /**
- * `e` with its label replaced by the least member of L * Stab(target).
+ * `e`, read at `level`, with its label replaced by the least member of
+ * L * Stab(target at level).
  *
  * Every member of that coset denotes the same state, so an edge is only
  * determined up to it; reducing makes two edges for one state identical, which
  * is what comparing states by edge equality needs. makeedge applies this to
  * everything it returns, so edges from it are already reduced.
+ *
+ * The group includes X_j for each level j the edge skips, and because the X
+ * columns lead the RREF that clears the label's X bit at every such level: a
+ * skipped level ends up carrying I or Z, with a Y folded into -i times Z.
  */
-LIMDD limdd_edge_canonical(LIMDD e);
+LIMDD limdd_edge_canonical(uint32_t level, LIMDD e);
 
-/** The group of the state an edge denotes, i.e. its target's group conjugated
- *  by its label. The zero edge has the trivial group. */
-LIMDD_STAB limdd_edge_stab(LIMDD e);
+/**
+ * The group of the state an edge read at `level` denotes: its target's group,
+ * extended over the levels the edge skips, conjugated by its label. A skipped
+ * level contributes +X_j, or -X_j where the label has Z or Y there, since
+ * that level then holds |0>-|1>. The zero edge has the trivial group.
+ */
+LIMDD_STAB limdd_edge_stab(uint32_t level, LIMDD e);
 
 #ifdef __cplusplus
 }

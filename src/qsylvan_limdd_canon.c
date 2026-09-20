@@ -129,6 +129,25 @@ limdd_get_high_determinism(void)
     return high_determinism;
 }
 
+/**
+ * The group of what `t` denotes when reached by an edge read at `level`: the
+ * node's own group, extended by X_j for each level in [level, limdd_level(t))
+ * that such an edge skips. This is the group BEFORE any label is applied,
+ * which is what makeedge's coset and limdd_stab_of_node consume; the group of
+ * an edge's actual state is limdd_edge_stab.
+ *
+ * `level` must not exceed the target's level. Reading a target from higher up
+ * than its edge really starts would add generators for levels the label
+ * already acts on, and nothing here can detect that.
+ */
+static LIMDD_STAB
+stab_at_level(uint32_t level, LIMDD_TARG t)
+{
+    const uint32_t lev = limdd_level(t);
+    assert(level <= lev && "an edge may skip levels, never climb them");
+    return limdd_stab_extend_skipped(limdd_node_stab(t), level, lev);
+}
+
 LIMDD_STAB
 limdd_node_stab(LIMDD_TARG p)
 {
@@ -143,29 +162,35 @@ limdd_node_stab(LIMDD_TARG p)
      * and a worker that arrives at a node another worker is still finishing
      * would otherwise have to wait. Both compute the same group.
      */
+    const uint32_t var = limdd_node_var(p);
     const LIMDD low = limdd_node_low(p);
     const LIMDD high = limdd_node_high(p);
+    /* Each child as read at var+1, so over any levels its edge skips. The
+     * cache stays keyed on the node alone: a node fixes its children and its
+     * level, hence what they skip. */
     const LIMDD_STAB s0 = limdd_edge_is_zero(low)  ? LIMDD_STAB_TRIVIAL
-                                                   : limdd_node_stab(limdd_target(low));
+                                                   : stab_at_level(var + 1, limdd_target(low));
     const LIMDD_STAB s1 = limdd_edge_is_zero(high) ? LIMDD_STAB_TRIVIAL
-                                                   : limdd_node_stab(limdd_target(high));
+                                                   : stab_at_level(var + 1, limdd_target(high));
 
-    const LIMDD_STAB s = limdd_stab_of_node(limdd_node_var(p), low, high, s0, s1);
+    const LIMDD_STAB s = limdd_stab_of_node(var, low, high, s0, s1);
     limdd_node_set_stab_raw(p, s);
     return s;
 }
 
 LIMDD_STAB
-limdd_edge_stab(LIMDD e)
+limdd_edge_stab(uint32_t level, LIMDD e)
 {
     if (limdd_edge_is_zero(e)) return LIMDD_STAB_TRIVIAL;
 
-    const LIMDD_STAB s = limdd_node_stab(limdd_target(e));
+    const LIMDD_STAB s = stab_at_level(level, limdd_target(e));
     const limdd_pauli_t q = limdd_lim_pauli(limdd_label(e));
     if (limdd_pauli_is_identity(q)) return s;
 
     /* L v is stabilised by L G L^-1, which for Pauli words is G up to the
-     * sign their commutation gives. */
+     * sign their commutation gives. That covers the skipped levels too: X_j
+     * anticommutes with a Z or Y at j and comes back as -X_j, which is right,
+     * since that level then holds |0>-|1>. */
     LIMDD_LIM gens[LIMDD_MAX_QUBITS];
     const size_t k = limdd_stab_ngens(s);
     for (size_t i = 0; i < k; i++) {
@@ -211,7 +236,7 @@ canonize_node(LIMDD_TARG t)
 LIMDD
 limdd_canonize(LIMDD e)
 {
-    if (limdd_edge_is_zero(e) || limdd_target(e) == LIMDD_TERMINAL) return e;
+    if (limdd_edge_is_zero(e)) return e;
 
     canon_before = limdd_countnodes(e);
 
@@ -225,7 +250,15 @@ limdd_canonize(LIMDD e)
     high_determinism = true;
     canon_in_progress = true;
 
-    const LIMDD res = lim_times_edge(limdd_label(e), canonize_node(limdd_target(e)));
+    /*
+     * The root's label goes back onto an edge makeedge had already reduced,
+     * so it is reduced once more, at level 0: otherwise the root would be the
+     * one edge in the diagram still free to carry an unreduced label. An edge
+     * straight to the terminal is not exempt, since it may skip every level.
+     */
+    const LIMDD_TARG t = limdd_target(e);
+    const LIMDD res = limdd_edge_canonical(0, t == LIMDD_TERMINAL ? e
+        : lim_times_edge(limdd_label(e), canonize_node(t)));
 
     canon_in_progress = false;
     high_determinism = saved;
@@ -250,15 +283,15 @@ limdd_canonize(LIMDD e)
 }
 
 LIMDD
-limdd_edge_canonical(LIMDD e)
+limdd_edge_canonical(uint32_t level, LIMDD e)
 {
     if (limdd_edge_is_zero(e)) return limdd_zero_edge();
     if (!high_determinism) return e;   // no groups are maintained
 
+    /* No early-out for the terminal: read above level nqubits it denotes
+     * |+>^k, whose group is anything but trivial. */
     const LIMDD_TARG t = limdd_target(e);
-    if (t == LIMDD_TERMINAL) return e;
-
-    const LIMDD_STAB s = limdd_node_stab(t);
+    const LIMDD_STAB s = stab_at_level(level, t);
     if (limdd_stab_is_trivial(s)) return e;
 
     /*
@@ -395,12 +428,12 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         const LIMDD live = lz ? high : low;
         const LIMDD_TARG v = limdd_target(live);
         const LIMDD_TARG t = intern(var, v, LIMDD_LIM_ZERO, LIMDD_TERMINAL,
-                                    high_determinism ? limdd_node_stab(v)
+                                    high_determinism ? stab_at_level(var + 1, v)
                                                      : LIMDD_STAB_TRIVIAL,
                                     LIMDD_STAB_TRIVIAL);
         const LIMDD e = limdd_bundle(
             lim_with_pauli_at(limdd_label(live), var, lz, false), t);
-        return high_determinism ? limdd_edge_canonical(e) : e;
+        return high_determinism ? limdd_edge_canonical(var, e) : e;
     }
 
     const LIMDD_TARG v0 = limdd_target(low);
@@ -419,8 +452,9 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         return limdd_bundle(a, t);
     }
 
-    const LIMDD_STAB s0 = limdd_node_stab(v0);
-    const LIMDD_STAB s1 = limdd_node_stab(v1);
+    /* The children as read at var+1, over whatever levels they skip. */
+    const LIMDD_STAB s0 = stab_at_level(var + 1, v0);
+    const LIMDD_STAB s1 = stab_at_level(var + 1, v1);
 
     /* Candidate as given. */
     LIMDD_LIM g1; bool neg1;
@@ -443,7 +477,7 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
          * the operator that negates the high branch and leaves the low one.
          */
         const LIMDD_LIM r = limdd_lim_mul(a, g1);
-        return limdd_edge_canonical(limdd_bundle(lim_with_pauli_at(r, var, false, neg1), t));
+        return limdd_edge_canonical(var, limdd_bundle(lim_with_pauli_at(r, var, false, neg1), t));
     } else {
         const LIMDD_TARG t = intern(var, v1, lab2, v0, s1, s0);
 
@@ -457,6 +491,6 @@ limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
         } else {
             r = lim_with_pauli_at(r, var, true, false);
         }
-        return limdd_edge_canonical(limdd_bundle(r, t));
+        return limdd_edge_canonical(var, limdd_bundle(r, t));
     }
 }
