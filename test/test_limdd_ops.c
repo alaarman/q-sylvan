@@ -475,6 +475,24 @@ test_ops_on_skipping_diagrams(void)
             }
         }
 
+        /* swap, which routes through cx_reversed and so through cgate twice */
+        {
+            const uint32_t a = rnd() % NQUBITS;
+            const uint32_t b = rnd() % NQUBITS;
+            cx want[NBASIS];
+            for (unsigned i = 0; i < NBASIS; i++) {
+                const unsigned ba = (i >> a) & 1, bb = (i >> b) & 1;
+                unsigned j = i & ~((1u << a) | (1u << b));
+                j |= bb << a; j |= ba << b;
+                want[j] = v[i];
+            }
+            if (compare(limdd_swap(e, a, b, NQUBITS), want, "skipping/swap", trial)) {
+                fprintf(stderr, "  (swap %u <-> %u, root level %u)\n",
+                        a, b, limdd_level(limdd_target(e)));
+                return 1;
+            }
+        }
+
         /* addition with another skipping diagram */
         {
             const LIMDD f = random_skipping_edge(0);
