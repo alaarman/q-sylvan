@@ -382,6 +382,73 @@ test_probabilities(void)
     return 0;
 }
 
+/**
+ * Deferring the canonical form and applying it later must land in the same
+ * place as never deferring it.
+ *
+ * The check is edge equality, not amplitude equality: two diagrams can denote
+ * the same state and still differ, and what is claimed here is the stronger
+ * thing -- that limdd_canonize reconstructs exactly the diagram the eager path
+ * would have built. If that holds, batching changes only when the work is
+ * done, never the answer.
+ */
+int
+test_deferred_canonization(void)
+{
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H,
+                             GATEID_S, GATEID_T };
+
+    for (int trial = 0; trial < 30; trial++) {
+        const uint64_t seed = rng_state;
+
+        /* Eager: canonical after every gate. */
+        limdd_set_canon_policy(LIMDD_CANON_ALWAYS, 0);
+        rng_state = seed;
+        LIMDD eager = limdd_all_zero_state(NQUBITS);
+        for (int step = 0; step < 25; step++) {
+            if ((rnd() % 3) == 0) {
+                const uint32_t c = rnd() % (NQUBITS - 1);
+                const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+                eager = limdd_cgate(eager, ids[rnd() % 4], UINT64_C(1) << c, t, NQUBITS);
+            } else {
+                eager = limdd_gate(eager, ids[rnd() % 6], rnd() % NQUBITS, NQUBITS);
+            }
+        }
+
+        /* Deferred: the same gates with the orbit search off, then rebuilt. */
+        limdd_set_canon_policy(LIMDD_CANON_MANUAL, 0);
+        rng_state = seed;
+        LIMDD lazy = limdd_all_zero_state(NQUBITS);
+        for (int step = 0; step < 25; step++) {
+            if ((rnd() % 3) == 0) {
+                const uint32_t c = rnd() % (NQUBITS - 1);
+                const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+                lazy = limdd_cgate(lazy, ids[rnd() % 4], UINT64_C(1) << c, t, NQUBITS);
+            } else {
+                lazy = limdd_gate(lazy, ids[rnd() % 6], rnd() % NQUBITS, NQUBITS);
+            }
+        }
+        lazy = limdd_canonize(lazy);
+
+        if (eager != lazy) {
+            cx ve[NBASIS], vl[NBASIS];
+            limdd_to_vector(eager, ve);
+            limdd_to_vector(lazy, vl);
+            bool same_state = true;
+            for (unsigned i = 0; i < NBASIS; i++)
+                if (!cx_eq(ve[i], vl[i])) same_state = false;
+            fprintf(stderr, "trial %d: eager edge %llu, deferred+canonized %llu "
+                            "(states %s)\n", trial,
+                    (unsigned long long)eager, (unsigned long long)lazy,
+                    same_state ? "agree" : "DIFFER");
+            limdd_set_canon_policy(LIMDD_CANON_ALWAYS, 0);
+            return 1;
+        }
+    }
+    limdd_set_canon_policy(LIMDD_CANON_ALWAYS, 0);
+    return 0;
+}
+
 TASK_0(int, runtests)
 {
     limdd_nodes_init(NQUBITS, 1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
@@ -398,6 +465,8 @@ TASK_0(int, runtests)
     printf("reversed controls and swap:              ok\n");
     if (test_random_circuits()) return 1;
     printf("40 random Clifford+T circuits, per gate: ok\n");
+    if (test_deferred_canonization()) return 1;
+    printf("deferred canonization equals eager:      ok\n");
     if (test_probabilities()) return 1;
     printf("norm and measurement probabilities:      ok\n");
 

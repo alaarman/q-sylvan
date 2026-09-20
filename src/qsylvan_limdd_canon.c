@@ -21,8 +21,101 @@
 
 #include "qsylvan_limdd_canon.h"
 
+/* Declared in qsylvan_limdd_ops.h, which includes this module's header, so it
+ * cannot be included from here. */
+uint64_t limdd_countnodes(LIMDD e);
+
+/** `l` composed onto `e`'s label: the same target under a composed map. */
+static inline LIMDD
+lim_times_edge(LIMDD_LIM l, LIMDD e)
+{
+    if (limdd_lim_is_identity(l)) return e;
+    if (limdd_edge_is_zero(e) || limdd_lim_is_zero(l)) return limdd_zero_edge();
+    return limdd_bundle(limdd_lim_mul(l, limdd_label(e)), limdd_target(e));
+}
+
 /* Read-mostly: set once at configuration time, then only read. */
 static bool high_determinism = true;
+
+static limdd_canon_policy_t canon_policy = LIMDD_CANON_ALWAYS;
+static uint64_t canon_interval = 0;      /* work units between rebuilds */
+static uint64_t canon_before = 0, canon_after = 0;
+
+/*
+ * The work counter, one cache line per worker.
+ *
+ * A single counter would be simpler and wrong: the natural thing to count is
+ * work done -- nodes made, operations applied -- which happens inside the
+ * parallel recursions, so every worker would read-modify-write one line
+ * millions of times and spend more on the counting than on the canonical form
+ * it is scheduling. Each worker owning a line means no invalidation at all,
+ * and the sum is taken only when the driver asks, once per gate.
+ */
+typedef struct {
+    uint64_t n;
+    char pad[SYLVAN_SHARING_PAD - sizeof(uint64_t)];
+} canon_counter_t;
+
+static canon_counter_t *canon_counters = NULL;
+static unsigned canon_nworkers = 0;
+/* A rebuild calls makeedge for every node it visits; counting those would
+ * schedule the next rebuild immediately. */
+static bool canon_in_progress = false;
+
+static void
+canon_counters_reset(void)
+{
+    for (unsigned i = 0; i < canon_nworkers; i++) canon_counters[i].n = 0;
+}
+
+void
+limdd_canon_count(void)
+{
+    if (canon_counters == NULL || canon_in_progress) return;
+    WorkerP *w = lace_get_worker();
+    /* The thread that called lace_start is not a worker; its work is counted
+     * in slot 0, which no worker uses for anything else while it runs. */
+    canon_counters[w ? (unsigned)w->worker : 0].n++;
+}
+
+void
+limdd_set_canon_policy(limdd_canon_policy_t policy, uint64_t interval)
+{
+    canon_policy = policy;
+    canon_interval = interval ? interval : 1;
+
+    if (canon_counters == NULL) {
+        canon_nworkers = (unsigned)lace_workers();
+        if (canon_nworkers == 0) canon_nworkers = 1;
+        canon_counters = (canon_counter_t *)
+            sylvan_alloc_padded(canon_nworkers * sizeof(canon_counter_t));
+        if (canon_counters == NULL) {
+            fprintf(stderr, "sylvan: out of memory for the LIMDD work counters\n");
+            exit(1);
+        }
+    }
+    canon_counters_reset();
+    /* Deferring means operations run without the orbit search. */
+    high_determinism = (policy == LIMDD_CANON_ALWAYS);
+}
+
+void
+limdd_canon_last(uint64_t *before, uint64_t *after)
+{
+    if (before) *before = canon_before;
+    if (after)  *after  = canon_after;
+}
+
+bool
+limdd_canon_due(void)
+{
+    if (canon_policy == LIMDD_CANON_ALWAYS ||
+        canon_policy == LIMDD_CANON_MANUAL) return false;
+
+    uint64_t total = 0;
+    for (unsigned i = 0; i < canon_nworkers; i++) total += canon_counters[i].n;
+    return total >= canon_interval;
+}
 
 void
 limdd_set_high_determinism(bool on)
@@ -82,6 +175,78 @@ limdd_edge_stab(LIMDD e)
                 : limdd_lim_make(limdd_lim_pauli(g), wgt_neg(limdd_lim_weight(g)));
     }
     return limdd_stab_make(gens, k);
+}
+
+/**
+ * Rebuild the node `t` and everything under it, canonically.
+ *
+ * Returns the edge makeedge produced, which carries whatever label the
+ * normalisation moved upwards; the caller composes its own label onto it. The
+ * result is memoised on the node, not the edge, because that label is the only
+ * thing two edges into one node differ by.
+ */
+static LIMDD
+canonize_node(LIMDD_TARG t)
+{
+    if (t == LIMDD_TERMINAL) return limdd_one_edge();
+
+    LIMDD res;
+    if (cache_get3(CACHE_LIMDD_CANONIZE, 0, t, 0, &res)) return res;
+
+    const LIMDD low = limdd_node_low(t);
+    const LIMDD high = limdd_node_high(t);
+
+    /* Children first: makeedge needs canonical children, and this is what
+     * makes that true rather than assumed. */
+    const LIMDD lo = limdd_edge_is_zero(low) ? limdd_zero_edge()
+        : lim_times_edge(limdd_label(low), canonize_node(limdd_target(low)));
+    const LIMDD hi = limdd_edge_is_zero(high) ? limdd_zero_edge()
+        : lim_times_edge(limdd_label(high), canonize_node(limdd_target(high)));
+
+    res = limdd_makeedge(limdd_node_var(t), lo, hi);
+    cache_put3(CACHE_LIMDD_CANONIZE, 0, t, 0, res);
+    return res;
+}
+
+LIMDD
+limdd_canonize(LIMDD e)
+{
+    if (limdd_edge_is_zero(e) || limdd_target(e) == LIMDD_TERMINAL) return e;
+
+    canon_before = limdd_countnodes(e);
+
+    /*
+     * makeedge has to do the full job here whatever the policy says, so the
+     * flag is flipped for the duration. The operation cache is cleared
+     * afterwards: its entries map edges to edges built under the OLD regime,
+     * and a hit would hand back a non-canonical result.
+     */
+    const bool saved = high_determinism;
+    high_determinism = true;
+    canon_in_progress = true;
+
+    const LIMDD res = lim_times_edge(limdd_label(e), canonize_node(limdd_target(e)));
+
+    canon_in_progress = false;
+    high_determinism = saved;
+    cache_clear();
+
+    canon_after = limdd_countnodes(res);
+    canon_counters_reset();
+
+    if (canon_policy == LIMDD_CANON_ADAPTIVE) {
+        /*
+         * Tune the interval by what the rebuild was worth. A big reduction
+         * means the diagram was carrying a lot that the canonical form would
+         * have merged, so go sooner; almost no reduction means the rebuild
+         * barely paid for itself, so wait longer. Bounded, so neither runs
+         * away.
+         */
+        const double gain = canon_after ? (double)canon_before / canon_after : 1.0;
+        if (gain > 2.0 && canon_interval > 1) canon_interval /= 2;
+        else if (gain < 1.2 && canon_interval < (1u << 20)) canon_interval *= 2;
+    }
+    return res;
 }
 
 LIMDD
@@ -211,6 +376,12 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
 LIMDD
 limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
 {
+    /* One unit of work. Counted here rather than per gate, so the trigger
+     * measures what the circuit actually costs instead of how many gates it
+     * happens to contain. This runs inside the parallel recursions, which is
+     * why the counter is per worker. */
+    limdd_canon_count();
+
     const bool lz = limdd_edge_is_zero(low);
     const bool hz = limdd_edge_is_zero(high);
     if (lz && hz) return limdd_zero_edge();

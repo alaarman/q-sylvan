@@ -111,6 +111,72 @@ void limdd_set_high_determinism(bool on);
 bool limdd_get_high_determinism(void);
 
 /**
+ * When the canonical form is applied.
+ *
+ * ALWAYS is the original behaviour: every makeedge does the coset search, so
+ * the diagram is canonical after every operation. The rest defer it, running
+ * operations with high determinism off and rebuilding later. Deferring trades
+ * a smaller number of expensive canonicalisations for a larger diagram in
+ * between -- and the diagram in between is about the size a QMDD would be,
+ * since without the orbit search nothing LIM-related merges.
+ */
+typedef enum {
+    LIMDD_CANON_ALWAYS,    /* canonicalise inside every makeedge */
+    LIMDD_CANON_MANUAL,    /* never automatically; the caller decides */
+    LIMDD_CANON_OPS,       /* when `interval` nodes have been built */
+    LIMDD_CANON_ADAPTIVE,  /* interval tuned by how much the last one helped */
+} limdd_canon_policy_t;
+
+/**
+ * Choose the policy. `interval` counts NODE-BUILDING operations (makeedge
+ * calls), not gates, so the trigger follows the work a circuit does rather
+ * than how many gates it is written with. It is the threshold for OPS and the
+ * starting threshold for ADAPTIVE, and is ignored otherwise.
+ *
+ * Anything but ALWAYS turns high determinism off for ordinary operations;
+ * limdd_canonize turns it back on for the duration of a rebuild.
+ */
+void limdd_set_canon_policy(limdd_canon_policy_t policy, uint64_t interval);
+
+/**
+ * Count one unit of work towards the next rebuild.
+ *
+ * Safe from inside a parallel operation: each worker has its own counter on
+ * its own cache line, so incrementing never invalidates another's. A single
+ * shared counter here would be read-modify-written once per unit of work by
+ * every worker, which costs far more than the rebuild it is scheduling.
+ */
+void limdd_canon_count(void);
+
+/**
+ * Sum the per-worker counters and say whether a rebuild is due.
+ *
+ * Called by whoever drives the operations, BETWEEN them -- never inside one.
+ * limdd_canonize rebuilds nodes bottom-up, so it needs a root that is not in
+ * the middle of being built. Summing here rather than at each increment is
+ * what keeps the counting off the hot path.
+ */
+bool limdd_canon_due(void);
+
+/**
+ * The canonical diagram denoting the same state as `e`.
+ *
+ * A bottom-up rebuild: each node's children are canonicalised first, then
+ * makeedge is applied to them, which is exactly the precondition makeedge
+ * needs. The label that makeedge hands back is composed into the edge above,
+ * so the state is unchanged.
+ *
+ * Building with the canonical form off and then calling this gives the SAME
+ * edge as building with it on throughout.
+ *
+ * Must be called from a Lace worker.
+ */
+LIMDD limdd_canonize(LIMDD e);
+
+/** Nodes reached by the last limdd_canonize, before and after. */
+void limdd_canon_last(uint64_t *before, uint64_t *after);
+
+/**
  * The canonical edge denoting |0>(x)low + |1>(x)high, where both are edges at
  * level `var`+1.
  *

@@ -49,6 +49,9 @@ static bool wgt_inv_caching = true;
  * hybrid rule, which compares relative to magnitude and collapses anything
  * smaller than zero_tolerance. See cmap.c.
  */
+static int canon_policy = -1;        /* -1: follow --dd */
+static uint64_t canon_interval = 100000;
+static const char *canon_name = "always";
 static double rel_tolerance = -1;
 static double zero_tolerance = 1e-14;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
@@ -76,6 +79,7 @@ static struct argp_option options[] =
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
+    {"canon", 1008, "<always|never|ops:K|adaptive>", 0, "LIMDD only: when to apply the canonical form. always (default) canonicalises inside every operation; never leaves it off; ops:K rebuilds after every K node-building operations; adaptive tunes the interval by how much the last rebuild helped.", 0},
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default=off, i.e. the historical absolute rule)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default=1e-14)", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
@@ -138,6 +142,18 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1004:
         wgt_inv_caching = false;
+        break;
+    case 1008:
+        canon_name = arg;
+        if (strcmp(arg, "always") == 0) canon_policy = LIMDD_CANON_ALWAYS;
+        else if (strcmp(arg, "never") == 0) canon_policy = LIMDD_CANON_MANUAL;
+        else if (strcmp(arg, "adaptive") == 0) canon_policy = LIMDD_CANON_ADAPTIVE;
+        else if (strncmp(arg, "ops:", 4) == 0) {
+            canon_policy = LIMDD_CANON_OPS;
+            canon_interval = (uint64_t) atoll(arg + 4);
+            if (canon_interval == 0) argp_error(state, "--canon=ops:K needs K > 0");
+        }
+        else argp_error(state, "unknown canonization policy '%s'", arg);
         break;
     case 1006:
         rel_tolerance = atof(arg);
@@ -231,6 +247,7 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"tolerance\": %.5e,\n", tolerance);
     fprintf(stream, "    \"wgt_inv_caching\": %d,\n", wgt_inv_caching);
     fprintf(stream, "    \"dd\": \"%s\",\n", dd_kind_name);
+    fprintf(stream, "    \"canon\": \"%s\",\n", canon_name);
     fprintf(stream, "    \"merging_rule\": \"%s\",\n",
             rel_tolerance >= 0 ? "hybrid" : "absolute");
     fprintf(stream, "    \"rel_tol\": %.5e,\n", rel_tolerance);
@@ -500,6 +517,10 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
         else if (op->type == op_measurement) {
             break;   /* the probability is taken from the final state below */
         }
+        /* Between operations, never inside one: limdd_canonize rebuilds
+         * nodes bottom-up and needs a root that is not half-built. */
+        if (limdd_canon_due()) state = limdd_canonize(state);
+
         if (count_nodes) {
             const uint64_t c = limdd_countnodes(state);
             if (c > stats.max_nodes) stats.max_nodes = c;
@@ -518,6 +539,10 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
             CALL(limdd_gc);
         }
     }
+
+    /* A final rebuild, so a deferred run is compared in its canonical form
+     * rather than mid-batch. */
+    if (!limdd_get_high_determinism()) state = limdd_canonize(state);
 
     stats.simulation_time = wctime() - t_start;
     stats.norm = limdd_norm_squared(state, n);
@@ -627,7 +652,13 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
     if (dd_kind != DD_QMDD) {
         /* Inside the task: llmsset claims buckets from a per-worker region,
          * and the thread that called lace_start is not a worker. */
-        limdd_set_high_determinism(dd_kind == DD_LIMDD);
+        /* --canon wins; otherwise --dd picks: limdd canonicalises eagerly,
+         * limdd-heur never does. */
+        if (canon_policy >= 0)
+            limdd_set_canon_policy((limdd_canon_policy_t) canon_policy, canon_interval);
+        else
+            limdd_set_canon_policy(dd_kind == DD_LIMDD ? LIMDD_CANON_ALWAYS
+                                                       : LIMDD_CANON_MANUAL, 0);
         /*
          * Four tables plus a word per node bucket, so the node table's own
          * size is not a safe default here: at 2^25 that is over 2 GB before a

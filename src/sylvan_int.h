@@ -122,6 +122,7 @@ static const uint64_t CACHE_EVBDD_IS_ORDERED         = (77LL<<40);
 static const uint64_t CACHE_LIMDD_PLUS               = (80LL<<40);
 static const uint64_t CACHE_LIMDD_GATE               = (81LL<<40);
 static const uint64_t CACHE_LIMDD_CGATE              = (82LL<<40);
+static const uint64_t CACHE_LIMDD_CANONIZE           = (83LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);
