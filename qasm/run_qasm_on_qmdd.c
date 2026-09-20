@@ -43,6 +43,14 @@ static double tolerance = 1e-14;
 static int wgt_table_type = COMP_HASHMAP;
 static int wgt_norm_strat = NORM_L2;
 static bool wgt_inv_caching = true;
+/*
+ * The merging rule: when are two edge weights the same table entry. Below
+ * zero keeps the historical absolute rule; a relative tolerance selects the
+ * hybrid rule, which compares relative to magnitude and collapses anything
+ * smaller than zero_tolerance. See cmap.c.
+ */
+static double rel_tolerance = -1;
+static double zero_tolerance = 1e-14;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
@@ -68,6 +76,8 @@ static struct argp_option options[] =
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
+    {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default=off, i.e. the historical absolute rule)", 0},
+    {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default=1e-14)", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
     {0, 0, 0, 0, 0, 0}
 };
@@ -128,6 +138,12 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1004:
         wgt_inv_caching = false;
+        break;
+    case 1006:
+        rel_tolerance = atof(arg);
+        break;
+    case 1007:
+        zero_tolerance = atof(arg);
         break;
     case 'd':
         dd_kind_name = arg;
@@ -215,6 +231,10 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"tolerance\": %.5e,\n", tolerance);
     fprintf(stream, "    \"wgt_inv_caching\": %d,\n", wgt_inv_caching);
     fprintf(stream, "    \"dd\": \"%s\",\n", dd_kind_name);
+    fprintf(stream, "    \"merging_rule\": \"%s\",\n",
+            rel_tolerance >= 0 ? "hybrid" : "absolute");
+    fprintf(stream, "    \"rel_tol\": %.5e,\n", rel_tolerance);
+    fprintf(stream, "    \"zero_tol\": %.5e,\n", zero_tolerance);
     fprintf(stream, "    \"wgt_norm_strat\": %d,\n", wgt_norm_strat);
     fprintf(stream, "    \"wgt_type\": %d,\n", wgt_table_type);
     fprintf(stream, "    \"min_node_tab_size\": %" PRId64 ",\n", min_tablesize);
@@ -657,6 +677,11 @@ int main(int argc, char *argv[])
     sylvan_init_package();
     qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
     wgt_set_inverse_chaching(wgt_inv_caching);
+
+    /* After qsylvan_init_simulator, which creates the weight table with the
+     * default absolute rule; this switches it before any weight is stored. */
+    if (rel_tolerance >= 0)
+        sylvan_edge_weights_set_hybrid_tolerance(rel_tolerance, zero_tolerance);
 
     RUN(run_simulation, circuit);
 
