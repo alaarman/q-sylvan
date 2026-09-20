@@ -529,6 +529,74 @@ test_ops_on_skipping_diagrams(void)
 }
 
 /**
+ * A random CANONICAL edge at `var`, built through makeedge.
+ *
+ * Different in kind from random_skipping_edge above, which uses makenode and
+ * so produces shapes the canonical form would never build. This one skips
+ * levels exactly where the rule says it should, which is what a gate meets in
+ * a real circuit.
+ */
+static LIMDD
+random_canonical_edge(uint32_t var)
+{
+    if (var == NQUBITS)
+        return limdd_bundle(limdd_lim_make(limdd_pauli_identity(), random_scalar()),
+                            LIMDD_TERMINAL);
+    LIMDD lo = random_canonical_edge(var + 1);
+    LIMDD hi;
+    const unsigned dice = rnd() % 8;
+    if (dice < 3) hi = lo;
+    else if (dice < 6 && !limdd_edge_is_zero(lo))
+        hi = limdd_bundle(limdd_lim_mul(random_label_above(var + 1), limdd_label(lo)),
+                          limdd_target(lo));
+    else hi = random_canonical_edge(var + 1);
+    if ((rnd() % 12) == 0) hi = limdd_zero_edge();
+    return limdd_makeedge(var, lo, hi);
+}
+
+int
+test_gates_on_canonical_skipping(void)
+{
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H, GATEID_S, GATEID_T };
+    for (int trial = 0; trial < 120; trial++) {
+        const LIMDD e = random_canonical_edge(0);
+        if (limdd_edge_is_zero(e)) continue;
+        cx v[NBASIS];
+        limdd_to_vector(e, v);
+
+        for (uint32_t q = 0; q < NQUBITS; q++) {
+            for (unsigned gi = 0; gi < 6; gi++) {
+                cx want[NBASIS];
+                memcpy(want, v, sizeof(want));
+                dense_gate(want, ids[gi], q, 0);
+                char w[80];
+                snprintf(w, sizeof w, "canonical-skip gate %u on qubit %u", ids[gi], q);
+                if (compare(limdd_gate(e, ids[gi], q, NQUBITS), want, w, trial)) {
+                    fprintf(stderr, "  (root target %llu at level %u, %llu nodes)\n",
+                            (unsigned long long)limdd_target(e),
+                            limdd_level(limdd_target(e)),
+                            (unsigned long long)limdd_countnodes(e));
+                    return 1;
+                }
+            }
+        }
+
+        /* and a controlled gate, whose recursion must stop at a skipped control */
+        const uint32_t c = rnd() % (NQUBITS - 1);
+        const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+        cx want[NBASIS];
+        memcpy(want, v, sizeof(want));
+        dense_gate(want, GATEID_X, t, UINT64_C(1) << c);
+        if (compare(limdd_cgate(e, GATEID_X, UINT64_C(1) << c, t, NQUBITS),
+                    want, "canonical-skip cnot", trial)) {
+            fprintf(stderr, "  (control %u, target %u)\n", c, t);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Deferring the canonical form and applying it later must land in the same
  * place as never deferring it.
  *
@@ -615,6 +683,8 @@ TASK_0(int, runtests)
     printf("deferred canonization equals eager:      ok\n");
     if (test_probabilities()) return 1;
     printf("norm and measurement probabilities:      ok\n");
+    if (test_gates_on_canonical_skipping()) return 1;
+    printf("gates on canonical skipping diagrams:    ok\n");
     if (test_ops_on_skipping_diagrams()) return 1;
     printf("every op on hand-built skipping diagrams: ok\n");
 

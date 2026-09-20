@@ -591,6 +591,72 @@ test_equal_states_equal_edges(void)
     return 0;
 }
 
+/* --- canonicity as a total function -------------------------------------- */
+
+/**
+ * Rebuild a diagram top-down from its amplitudes alone.
+ *
+ * `amps` holds the exact EVBDD_WGT of every basis state, taken straight from
+ * limdd_eval, so no value is rounded on the way out and back and the test
+ * works under either weight backend.
+ */
+static LIMDD
+build_from_amps(const EVBDD_WGT *amps, uint32_t level, uint64_t prefix)
+{
+    if (level == NQUBITS) {
+        const EVBDD_WGT w = amps[prefix];
+        if (w == EVBDD_ZERO) return limdd_zero_edge();
+        return limdd_bundle(limdd_lim_make(limdd_pauli_identity(), w), LIMDD_TERMINAL);
+    }
+    const LIMDD lo = build_from_amps(amps, level + 1, prefix);
+    const LIMDD hi = build_from_amps(amps, level + 1, prefix | (UINT64_C(1) << level));
+    return limdd_makeedge(level, lo, hi);
+}
+
+int
+test_canonical_from_amplitudes(void)
+{
+    /*
+     * The strong form of canonicity: the diagram is a function of the STATE.
+     * test_equal_states_equal_edges can only compare the diagrams that happen
+     * to coincide in a random pool; this reconstructs every diagram from its
+     * amplitude vector, through a completely different sequence of makeedge
+     * calls, and demands the very same root edge back.
+     *
+     * It is also the sharpest test of the skip rule, because the rebuild
+     * knows nothing about which levels the original skipped -- it offers
+     * every level to makeedge and only the rule decides.
+     */
+    bool bits[NQUBITS];
+    for (int trial = 0; trial < 1500; trial++) {
+        const LIMDD e = random_edge(0);
+
+        EVBDD_WGT amps[NBASIS];
+        for (unsigned i = 0; i < NBASIS; i++) {
+            for (int k = 0; k < NQUBITS; k++) bits[k] = (i >> k) & 1;
+            amps[i] = limdd_eval(e, bits, NQUBITS);
+        }
+
+        const LIMDD again = build_from_amps(amps, 0, 0);
+        if (again != e) {
+            fprintf(stderr, "trial %d: rebuilding from amplitudes gave edge %llu, "
+                            "not %llu\n", trial,
+                    (unsigned long long)again, (unsigned long long)e);
+            fprintf(stderr, "  original: target %llu level %u label=",
+                    (unsigned long long)limdd_target(e),
+                    limdd_edge_is_zero(e) ? 99 : limdd_level(limdd_target(e)));
+            limdd_lim_fprint(stderr, limdd_label(e));
+            fprintf(stderr, "\n  rebuilt:  target %llu level %u label=",
+                    (unsigned long long)limdd_target(again),
+                    limdd_edge_is_zero(again) ? 99 : limdd_level(limdd_target(again)));
+            limdd_lim_fprint(stderr, limdd_label(again));
+            fprintf(stderr, "\n");
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* --- the cached stabiliser groups ---------------------------------------- */
 
 static void
@@ -760,6 +826,8 @@ TASK_0(int, runtests)
     printf("the skip rule: |+>,|-> skip; i, zero do not:   ok\n");
     if (test_edge_equality()) return 1;
     printf("a label times a stabiliser reduces back:      ok\n");
+    if (test_canonical_from_amplitudes()) return 1;
+    printf("rebuilding from amplitudes gives one edge:    ok\n");
     if (test_equal_states_equal_edges()) return 1;
     printf("equal states have equal edges:                ok\n");
     if (test_stab_of_canonical_nodes()) return 1;
