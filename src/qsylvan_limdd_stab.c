@@ -577,9 +577,25 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
         return limdd_stab_make(out, nout);
     }
 
-    /* --- diagonal part: the subgroup intersection --- */
+    /*
+     * --- diagonal part: the subgroup intersection ---
+     *
+     * Skipped outright when either side is trivial, and that is exact rather
+     * than a heuristic. The diagonal part is the set of elements of s0 whose
+     * word lies in the span of s1. With s0 trivial there is nothing to draw
+     * from; with s1 trivial its span is {0}, which admits only the identity
+     * word, and no stabiliser group carries a non-identity element with the
+     * identity word. Either way the intersection is empty.
+     *
+     * Worth a branch because it is the common case: on the circuits measured
+     * 75% to 100% of nodes have a trivial group, so their parents take this
+     * path and never enter the O(n^3) elimination. It also matches the bit
+     * that limdd_makenode_ex records in the node, which is derived from the
+     * same argument.
+     */
     LIMDD_LIM common[LIMDD_MAX_QUBITS];
-    const size_t ncommon = intersect_gens(s0, s1, common);
+    const size_t ncommon = (limdd_stab_is_trivial(s0) || limdd_stab_is_trivial(s1))
+                         ? 0 : intersect_gens(s0, s1, common);
 
     for (size_t i = 0; i < ncommon; i++) {
         const LIMDD_LIM a = common[i];
