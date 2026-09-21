@@ -20,6 +20,17 @@
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_gc.h"
+
+/*
+ * What the last collection left behind. A collection is expensive -- it
+ * begins by clearing the operation cache, so the recursion loses every
+ * memoised result and redoes the work, which allocates again. If the previous
+ * one freed almost nothing, running another immediately is a loop that gets
+ * slower each time round rather than a garbage collector.
+ */
+static _Atomic(uint64_t) limdd_gc_floor_lim = 0;
+static _Atomic(uint64_t) limdd_gc_floor_wgt = 0;
+
 #include "sylvan_refs.h"
 
 static refs_table_t limdd_protected;
@@ -326,6 +337,12 @@ VOID_TASK_0(limdd_gc_go)
     limdd_gc_rehash_lims();
     limdd_gc_rehash_stabs();
     limdd_gc_rehash_nodes();
+
+    /* Remember what is left, so a collection that freed nothing is not
+     * immediately repeated. The weight table has also just doubled if it was
+     * collected, so its floor is measured against the new size. */
+    limdd_gc_floor_lim = limdd_lim_table_count();
+    limdd_gc_floor_wgt = wgt_table_entries_estimate();
 }
 
 static _Atomic(int) limdd_gc_in_progress = 0;
@@ -358,11 +375,23 @@ VOID_TASK_IMPL_0(limdd_gc)
  * gate on a large diagram can mint millions of intermediates, so a
  * between-gate check cannot intervene in the only place that matters.
  */
+/** Wanted when a table is nearly full AND the last collection left room. */
+static bool
+table_wants_gc(uint64_t count, uint64_t size, uint64_t floor)
+{
+    if (size == 0) return false;
+    if (count <= size - (size >> 3)) return false;      /* under 7/8 full */
+    /* Re-collect only once a quarter of what the last one freed is used up
+     * again. When it freed nothing the condition never holds, and the caller
+     * runs out of table and reports it rather than spinning. */
+    return count > floor + ((size - floor) >> 2);
+}
+
 bool
 limdd_gc_wanted(void)
 {
-    const size_t lim_sz = limdd_lim_table_size();
-    const uint64_t wgt_sz = sylvan_get_edge_weight_table_size();
-    return (lim_sz && limdd_lim_table_count() > lim_sz - (lim_sz >> 3))
-        || (wgt_sz && wgt_table_entries_estimate() > wgt_sz - (wgt_sz >> 3));
+    return table_wants_gc(limdd_lim_table_count(), limdd_lim_table_size(),
+                          limdd_gc_floor_lim)
+        || table_wants_gc(wgt_table_entries_estimate(),
+                          sylvan_get_edge_weight_table_size(), limdd_gc_floor_wgt);
 }

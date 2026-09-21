@@ -753,16 +753,16 @@ int main(int argc, char *argv[])
      * weights near 1, and the paper's numbers were taken that way.
      */
     /*
-     * A LIMDD's weight table never grows, so allocate the whole of it.
+     * Allocate the whole weight table up front.
      *
-     * The table starts at min_wgt_tab_size and is enlarged by the EVBDD
-     * weight table collector, which runs from evbdd_makenode. A LIMDD does
-     * not go through that path -- and could not, since the collector walks
-     * EVBDD edges and cannot see a weight that lives inside a LIM -- so the
-     * table stays at its initial size however large a maximum is asked for,
-     * and a circuit that outgrows it dies with "Amplitude table full" rather
-     * than growing. Starting at the maximum is what --wgt-tab-size means for
-     * a LIMDD.
+     * limdd_gc does collect it now, and wgt_table_gc_init_new doubles it
+     * when it runs, so in principle --wgt-tab-size could be a maximum to
+     * grow towards. In practice growth never gets the chance: a collection
+     * can only happen between gates, and one gate on a large diagram mints
+     * millions of weights, so the table fills mid-gate and dies before
+     * anything can enlarge it. Measured -- starting at 2^23 and growing,
+     * rand_n20_d700 fails at every maximum up to 2^28; starting at 2^24 it
+     * finishes in 53s.
      */
     if (dd_kind != DD_QMDD) {
         min_wgt_tab_size = max_wgt_tab_size;
