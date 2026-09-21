@@ -23,9 +23,14 @@
  * laid out exactly like an EVBDD edge with the edge weight generalised to a
  * whole LIM:
  *
- *      1 bit  unused
- *     23 bits index of the LIM labelling this edge
- *     40 bits index of the node this edge points at
+ *     32 bits index of the LIM labelling this edge
+ *     32 bits index of the node this edge points at
+ *
+ * Split evenly so that neither field is the binding constraint: 2^32 nodes
+ * is a 64 GB table and 2^32 LIMs likewise, so memory runs out long before
+ * either index does. The previous 23/40 split made the LIM index the limit
+ * at 8.4M, which a 20-qubit, 700-gate circuit reached while its node table
+ * was an eighth full.
  *
  * Interning the LIM (see qsylvan_limdd_lim.h) is what makes that fit: the
  * scalar and the Pauli word together are three machine words and could never
@@ -35,15 +40,19 @@
  *
  * A node is 16 bytes, one llmsset bucket, as two 64-bit words:
  *
- *   low word:   1 bit  unused
+ *   low word:   1 bit  set iff this node's stabiliser group is trivial
  *              16 bits variable (qubit) of this node
  *               1 bit  set iff the low edge is the zero map
- *               6 bits unused
- *              40 bits low edge target
+ *              14 bits unused
+ *              32 bits low edge target
  *
- *   high word:  1 bit  mark, for garbage collection
- *              23 bits LIM labelling the high edge
- *              40 bits high edge target
+ *   high word: 32 bits LIM labelling the high edge
+ *              32 bits high edge target
+ *
+ * There is no mark bit: collection marks in llmsset's own bitmap, never in
+ * the bucket. Nothing reads a LIMDD node through EVBDD's accessors or the
+ * reverse -- they do not even share a table -- so the two layouts need not
+ * agree, and this one uses every bit of the high word.
  *
  * Only the high edge carries a LIM. That is not a space trick, it is what
  * LIMDD normalisation gives you: the low edge's label is factored out to the
@@ -136,7 +145,7 @@ typedef uint64_t LIMDD_TARG;
  * table whose indices they bound. */
 
 /** Width of the target field of an edge. */
-#define LIMDD_TARG_BITS 40
+#define LIMDD_TARG_BITS 32
 
 #define LIMDD_TARG_MASK (((uint64_t)1 << LIMDD_TARG_BITS) - 1)
 #define LIMDD_TARG_MAX  LIMDD_TARG_MASK

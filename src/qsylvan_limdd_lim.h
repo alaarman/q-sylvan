@@ -101,7 +101,7 @@ extern LIMDD_LIM LIMDD_LIM_IDENTITY;
  * layout because it bounds this table: an index at or above LIMDD_LIM_MAX
  * cannot be put in an edge at all.
  */
-#define LIMDD_LIM_BITS  23
+#define LIMDD_LIM_BITS  32
 #define LIMDD_LIM_MAX   ((uint64_t)1 << LIMDD_LIM_BITS)
 
 extern LIMDD_LIM LIMDD_LIM_ZERO;

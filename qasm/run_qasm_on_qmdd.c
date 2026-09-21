@@ -680,14 +680,20 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
         if (!node_tab_size_set && lt > (1LL<<23)) lt = 1LL<<23;
 
         /*
-         * The LIM table is bounded by what an EDGE can address, not by
-         * memory: an edge holds the LIM index in LIMDD_LIM_BITS bits, so
-         * beyond that the index does not fit and the table cannot be used
-         * however much room it has. The node table is bounded by the 40-bit
-         * target field instead, and the Pauli and stabiliser tables are
-         * referenced by full 64-bit words, so only this one needs capping.
+         * The LIM table wants to be several times the node table, not equal
+         * to it. Every live node holds one label, but the arithmetic mints
+         * far more: each limdd_lim_mul as a label is pushed through a node,
+         * each limdd_scale in the four-way gate mix, each inverse. Those are
+         * dead as soon as the operation ends but occupy buckets until the
+         * next collection, and measured between collections the table runs
+         * about eight times the node count. At parity a 20-qubit, 700-gate
+         * circuit filled the LIM table with its node table an eighth used.
+         *
+         * Four times, capped by what an edge can address -- beyond
+         * LIMDD_LIM_MAX the index does not fit in an edge however much room
+         * the table has.
          */
-        size_t lim_t = lt;
+        size_t lim_t = lt << 2;
         if (lim_t > LIMDD_LIM_MAX) lim_t = LIMDD_LIM_MAX;
 
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when

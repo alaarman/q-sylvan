@@ -56,8 +56,8 @@ static LIMDD one_edge  = 0;
 static const uint64_t limdd_stab_triv_mask = UINT64_C(0x8000000000000000);
 static const uint64_t limdd_var_mask      = UINT64_C(0x7fff800000000000); // bits 47..62
 static const uint64_t limdd_low_zero_mask = UINT64_C(0x0000400000000000); // bit 46
-static const uint64_t limdd_lim_mask      = UINT64_C(0x7fffff0000000000); // bits 40..62
-static const uint64_t limdd_targ_mask     = UINT64_C(0x000000ffffffffff); // bits 0..39
+static const uint64_t limdd_lim_mask      = UINT64_C(0xffffffff00000000); // bits 32..63
+static const uint64_t limdd_targ_mask     = UINT64_C(0x00000000ffffffff); // bits 0..31
 
 #define LIMDD_VAR_SHIFT 47
 
@@ -199,7 +199,7 @@ limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
      * multiply the parent edge by.
      */
     assert(low_lim == LIMDD_LIM_IDENTITY || low_lim == LIMDD_LIM_ZERO);
-    assert(high_lim < LIMDD_LIM_MAX && "LIM table exceeds the 23-bit edge field");
+    assert(high_lim < LIMDD_LIM_MAX && "LIM table exceeds the edge's LIM field");
 
     /*
      * A zero edge denotes the zero vector whatever it points at, so the target
