@@ -447,6 +447,91 @@ limdd_countnodes(LIMDD e)
     return n;
 }
 
+/* --- what an inline LIM encoding would have to hold ----------------------- */
+
+typedef struct {
+    uint64_t nodes[64];        /* nodes at each level */
+    uint64_t support_sum[64];  /* summed Pauli support of their high LIMs */
+    uint64_t support_max[64];
+    uint64_t by_support[65];   /* distinct LIMs with a given support */
+    LIMDD_LIM *lims;           /* distinct high LIMs seen */
+    size_t    nlims, caplims;
+} lim_stats_t;
+
+static void
+lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
+{
+    if (limdd_edge_is_zero(e)) return;
+    const LIMDD_TARG t = limdd_target(e);
+    if (t == LIMDD_TERMINAL) return;
+    if (!seen_add(s, t)) return;
+
+    const uint32_t var = limdd_node_var(t);
+    const LIMDD high = limdd_node_high(t);
+    st->nodes[var]++;
+
+    if (!limdd_edge_is_zero(high)) {
+        const LIMDD_LIM l = limdd_label(high);
+        const limdd_pauli_t p = limdd_lim_pauli(l);
+        const uint64_t sup = (uint64_t)popcnt_uint64(p.x | p.z);
+        st->support_sum[var] += sup;
+        if (sup > st->support_max[var]) st->support_max[var] = sup;
+
+        bool fresh = true;
+        for (size_t i = 0; i < st->nlims; i++) if (st->lims[i] == l) { fresh = false; break; }
+        if (fresh) {
+            if (st->nlims == st->caplims) {
+                st->caplims = st->caplims ? st->caplims * 2 : 1024;
+                st->lims = realloc(st->lims, st->caplims * sizeof(LIMDD_LIM));
+            }
+            st->lims[st->nlims++] = l;
+            st->by_support[sup <= 64 ? sup : 64]++;
+        }
+    }
+
+    lim_stats_rec(limdd_node_low(t), s, st, nqubits);
+    lim_stats_rec(high, s, st, nqubits);
+}
+
+void
+limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
+{
+    seen_t s;
+    s.cap = 1;
+    while (s.cap < 4 * (limdd_node_table_count() + 8)) s.cap <<= 1;
+    s.slot = calloc(s.cap, sizeof(LIMDD_TARG));
+    if (s.slot == NULL) return;
+    s.used = 0;
+
+    lim_stats_t st;
+    memset(&st, 0, sizeof st);
+    lim_stats_rec(e, &s, &st, nqubits);
+
+    fprintf(out, "# level nodes mean_support max_support dense_bits_needed\n");
+    uint64_t tot = 0, fit23 = 0;
+    for (uint32_t v = 0; v < nqubits; v++) {
+        if (st.nodes[v] == 0) continue;
+        /* A high edge is read at v+1, so its Pauli is confined to v+1..n-1. */
+        const uint32_t dense = 2u * (nqubits - v - 1);
+        fprintf(out, "LIMSTAT %u %llu %.2f %llu %u\n", v,
+                (unsigned long long)st.nodes[v],
+                (double)st.support_sum[v] / (double)st.nodes[v],
+                (unsigned long long)st.support_max[v], dense);
+        tot += st.nodes[v];
+        if (dense <= 23) fit23 += st.nodes[v];
+    }
+    fprintf(out, "LIMSTAT-TOTAL nodes=%llu fit_dense_23bit=%llu (%.1f%%) distinct_high_lims=%zu\n",
+            (unsigned long long)tot, (unsigned long long)fit23,
+            tot ? 100.0 * (double)fit23 / (double)tot : 0.0, st.nlims);
+    fprintf(out, "# distinct high LIMs by Pauli support\n");
+    for (unsigned k = 0; k <= 64; k++) {
+        if (st.by_support[k]) fprintf(out, "LIMSUP %u %llu\n", k, (unsigned long long)st.by_support[k]);
+    }
+
+    free(st.lims);
+    free(s.slot);
+}
+
 LIMDD
 limdd_all_zero_state(uint32_t nqubits)
 {

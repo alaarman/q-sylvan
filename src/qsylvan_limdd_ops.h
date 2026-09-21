@@ -169,6 +169,15 @@ double limdd_norm_squared(LIMDD e, uint32_t nqubits);
  */
 uint64_t limdd_countnodes(LIMDD e);
 
+/**
+ * Report, to `out`, how much of a LIM an inline encoding would have to hold:
+ * per level the node count and the Pauli support of the high-edge label, and
+ * the distribution of distinct labels by support. A high edge is read one
+ * level below its node, so its Pauli is confined to that level and below --
+ * the deeper the node, the fewer bits it can possibly need.
+ */
+void limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits);
+
 /** The all-zero basis state on `nqubits` qubits. */
 LIMDD limdd_all_zero_state(uint32_t nqubits);
 

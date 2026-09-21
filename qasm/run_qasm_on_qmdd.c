@@ -56,6 +56,7 @@ static double rel_tolerance = -1;
 static double zero_tolerance = 1e-14;
 static bool zero_tolerance_set = false;   /* did the user ask for one? */
 static bool node_tab_size_set = false;    /* was --node-tab-size given? */
+static bool lim_stats = false;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
@@ -73,6 +74,7 @@ static struct argp_option options[] =
     {"tol", 't', "<tolerance>", 0, "Tolerance for deciding edge weights equal (default=1e-14)", 0},
     {"json", 'j', "<filename>", 0, "Write stats to given filename as json", 0},
     {"count-nodes", 'c', 0, 0, "Track maximum number of nodes", 0},
+    {"lim-stats", 1009, 0, 0, "For limdd: report the Pauli support of the high-edge LIM per level, to size an inline encoding", 0},
     {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
     {"state-vector", 'v', 0, 0, "Also output the complete state vector", 0},
@@ -118,6 +120,9 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 'c':
         count_nodes = true;
+        break;
+    case 1009:
+        lim_stats = true;
         break;
     case 'q':
         count_qisq2_size = true;
@@ -567,6 +572,7 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
                                ? (stats.norm - p1) / stats.norm : 1e10;
     }
     stats.final_nodes = limdd_countnodes(state);
+    if (lim_stats) limdd_report_lim_stats(stderr, state, n);
     limdd_unprotect(&state);
     return 0;
 }
