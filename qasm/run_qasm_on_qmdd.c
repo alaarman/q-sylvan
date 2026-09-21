@@ -756,7 +756,27 @@ int main(int argc, char *argv[])
     }
 
     if (dd_kind != DD_QMDD && rel_tolerance < 0) {
-        rel_tolerance = tolerance;
+        /*
+         * 1e-12, not the storage tolerance.
+         *
+         * A LIMDD's whole claim is that a stabiliser state costs O(n) nodes,
+         * and that holds only if subdiagrams denoting the same state actually
+         * merge. Their scalars are reached by different multiplication orders,
+         * so they differ in the last bits, and at 1e-14 those differences
+         * survive: a 20-qubit, 400-gate Clifford circuit -- no T gates at all
+         * -- came out as 7816 nodes with 92% of the stabiliser groups trivial,
+         * where exact arithmetic gives 19 nodes and none trivial. One decade
+         * coarser absorbs the accumulated rounding and reproduces the exact
+         * diagram node for node on 18 of 19 circuits measured, norms and
+         * probabilities matching throughout.
+         *
+         * Erring coarse is the safe direction here, and measurably so: across
+         * that suite 1e-12 never produced FEWER nodes than exact arithmetic,
+         * which is what over-merging would look like. It is also why this does
+         * not track -t, whose default of 1e-14 is a storage tolerance for
+         * weights near 1 rather than a statement about accumulated error.
+         */
+        rel_tolerance = 1e-12;
         /*
          * And no zero-collapse, unless asked for. The hybrid rule normally
          * rounds anything tiny down to exactly zero, which suits a QMDD,
