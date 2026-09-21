@@ -510,8 +510,9 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
 {
     const BDDVAR n = circuit->qreg_size;
     if (n > LIMDD_MAX_QUBITS) {
-        fprintf(stderr, "limdd: %u qubits, but a Pauli word is two uint64 so "
-                        "the limit is %d\n", n, LIMDD_MAX_QUBITS);
+        fprintf(stderr, "limdd: %u qubits, but a Pauli word holds one bit per "
+                        "qubit per component so the limit is %d\n",
+                n, LIMDD_MAX_QUBITS);
         return 1;
     }
 

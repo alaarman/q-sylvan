@@ -288,8 +288,13 @@ LIMDD_LIM
 limdd_stab_element(LIMDD_STAB s, uint64_t k)
 {
     LIMDD_LIM acc = LIMDD_LIM_IDENTITY;
-    for (size_t i = 0; s != LIMDD_STAB_TRIVIAL; i++, s = stab_tail(s)) {
-        if ((k >> i) & 1) acc = limdd_lim_mul(acc, stab_head(s));
+    /* Consume k rather than index it. The loop runs once per generator, not
+     * once per set bit, so `k >> i` was evaluated for every i below the
+     * generator count -- undefined once a group can have 64 or more, which a
+     * wider Pauli word allows. Shifting k down is defined at any width and
+     * needs no bound on the caller. */
+    for (; s != LIMDD_STAB_TRIVIAL; s = stab_tail(s), k >>= 1) {
+        if (k & 1) acc = limdd_lim_mul(acc, stab_head(s));
     }
     return acc;
 }

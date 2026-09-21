@@ -158,8 +158,8 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
 
     /*
      * cache_get3 ORs its second argument into the operation id, so a LIMDD
-     * edge cannot go there: its LIM index occupies bits 40..62, exactly where
-     * the id lives, and operations would collide in each other's entries. The
+     * edge cannot go there: its LIM index occupies bits 32..63, which covers
+     * where the id lives, and operations would collide in each other's entries. The
      * two edges therefore go in the key slots, which are compared at full
      * width, and `var` -- small -- rides in the id.
      *
@@ -238,7 +238,7 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
      * neighbours. See the note in limdd_plus about why they cannot go in the
      * second argument.
      */
-    assert(gateid < (1u << 20) && target < 64);
+    assert(gateid < (1u << 20) && target < LIMDD_MAX_QUBITS);
     const uint64_t opid = CACHE_LIMDD_GATE | ((uint64_t)gateid << 20) | target;
 
     LIMDD res;
@@ -316,7 +316,7 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     assert(var < nqubits);
 
     /* The label stays on, for the same reason as in limdd_gate. */
-    assert(gateid < (1u << 20) && target < 64);
+    assert(gateid < (1u << 20) && target < LIMDD_MAX_QUBITS);
     const uint64_t opid = CACHE_LIMDD_CGATE | ((uint64_t)gateid << 20) | target;
 
     LIMDD res;
@@ -450,12 +450,18 @@ limdd_countnodes(LIMDD e)
 /* --- what an inline LIM encoding would have to hold ----------------------- */
 
 typedef struct {
-    uint64_t nodes[64];        /* nodes at each level */
-    uint64_t support_sum[64];  /* summed Pauli support of their high LIMs */
-    uint64_t support_max[64];
-    uint64_t by_support[65];   /* distinct LIMs with a given support */
+    /* Indexed by qubit, so they must be sized by the qubit limit and not by
+     * a literal 64. Kept as members rather than pointers so that the
+     * memset(&st, 0, sizeof st) below still clears the counters. */
+    uint64_t nodes[LIMDD_MAX_QUBITS];
+    uint64_t support_sum[LIMDD_MAX_QUBITS];
+    uint64_t support_max[LIMDD_MAX_QUBITS];
+    uint64_t by_support[LIMDD_MAX_QUBITS + 1];
     uint64_t stab_uncomputed, stab_trivial;
-    uint64_t by_ngens[66];     /* nodes whose cached group has k generators */
+    /* A group on n qubits has at most n generators, so n+1 buckets and a
+     * slot for the overflow clamp. (2n is STAB_SCRATCH_ROWS, a bound on rows
+     * handed to the reducer, which is a different quantity.) */
+    uint64_t by_ngens[LIMDD_MAX_QUBITS + 2];
     uint64_t *handles; size_t nhandles, caphandles;
     LIMDD_LIM *lims;           /* distinct high LIMs seen */
     size_t    nlims, caplims;
@@ -479,7 +485,7 @@ lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
         else if (limdd_stab_is_trivial(g)) st->stab_trivial++;
         else {
             const size_t k = limdd_stab_ngens(g);
-            st->by_ngens[k <= 65 ? k : 65]++;
+            st->by_ngens[k <= LIMDD_MAX_QUBITS ? k : LIMDD_MAX_QUBITS + 1]++;
             bool fresh = true;
             for (size_t i = 0; i < st->nhandles; i++) if (st->handles[i] == g) { fresh = false; break; }
             if (fresh) {
@@ -495,7 +501,7 @@ lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
     if (!limdd_edge_is_zero(high)) {
         const LIMDD_LIM l = limdd_label(high);
         const limdd_pauli_t p = limdd_lim_pauli(l);
-        const uint64_t sup = (uint64_t)popcnt_uint64(p.x | p.z);
+        const uint64_t sup = (uint64_t)limdd_pauli_weight(p);
         st->support_sum[var] += sup;
         if (sup > st->support_max[var]) st->support_max[var] = sup;
 
@@ -507,7 +513,7 @@ lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
                 st->lims = realloc(st->lims, st->caplims * sizeof(LIMDD_LIM));
             }
             st->lims[st->nlims++] = l;
-            st->by_support[sup <= 64 ? sup : 64]++;
+            st->by_support[sup <= LIMDD_MAX_QUBITS ? sup : LIMDD_MAX_QUBITS]++;
         }
     }
 
@@ -551,11 +557,11 @@ limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
     fprintf(out, "LIMSTAT-STAB uncomputed=%llu trivial=%llu nontrivial_distinct=%zu\n",
             (unsigned long long)st.stab_uncomputed, (unsigned long long)st.stab_trivial,
             st.nhandles);
-    for (unsigned k = 0; k <= 65; k++) {
+    for (unsigned k = 0; k <= LIMDD_MAX_QUBITS + 1; k++) {
         if (st.by_ngens[k]) fprintf(out, "LIMGENS %u %llu\n", k, (unsigned long long)st.by_ngens[k]);
     }
     fprintf(out, "# distinct high LIMs by Pauli support\n");
-    for (unsigned k = 0; k <= 64; k++) {
+    for (unsigned k = 0; k <= LIMDD_MAX_QUBITS; k++) {
         if (st.by_support[k]) fprintf(out, "LIMSUP %u %llu\n", k, (unsigned long long)st.by_support[k]);
     }
 

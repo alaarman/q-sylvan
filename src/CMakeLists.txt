@@ -166,6 +166,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         -pipe
         -fno-strict-aliasing
         -Wall -Wextra -Wno-deprecated
+        # Errors, not warnings. A limdd_pauli_t is about to become an array
+        # pair, and every brace initialiser written as { x, z } then means
+        # { {x, z}, {0, 0} } -- the right values in the wrong component, with
+        # no diagnostic above a warning. The library has no -Werror (the tests
+        # do), so these two would otherwise pass silently.
+        -Werror=missing-braces -Werror=missing-field-initializers
         $<$<CONFIG:Debug>:-O0 -Wpedantic -Wvla>
         $<$<BOOL:${SYLVAN_NATIVE_OPT}>:-march=native>
     )
