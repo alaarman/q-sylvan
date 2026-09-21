@@ -333,11 +333,10 @@ limdd_edge_canonical(uint32_t level, LIMDD e)
 static LIMDD_LIM
 lim_with_pauli_at(LIMDD_LIM a, uint32_t var, bool x, bool z)
 {
-    const uint64_t bit = UINT64_C(1) << var;
     limdd_pauli_t w = limdd_lim_pauli(a);
-    assert(((w.x | w.z) & bit) == 0 && "the label already acts at this level");
-    if (x) w.x |= bit;
-    if (z) w.z |= bit;
+    assert(limdd_pauli_get(w, var) == LIMDD_PAULI_I
+           && "the label already acts at this level");
+    limdd_pauli_set(&w, var, (limdd_pauli_op_t)((x ? 2u : 0u) | (z ? 1u : 0u)));
     return limdd_lim_make(w, limdd_lim_weight(a));
 }
 
@@ -357,8 +356,8 @@ lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
     if (a == b) return 0;
 
     const limdd_pauli_t pa = limdd_lim_pauli(a), pb = limdd_lim_pauli(b);
-    if (pa.x != pb.x) return pa.x < pb.x ? -1 : 1;
-    if (pa.z != pb.z) return pa.z < pb.z ? -1 : 1;
+    const int pc = limdd_pauli_cmp(pa, pb);
+    if (pc != 0) return pc;
 
     /* As doubles, which is enough to order them and works for any backend.
      * Exact weights lose precision here, but only the ORDER matters and it

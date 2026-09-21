@@ -60,14 +60,13 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
     const LIMDD_LIM l = limdd_label(e);
     limdd_pauli_t p = limdd_lim_pauli(l);
 
-    const uint64_t bit = UINT64_C(1) << var;
-    const bool px = (p.x & bit) != 0;
-    const bool pz = (p.z & bit) != 0;
+    const limdd_pauli_op_t op = limdd_pauli_get(p, var);
+    const bool px = (op & 2u) != 0;
+    const bool pz = (op & 1u) != 0;
 
     /* What is left of the LIM once this qubit's Pauli is taken off it. It acts
      * on everything below and so multiplies into both branches. */
-    p.x &= ~bit;
-    p.z &= ~bit;
+    limdd_pauli_set(&p, var, LIMDD_PAULI_I);
     const LIMDD_LIM rest = limdd_lim_make(p, limdd_lim_weight(l));
 
     /*
@@ -113,14 +112,11 @@ lim_split_above(LIMDD e, uint32_t level, LIMDD_LIM *hoisted)
 {
     const LIMDD_LIM l = limdd_label(e);
     limdd_pauli_t p = limdd_lim_pauli(l);
-    const uint64_t below = (level >= 64) ? ~UINT64_C(0) : ((UINT64_C(1) << level) - 1);
-    const limdd_pauli_t above = { p.x & below, p.z & below };
+    const limdd_pauli_t above = limdd_pauli_split_below(&p, level);
     if (limdd_pauli_is_identity(above)) {
         *hoisted = LIMDD_LIM_IDENTITY;
         return e;
     }
-    p.x &= ~below;
-    p.z &= ~below;
     *hoisted = limdd_lim_make(above, EVBDD_ONE);
     return limdd_bundle(limdd_lim_make(p, limdd_lim_weight(l)), limdd_target(e));
 }

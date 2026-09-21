@@ -57,6 +57,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <sylvan_platform.h>   /* popcnt_uint64 */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -146,6 +148,121 @@ limdd_pauli_set(limdd_pauli_t *p, size_t index, limdd_pauli_op_t op)
  * Number of qubits on which `p` is not the identity.
  */
 size_t limdd_pauli_weight(limdd_pauli_t p);
+
+/* --- the idioms that would otherwise reach for .x and .z ------------------
+ *
+ * Everything below exists so that no other file has to know how a Pauli word
+ * is laid out. Written over the current one-word-per-component form, they
+ * compile to exactly the expressions they replace; when the components become
+ * arrays these are the only bodies that change.
+ */
+
+/** A Pauli that is `op` on `index` and the identity elsewhere. */
+static inline limdd_pauli_t
+limdd_pauli_single(size_t index, limdd_pauli_op_t op)
+{
+    limdd_pauli_t p = limdd_pauli_identity();
+    limdd_pauli_set(&p, index, op);
+    return p;
+}
+
+/** a ^= b, word by word. The Pauli product's phase is NOT applied; this is
+ *  the symplectic sum, which is what GF(2) elimination needs. */
+static inline void
+limdd_pauli_xor(limdd_pauli_t *a, limdd_pauli_t b)
+{
+    a->x ^= b.x;
+    a->z ^= b.z;
+}
+
+/**
+ * Bit `c` of the symplectic vector: the X half occupies columns 0..nqubits-1
+ * and the Z half the rest. Elimination orders columns this way, so the X half
+ * leading is what makes a reduced label carry I or Z on a skipped level
+ * rather than X or Y.
+ */
+static inline bool
+limdd_pauli_column(limdd_pauli_t p, size_t c, size_t nqubits)
+{
+    const uint64_t w = (c < nqubits) ? p.x : p.z;
+    const size_t k = (c < nqubits) ? c : c - nqubits;
+    return (w >> k) & 1;
+}
+
+/** True iff `p` acts on any qubit below `level`. */
+static inline bool
+limdd_pauli_acts_below(limdd_pauli_t p, size_t level)
+{
+    if (level == 0) return false;
+    if (level >= LIMDD_MAX_QUBITS) return (p.x | p.z) != 0;
+    const uint64_t below = (UINT64_C(1) << level) - 1;
+    return ((p.x | p.z) & below) != 0;
+}
+
+/**
+ * Split `p` at `level`: the part acting below it is returned, and `p` keeps
+ * the rest. The two have disjoint support, so neither the split nor putting
+ * them back together picks up a phase.
+ */
+static inline limdd_pauli_t
+limdd_pauli_split_below(limdd_pauli_t *p, size_t level)
+{
+    if (level == 0) return limdd_pauli_identity();
+    const uint64_t below = (level >= LIMDD_MAX_QUBITS)
+                         ? ~UINT64_C(0) : (UINT64_C(1) << level) - 1;
+    limdd_pauli_t out;
+    out.x = p->x & below;
+    out.z = p->z & below;
+    p->x &= ~below;
+    p->z &= ~below;
+    return out;
+}
+
+/**
+ * A total order on Pauli words, by value rather than by any interned index.
+ * Comparing indices would make the order depend on what the program happened
+ * to intern first, and on whether a collection has since moved anything.
+ */
+static inline int
+limdd_pauli_cmp(limdd_pauli_t a, limdd_pauli_t b)
+{
+    if (a.x != b.x) return a.x < b.x ? -1 : 1;
+    if (a.z != b.z) return a.z < b.z ? -1 : 1;
+    return 0;
+}
+
+/**
+ * Apply `p` to the basis state `*b`, returning the power of i it contributes.
+ *
+ * P sends |c> to i^(x&z) (-1)^(z&c) |c XOR x>, so `*b` is advanced to the
+ * basis state that actually reaches the target and the phase comes back as a
+ * power of i, mod 4.
+ */
+static inline unsigned
+limdd_pauli_apply_basis(limdd_pauli_t p, uint64_t *b)
+{
+    const uint64_t c = *b ^ p.x;
+    *b = c;
+    return (unsigned)(popcnt_uint64(p.x & p.z)
+                      + 2u * popcnt_uint64(p.z & c)) & 3u;
+}
+
+/** Serialise into, and load from, the two words of a table entry. */
+static inline void
+limdd_pauli_store(limdd_pauli_t p, uint64_t *w)
+{
+    w[0] = p.x;
+    w[1] = p.z;
+}
+
+static inline limdd_pauli_t
+limdd_pauli_load(const uint64_t *w)
+{
+    limdd_pauli_t p;
+    p.x = w[0];
+    p.z = w[1];
+    return p;
+}
 
 /**
  * Right-multiply: replaces `*a` with the word `c` where a * b = i^k * c,

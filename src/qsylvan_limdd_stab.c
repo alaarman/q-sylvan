@@ -132,9 +132,7 @@ limdd_stab_gen(LIMDD_STAB s, size_t i)
 static inline bool
 row_bit(const gen_row_t *r, size_t c, size_t nqubits)
 {
-    const uint64_t w = (c < nqubits) ? r->p.x : r->p.z;
-    const size_t k = (c < nqubits) ? c : c - nqubits;
-    return (w >> k) & 1;
+    return limdd_pauli_column(r->p, c, nqubits);
 }
 
 /**
@@ -250,11 +248,12 @@ limdd_stab_extend_skipped(LIMDD_STAB s, uint32_t from, uint32_t to)
     const uint64_t below = (to >= 64) ? ~UINT64_C(0) : ((UINT64_C(1) << to) - 1);
     for (LIMDD_STAB c = s; c != LIMDD_STAB_TRIVIAL; c = stab_tail(c)) {
         const limdd_pauli_t p = limdd_lim_pauli(stab_head(c));
-        assert(((p.x | p.z) & below) == 0 && "group acts below the level it is extended to");
+        assert(!limdd_pauli_acts_below(p, to)
+               && "group acts below the level it is extended to");
     }
 #endif
     for (uint32_t j = to; j-- > from; ) {
-        const limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+        const limdd_pauli_t xj = limdd_pauli_single(j, LIMDD_PAULI_X);
         s = stab_cons(limdd_lim_make(xj, EVBDD_ONE), s);
     }
     return s;
@@ -425,8 +424,7 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
             if (r == top) continue;
             const gen_row_t g = { isect[r].w, false };
             if (!row_bit(&g, c, nqubits)) continue;
-            isect[r].w.x ^= isect[top].w.x;
-            isect[r].w.z ^= isect[top].w.z;
+            limdd_pauli_xor(&isect[r].w, isect[top].w);
             isect[r].mask0 ^= isect[top].mask0;
             isect[r].mask1 ^= isect[top].mask1;
         }
@@ -512,8 +510,7 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
         assert(c < 2 * nqubits && "an eliminated row is never the identity");
 
         if (!row_bit(&cur, c, nqubits)) continue;
-        cur.p.x ^= isect[r].w.x;
-        cur.p.z ^= isect[r].w.z;
+        limdd_pauli_xor(&cur.p, isect[r].w);
         mask0 ^= isect[r].mask0;
         mask1 ^= isect[r].mask1;
     }
@@ -549,8 +546,7 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
     assert((low_zero || limdd_lim_is_identity(limdd_label(low)))
            && "the low edge must be normalised before its group is taken");
 
-    const uint64_t bit = UINT64_C(1) << var;
-    const limdd_pauli_t z_here = { 0, bit };
+    const limdd_pauli_t z_here = limdd_pauli_single(var, LIMDD_PAULI_Z);
 
     /* At most one generator per qubit, plus the anti-diagonal coset rep. */
     LIMDD_LIM out[LIMDD_MAX_QUBITS + 1];
@@ -619,7 +615,7 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
         const bool need_z = (flip != differ);
 
         limdd_pauli_t w = wa;
-        if (need_z) w.z |= bit;
+        if (need_z) limdd_pauli_set(&w, var, LIMDD_PAULI_Z);
         out[nout++] = limdd_lim_make(w, limdd_lim_weight(a));
     }
 
@@ -639,10 +635,10 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
         bool found = true;
 
         if (beta_sq == EVBDD_ONE) {
-            w.x |= bit;                     /* X */
+            limdd_pauli_set(&w, var, LIMDD_PAULI_X);
             scalar = beta;
         } else if (beta_sq == EVBDD_MIN_ONE) {
-            w.x |= bit; w.z |= bit;         /* Y */
+            limdd_pauli_set(&w, var, LIMDD_PAULI_Y);
             scalar = wgt_mul(limdd_wgt_i_pow(3), beta);   /* -i * beta */
         } else {
             found = false;

@@ -65,7 +65,9 @@ limdd_pauli_intern(limdd_pauli_t p)
     assert(limdd_pauli_is_canonical(p, lim_nqubits));
 
     int created;
-    uint64_t ref = llmsset_lookup(pauli_table, p.x, p.z, &created);
+    uint64_t w[2];
+    limdd_pauli_store(p, w);
+    uint64_t ref = llmsset_lookup(pauli_table, w[0], w[1], &created);
     if (ref == 0) die("Pauli", pauli_table);
     return ref;
 }
@@ -75,8 +77,7 @@ limdd_pauli_deref(LIMDD_PAULI_REF ref)
 {
     assert(pauli_table != NULL);
     const uint64_t *bucket = (const uint64_t *)llmsset_index_to_ptr(pauli_table, ref);
-    limdd_pauli_t p = { bucket[0], bucket[1] };
-    return p;
+    return limdd_pauli_load(bucket);
 }
 
 /**

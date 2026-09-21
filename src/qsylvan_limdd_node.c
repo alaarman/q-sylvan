@@ -275,13 +275,12 @@ eval_edge(LIMDD e, uint64_t b, uint32_t level)
      * depth, which would otherwise show up only as a wrong amplitude much
      * later.
      */
-    assert(level >= 64 || (((p.x | p.z) & ((UINT64_C(1) << level) - 1)) == 0));
+    assert(!limdd_pauli_acts_below(p, level));
 
-    const uint64_t c = b ^ p.x;
-
-    /* i per Y, and -1 == i^2 per Z or Y meeting a set bit */
-    const unsigned k = (popcnt_uint64(p.x & p.z)
-                        + 2u * popcnt_uint64(p.z & c)) & 3u;
+    /* i per Y, and -1 == i^2 per Z or Y meeting a set bit. This also advances
+     * `b` to the basis state that actually reaches the target. */
+    uint64_t c = b;
+    const unsigned k = limdd_pauli_apply_basis(p, &c);
 
     EVBDD_WGT w = limdd_lim_weight(lim);
     if (k != 0) w = wgt_mul(w, limdd_wgt_i_pow(k));
