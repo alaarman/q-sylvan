@@ -78,6 +78,27 @@ sylvan_edge_weights_tolerance_from_env(void)
 void
 sylvan_edge_weights_set_hybrid_tolerance(double rel, double zero)
 {
+    /*
+     * The merging rule has to be chosen BEFORE the table exists.
+     *
+     * It decides how a weight is hashed -- the absolute rule rounds to a
+     * uniform grid, the hybrid one quantises in log-polar coordinates -- so
+     * changing it once entries are stored strands them at positions the new
+     * hash will never probe. The value 1 is already in the table by then,
+     * because init_one_zero interns 1, 0 and -1 when the storage is created,
+     * and a later lookup of 1 would then create a SECOND entry for it. Two
+     * indices for one value breaks every identity that compares weights by
+     * index, EVBDD_ONE among them.
+     *
+     * There is no safe recovery once that has happened, so this is fatal
+     * rather than a warning.
+     */
+    if (wgt_storage != NULL) {
+        fprintf(stderr, "sylvan: the edge weight merging rule must be chosen "
+                        "before sylvan_init_edge_weights, not after -- the rule "
+                        "determines how weights are hashed\n");
+        exit(1);
+    }
     if (rel < 0) cmap_set_absolute_tolerance(default_tolerance);
     else         cmap_set_hybrid_tolerance(rel, zero);
 }

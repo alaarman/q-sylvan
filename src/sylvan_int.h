@@ -119,10 +119,23 @@ static const uint64_t CACHE_EVBDD_INC_VARS           = (75LL<<40);
 static const uint64_t CACHE_EVBDD_CLEAN_WGT_TABLE    = (76LL<<40);
 static const uint64_t CACHE_EVBDD_IS_ORDERED         = (77LL<<40);
 
-static const uint64_t CACHE_LIMDD_PLUS               = (80LL<<40);
-static const uint64_t CACHE_LIMDD_GATE               = (81LL<<40);
-static const uint64_t CACHE_LIMDD_CGATE              = (82LL<<40);
-static const uint64_t CACHE_LIMDD_CANONIZE           = (83LL<<40);
+/*
+ * 84..87, NOT 80..83: those are the edge weight operations below, and an
+ * operation id is not a tag that is checked -- it is simply OR-ed into the
+ * first key word. Two operations sharing an id therefore share cache entries
+ * whenever the rest of the key agrees, and each reads back whatever the other
+ * stored. That is what these four did: cache_get3 passes 0 as the first key
+ * for a LIMDD operation and a weight index for a weight operation, so the
+ * first words coincide whenever that weight is EVBDD_ZERO, and CANONIZE's
+ * second key is a node index while WGT_DIV's is a weight index -- both small
+ * integers, so they met often. CANONIZE then read a weight index back as an
+ * edge. It showed up only with a deferred canonical form, since that is when
+ * CANONIZE entries and weight arithmetic are live at the same time.
+ */
+static const uint64_t CACHE_LIMDD_PLUS               = (84LL<<40);
+static const uint64_t CACHE_LIMDD_GATE               = (85LL<<40);
+static const uint64_t CACHE_LIMDD_CGATE              = (86LL<<40);
+static const uint64_t CACHE_LIMDD_CANONIZE           = (87LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);

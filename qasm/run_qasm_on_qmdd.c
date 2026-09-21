@@ -673,10 +673,21 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
         size_t lt = node_tab_size_set ? max_tablesize : min_tablesize;
         if (!node_tab_size_set && lt > (1LL<<23)) lt = 1LL<<23;
 
+        /*
+         * The LIM table is bounded by what an EDGE can address, not by
+         * memory: an edge holds the LIM index in LIMDD_LIM_BITS bits, so
+         * beyond that the index does not fit and the table cannot be used
+         * however much room it has. The node table is bounded by the 40-bit
+         * target field instead, and the Pauli and stabiliser tables are
+         * referenced by full 64-bit words, so only this one needs capping.
+         */
+        size_t lim_t = lt;
+        if (lim_t > LIMDD_LIM_MAX) lim_t = LIMDD_LIM_MAX;
+
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
          * they reach it, so a value larger than the diagram is deep sends
          * them past the terminal. */
-        limdd_nodes_init(circuit->qreg_size, lt, lt, lt, lt);
+        limdd_nodes_init(circuit->qreg_size, lt, lt, lim_t, lt);
         if (CALL(limdd_simulate_circuit, circuit, lt) != 0) {
             limdd_nodes_quit();
             exit(1);
@@ -773,13 +784,19 @@ int main(int argc, char *argv[])
     // Simple Sylvan initialization
     sylvan_set_sizes(min_tablesize, max_tablesize, min_cachesize, max_cachesize);
     sylvan_init_package();
-    qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
-    wgt_set_inverse_chaching(wgt_inv_caching);
-
-    /* After qsylvan_init_simulator, which creates the weight table with the
-     * default absolute rule; this switches it before any weight is stored. */
+    /*
+     * Before qsylvan_init_simulator, not after: the rule decides how a weight
+     * is hashed, and the table is populated during initialisation (1, 0 and
+     * -1, then the gate entries). Switching afterwards leaves those at
+     * positions the new hash never probes, and the next lookup of 1 creates a
+     * second entry for it -- two indices for one value, which breaks every
+     * comparison that goes through EVBDD_ONE.
+     */
     if (rel_tolerance >= 0)
         sylvan_edge_weights_set_hybrid_tolerance(rel_tolerance, zero_tolerance);
+
+    qsylvan_init_simulator(min_wgt_tab_size, max_wgt_tab_size, tolerance, wgt_table_type, wgt_norm_strat);
+    wgt_set_inverse_chaching(wgt_inv_caching);
 
     RUN(run_simulation, circuit);
 

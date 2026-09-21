@@ -95,6 +95,15 @@ extern LIMDD_LIM LIMDD_LIM_IDENTITY;
 /**
  * The zero map. Every LIM whose scalar is zero collapses to this one.
  */
+/**
+ * Width of the LIM index where an edge carries it, and hence the largest
+ * number of LIMs the table may hold. It lives here rather than with the edge
+ * layout because it bounds this table: an index at or above LIMDD_LIM_MAX
+ * cannot be put in an edge at all.
+ */
+#define LIMDD_LIM_BITS  23
+#define LIMDD_LIM_MAX   ((uint64_t)1 << LIMDD_LIM_BITS)
+
 extern LIMDD_LIM LIMDD_LIM_ZERO;
 
 /**

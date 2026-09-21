@@ -121,6 +121,21 @@ limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w)
     int created;
     uint64_t lim = llmsset_lookup(lim_table, pref, w, &created);
     if (lim == 0) die("LIM", lim_table);
+    /*
+     * An edge carries this index in 23 bits, so an index at or above the
+     * limit cannot be represented: limdd_bundle would overflow it into the
+     * target field and hand back an edge pointing at an unrelated node. That
+     * is silent in a release build -- the assertion in limdd_makenode_ex is
+     * compiled out -- so it is checked here, where the index is produced,
+     * rather than where the corruption is noticed.
+     */
+    if (lim >= LIMDD_LIM_MAX) {
+        fprintf(stderr, "sylvan: LIMDD LIM table index %llu exceeds the %d-bit "
+                        "edge field; the LIM table cannot exceed %llu entries\n",
+                (unsigned long long)lim, LIMDD_LIM_BITS,
+                (unsigned long long)LIMDD_LIM_MAX);
+        exit(1);
+    }
     return lim;
 }
 

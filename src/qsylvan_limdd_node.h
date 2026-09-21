@@ -132,12 +132,13 @@ typedef uint64_t LIMDD_TARG;
  */
 #define LIMDD_TERMINAL ((LIMDD_TARG)1)
 
-/** Widths of the two fields of an edge. */
-#define LIMDD_LIM_BITS  23
+/* LIMDD_LIM_BITS and LIMDD_LIM_MAX are in qsylvan_limdd_lim.h, beside the
+ * table whose indices they bound. */
+
+/** Width of the target field of an edge. */
 #define LIMDD_TARG_BITS 40
 
 #define LIMDD_TARG_MASK (((uint64_t)1 << LIMDD_TARG_BITS) - 1)
-#define LIMDD_LIM_MAX   ((uint64_t)1 << LIMDD_LIM_BITS)
 #define LIMDD_TARG_MAX  LIMDD_TARG_MASK
 
 /**
