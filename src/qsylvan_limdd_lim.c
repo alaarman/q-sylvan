@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <sylvan_int.h>
 
@@ -58,6 +59,61 @@ limdd_lims_nqubits(void)
     return lim_nqubits;
 }
 
+#if LIMDD_PAULI_WORDS > 1
+/*
+ * Above one word a Pauli does not fit in a 16-byte bucket, so the bucket
+ * holds a pointer to 2W words on the heap and these four hooks make the table
+ * hash and compare what it points at. Content addressing, and therefore
+ * dedup, is preserved; only the storage moves. llmsset calls the destructor
+ * when a bucket is swept, so nothing leaks.
+ */
+static uint64_t
+pauli_hash_cb(const uint64_t a, const uint64_t b, const uint64_t seed)
+{
+    (void)b;
+    const uint64_t *w = (const uint64_t *)(uintptr_t)a;
+    const uint64_t prime = UINT64_C(1099511628211);
+    uint64_t h = seed;
+    for (unsigned i = 0; i < 2 * LIMDD_PAULI_WORDS; i++) {
+        h = (h ^ w[i]) * prime;
+        h ^= h >> 32;
+    }
+    return h;
+}
+
+static int
+pauli_equals_cb(const uint64_t a1, const uint64_t b1,
+                const uint64_t a2, const uint64_t b2)
+{
+    (void)b1; (void)b2;
+    const uint64_t *x = (const uint64_t *)(uintptr_t)a1;
+    const uint64_t *y = (const uint64_t *)(uintptr_t)a2;
+    for (unsigned i = 0; i < 2 * LIMDD_PAULI_WORDS; i++)
+        if (x[i] != y[i]) return 0;
+    return 1;
+}
+
+static void
+pauli_create_cb(uint64_t *a, uint64_t *b)
+{
+    (void)b;
+    uint64_t *heap = (uint64_t *)malloc(2 * LIMDD_PAULI_WORDS * sizeof(uint64_t));
+    if (heap == NULL) {
+        fprintf(stderr, "sylvan: out of memory interning a Pauli word\n");
+        exit(1);
+    }
+    memcpy(heap, (const void *)(uintptr_t)*a, 2 * LIMDD_PAULI_WORDS * sizeof(uint64_t));
+    *a = (uint64_t)(uintptr_t)heap;
+}
+
+static void
+pauli_destroy_cb(uint64_t a, uint64_t b)
+{
+    (void)b;
+    free((void *)(uintptr_t)a);
+}
+#endif
+
 LIMDD_PAULI_REF
 limdd_pauli_intern(limdd_pauli_t p)
 {
@@ -65,9 +121,18 @@ limdd_pauli_intern(limdd_pauli_t p)
     assert(limdd_pauli_is_canonical(p, lim_nqubits));
 
     int created;
-    uint64_t w[2];
+    uint64_t w[2 * LIMDD_PAULI_WORDS];
     limdd_pauli_store(p, w);
+#if LIMDD_PAULI_WORDS == 1
     uint64_t ref = llmsset_lookup(pauli_table, w[0], w[1], &created);
+#else
+    /* A bucket holds two words, a Pauli holds 2W. Above one word the entry is
+     * kept on the heap and the bucket holds a pointer to it, which is what
+     * llmsset's custom hooks are for -- the same shape sylvan_gmp.c uses for
+     * its rationals. The callbacks hash and compare the pointed-to words, so
+     * the table still dedups by content. */
+    uint64_t ref = llmsset_lookupc(pauli_table, (uint64_t)(uintptr_t)w, 0, &created);
+#endif
     if (ref == 0) die("Pauli", pauli_table);
     return ref;
 }
@@ -77,7 +142,11 @@ limdd_pauli_deref(LIMDD_PAULI_REF ref)
 {
     assert(pauli_table != NULL);
     const uint64_t *bucket = (const uint64_t *)llmsset_index_to_ptr(pauli_table, ref);
+#if LIMDD_PAULI_WORDS == 1
     return limdd_pauli_load(bucket);
+#else
+    return limdd_pauli_load((const uint64_t *)(uintptr_t)bucket[0]);
+#endif
 }
 
 /**
@@ -243,6 +312,10 @@ limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
 
     lim_nqubits  = nqubits;
     pauli_table  = llmsset_create(pauli_tablesize, pauli_tablesize);
+#if LIMDD_PAULI_WORDS > 1
+    llmsset_set_custom(pauli_table, pauli_hash_cb, pauli_equals_cb,
+                       pauli_create_cb, pauli_destroy_cb);
+#endif
     lim_table    = llmsset_create(lim_tablesize, lim_tablesize);
 
     /*

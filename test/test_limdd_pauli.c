@@ -45,10 +45,14 @@ rnd(void)
 static limdd_pauli_t
 random_word(size_t n)
 {
-    limdd_pauli_t p;
     const uint64_t mask = (n >= 64) ? UINT64_MAX : ((UINT64_C(1) << n) - 1);
-    p.x = rnd() & mask;
-    p.z = rnd() & mask;
+    const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+    limdd_pauli_t p = limdd_pauli_identity();
+    for (size_t q = 0; q < n; q++) {
+        const unsigned op = 2u * ((unsigned)(xw >> q) & 1u)
+                          +      ((unsigned)(zw >> q) & 1u);
+        if (op) limdd_pauli_set(&p, q, (limdd_pauli_op_t)op);
+    }
     return p;
 }
 
@@ -79,11 +83,11 @@ test_get_set(void)
     /* The encoding is 2*x + z; check it explicitly. */
     limdd_pauli_t q = limdd_pauli_identity();
     limdd_pauli_set(&q, 0, LIMDD_PAULI_X);
-    test_assert(q.x == 1 && q.z == 0);
+    test_assert(limdd_pauli_get(q, 0) == LIMDD_PAULI_X);
     limdd_pauli_set(&q, 0, LIMDD_PAULI_Z);
-    test_assert(q.x == 0 && q.z == 1);
+    test_assert(limdd_pauli_get(q, 0) == LIMDD_PAULI_Z);
     limdd_pauli_set(&q, 0, LIMDD_PAULI_Y);
-    test_assert(q.x == 1 && q.z == 1);
+    test_assert(limdd_pauli_get(q, 0) == LIMDD_PAULI_Y);
 
     /* The top qubit must work, not just low ones. */
     limdd_pauli_t top = limdd_pauli_identity();
@@ -169,8 +173,11 @@ test_multiplication_is_elementwise(void)
             unsigned got_phase = limdd_pauli_rightmul(&got, b, n);
 
             test_assert(got_phase == want_phase);
-            test_assert(got.x == (a.x ^ b.x));
-            test_assert(got.z == (a.z ^ b.z));
+            {   /* the word is the symplectic sum, phase aside */
+                limdd_pauli_t want = a;
+                limdd_pauli_xor(&want, b);
+                test_assert(limdd_pauli_equals(got, want));
+            }
             test_assert(limdd_pauli_is_canonical(got, n));
         }
     }

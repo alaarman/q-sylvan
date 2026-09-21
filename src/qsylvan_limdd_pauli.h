@@ -66,7 +66,21 @@ extern "C" {
 /**
  * Maximum number of qubits a single packed Pauli word can describe.
  */
-#define LIMDD_MAX_QUBITS 64
+#ifndef LIMDD_PAULI_WORDS
+/* 64-bit words per component. Set with -DLIMDD_PAULI_WORDS=k, or through the
+ * CMake cache variable of the same name. One is the historical width. */
+#define LIMDD_PAULI_WORDS 1
+#endif
+
+#if LIMDD_PAULI_WORDS < 1
+#error "LIMDD_PAULI_WORDS must be at least 1"
+#endif
+
+#define LIMDD_MAX_QUBITS (64 * LIMDD_PAULI_WORDS)
+
+/** Which word of a component qubit `i` lives in, and which bit of it. */
+#define LIMDD_PAULI_LANE(i) ((LIMDD_PAULI_WORDS == 1) ? 0u : (unsigned)((i) >> 6))
+#define LIMDD_PAULI_BIT(i)  (UINT64_C(1) << ((i) & 63))
 
 /**
  * The four Pauli matrices, encoded as 2*x + z.
@@ -86,8 +100,10 @@ typedef enum {
  * A Pauli word on at most LIMDD_MAX_QUBITS qubits, without phase.
  */
 typedef struct {
-    uint64_t x; // bit i set iff qubit i carries an X component (X or Y)
-    uint64_t z; // bit i set iff qubit i carries a Z component (Z or Y)
+    // Lane i holds qubits 64i..64i+63. Bit j of x is set iff that qubit
+    // carries an X component (X or Y); likewise z for a Z component.
+    uint64_t x[LIMDD_PAULI_WORDS];
+    uint64_t z[LIMDD_PAULI_WORDS];
 } limdd_pauli_t;
 
 /**
@@ -96,7 +112,8 @@ typedef struct {
 static inline limdd_pauli_t
 limdd_pauli_identity(void)
 {
-    limdd_pauli_t p = { 0, 0 };
+    limdd_pauli_t p;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) { p.x[i] = 0; p.z[i] = 0; }
     return p;
 }
 
@@ -106,7 +123,9 @@ limdd_pauli_identity(void)
 static inline bool
 limdd_pauli_is_identity(limdd_pauli_t p)
 {
-    return (p.x | p.z) == 0;
+    uint64_t acc = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) acc |= p.x[i] | p.z[i];
+    return acc == 0;
 }
 
 /**
@@ -115,7 +134,10 @@ limdd_pauli_is_identity(limdd_pauli_t p)
 static inline bool
 limdd_pauli_equals(limdd_pauli_t a, limdd_pauli_t b)
 {
-    return a.x == b.x && a.z == b.z;
+    uint64_t neq = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++)
+        neq |= (a.x[i] ^ b.x[i]) | (a.z[i] ^ b.z[i]);
+    return neq == 0;
 }
 
 /**
@@ -130,7 +152,9 @@ bool limdd_pauli_is_canonical(limdd_pauli_t p, size_t nqubits);
 static inline limdd_pauli_op_t
 limdd_pauli_get(limdd_pauli_t p, size_t index)
 {
-    return (limdd_pauli_op_t)(2u * ((p.x >> index) & 1u) + ((p.z >> index) & 1u));
+    const unsigned w = LIMDD_PAULI_LANE(index);
+    const uint64_t b = LIMDD_PAULI_BIT(index);
+    return (limdd_pauli_op_t)(2u * ((p.x[w] & b) != 0) + ((p.z[w] & b) != 0));
 }
 
 /**
@@ -139,9 +163,10 @@ limdd_pauli_get(limdd_pauli_t p, size_t index)
 static inline void
 limdd_pauli_set(limdd_pauli_t *p, size_t index, limdd_pauli_op_t op)
 {
-    const uint64_t bit = UINT64_C(1) << index;
-    p->x = (op & 2u) ? (p->x | bit) : (p->x & ~bit);
-    p->z = (op & 1u) ? (p->z | bit) : (p->z & ~bit);
+    const unsigned w = LIMDD_PAULI_LANE(index);
+    const uint64_t bit = LIMDD_PAULI_BIT(index);
+    p->x[w] = (op & 2u) ? (p->x[w] | bit) : (p->x[w] & ~bit);
+    p->z[w] = (op & 1u) ? (p->z[w] | bit) : (p->z[w] & ~bit);
 }
 
 /**
@@ -171,8 +196,10 @@ limdd_pauli_single(size_t index, limdd_pauli_op_t op)
 static inline void
 limdd_pauli_xor(limdd_pauli_t *a, limdd_pauli_t b)
 {
-    a->x ^= b.x;
-    a->z ^= b.z;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        a->x[i] ^= b.x[i];
+        a->z[i] ^= b.z[i];
+    }
 }
 
 /**
@@ -184,9 +211,10 @@ limdd_pauli_xor(limdd_pauli_t *a, limdd_pauli_t b)
 static inline bool
 limdd_pauli_column(limdd_pauli_t p, size_t c, size_t nqubits)
 {
-    const uint64_t w = (c < nqubits) ? p.x : p.z;
     const size_t k = (c < nqubits) ? c : c - nqubits;
-    return (w >> k) & 1;
+    const uint64_t w = (c < nqubits) ? p.x[LIMDD_PAULI_LANE(k)]
+                                     : p.z[LIMDD_PAULI_LANE(k)];
+    return (w & LIMDD_PAULI_BIT(k)) != 0;
 }
 
 /** True iff `p` acts on any qubit below `level`. */
@@ -194,9 +222,15 @@ static inline bool
 limdd_pauli_acts_below(limdd_pauli_t p, size_t level)
 {
     if (level == 0) return false;
-    if (level >= LIMDD_MAX_QUBITS) return (p.x | p.z) != 0;
-    const uint64_t below = (UINT64_C(1) << level) - 1;
-    return ((p.x | p.z) & below) != 0;
+    uint64_t acc = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        const size_t base = (size_t)i * 64;
+        if (level <= base) break;
+        const size_t k = level - base;
+        const uint64_t m = (k >= 64) ? ~UINT64_C(0) : (UINT64_C(1) << k) - 1;
+        acc |= (p.x[i] | p.z[i]) & m;
+    }
+    return acc != 0;
 }
 
 /**
@@ -207,14 +241,18 @@ limdd_pauli_acts_below(limdd_pauli_t p, size_t level)
 static inline limdd_pauli_t
 limdd_pauli_split_below(limdd_pauli_t *p, size_t level)
 {
-    if (level == 0) return limdd_pauli_identity();
-    const uint64_t below = (level >= LIMDD_MAX_QUBITS)
-                         ? ~UINT64_C(0) : (UINT64_C(1) << level) - 1;
-    limdd_pauli_t out;
-    out.x = p->x & below;
-    out.z = p->z & below;
-    p->x &= ~below;
-    p->z &= ~below;
+    limdd_pauli_t out = limdd_pauli_identity();
+    if (level == 0) return out;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        const size_t base = (size_t)i * 64;
+        if (level <= base) break;
+        const size_t k = level - base;
+        const uint64_t m = (k >= 64) ? ~UINT64_C(0) : (UINT64_C(1) << k) - 1;
+        out.x[i] = p->x[i] & m;
+        out.z[i] = p->z[i] & m;
+        p->x[i] &= ~m;
+        p->z[i] &= ~m;
+    }
     return out;
 }
 
@@ -226,8 +264,11 @@ limdd_pauli_split_below(limdd_pauli_t *p, size_t level)
 static inline int
 limdd_pauli_cmp(limdd_pauli_t a, limdd_pauli_t b)
 {
-    if (a.x != b.x) return a.x < b.x ? -1 : 1;
-    if (a.z != b.z) return a.z < b.z ? -1 : 1;
+    /* Most significant lane first, so widening does not change the order. */
+    for (unsigned i = LIMDD_PAULI_WORDS; i-- > 0; )
+        if (a.x[i] != b.x[i]) return a.x[i] < b.x[i] ? -1 : 1;
+    for (unsigned i = LIMDD_PAULI_WORDS; i-- > 0; )
+        if (a.z[i] != b.z[i]) return a.z[i] < b.z[i] ? -1 : 1;
     return 0;
 }
 
@@ -241,26 +282,32 @@ limdd_pauli_cmp(limdd_pauli_t a, limdd_pauli_t b)
 static inline unsigned
 limdd_pauli_apply_basis(limdd_pauli_t p, uint64_t *b)
 {
-    const uint64_t c = *b ^ p.x;
+    /* The basis state is a single word, so this serves the evaluators only,
+     * which are exponential and never run above a few tens of qubits. */
+    const uint64_t c = *b ^ p.x[0];
     *b = c;
-    return (unsigned)(popcnt_uint64(p.x & p.z)
-                      + 2u * popcnt_uint64(p.z & c)) & 3u;
+    return (unsigned)(popcnt_uint64(p.x[0] & p.z[0])
+                      + 2u * popcnt_uint64(p.z[0] & c)) & 3u;
 }
 
 /** Serialise into, and load from, the two words of a table entry. */
 static inline void
 limdd_pauli_store(limdd_pauli_t p, uint64_t *w)
 {
-    w[0] = p.x;
-    w[1] = p.z;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        w[2 * i]     = p.x[i];
+        w[2 * i + 1] = p.z[i];
+    }
 }
 
 static inline limdd_pauli_t
 limdd_pauli_load(const uint64_t *w)
 {
     limdd_pauli_t p;
-    p.x = w[0];
-    p.z = w[1];
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        p.x[i] = w[2 * i];
+        p.z[i] = w[2 * i + 1];
+    }
     return p;
 }
 

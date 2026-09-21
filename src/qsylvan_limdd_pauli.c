@@ -26,24 +26,33 @@
  * behaviour of shifting a 64-bit value by 64.
  */
 static inline uint64_t
-qubit_mask(size_t nqubits)
+lane_mask(size_t nqubits, unsigned lane)
 {
-    if (nqubits >= 64) return UINT64_MAX;
-    return (UINT64_C(1) << nqubits) - 1;
+    const size_t base = (size_t)lane * 64;
+    if (nqubits <= base) return 0;
+    const size_t k = nqubits - base;
+    if (k >= 64) return UINT64_MAX;
+    return (UINT64_C(1) << k) - 1;
 }
 
 bool
 limdd_pauli_is_canonical(limdd_pauli_t p, size_t nqubits)
 {
     if (nqubits > LIMDD_MAX_QUBITS) return false;
-    const uint64_t mask = qubit_mask(nqubits);
-    return (p.x & ~mask) == 0 && (p.z & ~mask) == 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        const uint64_t spill = ~lane_mask(nqubits, i);
+        if (((p.x[i] | p.z[i]) & spill) != 0) return false;
+    }
+    return true;
 }
 
 size_t
 limdd_pauli_weight(limdd_pauli_t p)
 {
-    return popcnt_uint64(p.x | p.z);
+    size_t n = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++)
+        n += popcnt_uint64(p.x[i] | p.z[i]);
+    return n;
 }
 
 /**
@@ -65,23 +74,31 @@ limdd_pauli_weight(limdd_pauli_t p)
 static inline unsigned
 mul_phase(limdd_pauli_t a, limdd_pauli_t b)
 {
-    const uint64_t a_is_z = ~a.x & a.z;
-    const uint64_t a_is_x = a.x & ~a.z;
-    const uint64_t a_is_y = a.x & a.z;
+    // The per-qubit contributions are independent, so the exponent is their
+    // plain sum and the reduction mod 4 waits until the end. Accumulate --
+    // reducing or assigning per lane would keep only the last one.
+    unsigned p = 0, m = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        const uint64_t ax = a.x[i], az = a.z[i], bx = b.x[i], bz = b.z[i];
+        const uint64_t a_is_z = ~ax & az;
+        const uint64_t a_is_x = ax & ~az;
+        const uint64_t a_is_y = ax & az;
 
-    const uint64_t plus = (a_is_z & b.x & ~b.z)   // Z * X = +i Y
-                        | (a_is_x & b.z & b.x)    // X * Y = +i Z
-                        | (a_is_y & b.z & ~b.x);  // Y * Z = +i X
+        const uint64_t plus = (a_is_z & bx & ~bz)   // Z * X = +i Y
+                            | (a_is_x & bz & bx)    // X * Y = +i Z
+                            | (a_is_y & bz & ~bx);  // Y * Z = +i X
 
-    const uint64_t minus = (a_is_z & b.x & b.z)   // Z * Y = -i X
-                         | (a_is_x & b.z & ~b.x)  // X * Z = -i Y
-                         | (a_is_y & b.x & ~b.z); // Y * X = -i Z
+        const uint64_t minus = (a_is_z & bx & bz)   // Z * Y = -i X
+                             | (a_is_x & bz & ~bx)  // X * Z = -i Y
+                             | (a_is_y & bx & ~bz); // Y * X = -i Z
 
-    const unsigned p = popcnt_uint64(plus);
-    const unsigned m = popcnt_uint64(minus);
+        p += popcnt_uint64(plus);
+        m += popcnt_uint64(minus);
+    }
 
     // (p - m) mod 4. Use 3m rather than -m so the intermediate stays
-    // non-negative in unsigned arithmetic; 3 == -1 (mod 4).
+    // non-negative in unsigned arithmetic; 3 == -1 (mod 4). Both counts are
+    // at most 64 * LIMDD_PAULI_WORDS, so nothing overflows.
     return (p + 3u * m) & 3u;
 }
 
@@ -93,8 +110,7 @@ static inline unsigned
 rightmul_raw(limdd_pauli_t *a, limdd_pauli_t b)
 {
     const unsigned phase = mul_phase(*a, b);
-    a->x ^= b.x;
-    a->z ^= b.z;
+    limdd_pauli_xor(a, b);
     return phase;
 }
 
@@ -106,8 +122,7 @@ leftmul_raw(limdd_pauli_t *a, limdd_pauli_t b)
 {
     // b is now the left operand, so it comes first in the phase function.
     const unsigned phase = mul_phase(b, *a);
-    a->x ^= b.x;
-    a->z ^= b.z;
+    limdd_pauli_xor(a, b);
     return phase;
 }
 
@@ -135,7 +150,9 @@ unsigned
 limdd_pauli_commutation_phase(limdd_pauli_t a, limdd_pauli_t b)
 {
     // Symplectic inner product: a and b anticommute iff it is odd.
-    const unsigned ip = popcnt_uint64(a.x & b.z) + popcnt_uint64(a.z & b.x);
+    unsigned ip = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++)
+        ip += popcnt_uint64(a.x[i] & b.z[i]) + popcnt_uint64(a.z[i] & b.x[i]);
     return (ip & 1u) ? 2u : 0u;
 }
 

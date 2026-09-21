@@ -388,7 +388,12 @@ VOID_TASK_2(build_shared, size_t, lo, size_t, hi)
         return;
     }
     for (size_t i = lo; i < hi; i++) {
-        limdd_pauli_t p = { i & 7, (i >> 3) & 7 };
+        limdd_pauli_t p = limdd_pauli_identity();
+        for (size_t qq = 0; qq < 3; qq++) {
+            const unsigned op = 2u * ((unsigned)(i >> qq) & 1u)
+                              +      ((unsigned)(i >> (3 + qq)) & 1u);
+            if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+        }
         LIMDD high = limdd_bundle(limdd_lim_make(p, EVBDD_ONE), LIMDD_TERMINAL);
         LIMDD_TARG n = limdd_makenode(NQUBITS - 1, limdd_one_edge(), high);
         if (seen[i] != 0 && seen[i] != n) {

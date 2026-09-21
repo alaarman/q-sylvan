@@ -49,9 +49,13 @@ static limdd_pauli_t
 random_pauli(void)
 {
     const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
-    limdd_pauli_t p;
-    p.x = rnd() & mask;
-    p.z = rnd() & mask;
+    const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+    limdd_pauli_t p = limdd_pauli_identity();
+    for (size_t q = 0; q < NQUBITS; q++) {
+        const unsigned op = 2u * ((unsigned)(xw >> q) & 1u)
+                          +      ((unsigned)(zw >> q) & 1u);
+        if (op) limdd_pauli_set(&p, q, (limdd_pauli_op_t)op);
+    }
     return p;
 }
 

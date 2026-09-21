@@ -409,7 +409,13 @@ static LIMDD_LIM
 random_label_above(uint32_t level)
 {
     const uint64_t mask = ((UINT64_C(1) << NQUBITS) - 1) & ~((UINT64_C(1) << level) - 1);
-    const limdd_pauli_t p = { rnd() & mask, rnd() & mask };
+    const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+    limdd_pauli_t p = limdd_pauli_identity();
+    for (size_t qq = 0; qq < NQUBITS; qq++) {
+        const unsigned op = 2u * ((unsigned)(xw >> qq) & 1u)
+                          +      ((unsigned)(zw >> qq) & 1u);
+        if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+    }
     return limdd_lim_make(p, random_scalar());
 }
 

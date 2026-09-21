@@ -82,6 +82,38 @@ cx_eq(cx a, cx b)
     return fabs(a.re - b.re) < 1e-9 && fabs(a.im - b.im) < 1e-9;
 }
 
+
+/*
+ * The Pauli word is a pair of arrays, so these two keep the tests free of its
+ * layout. pauli_from_words builds one from the packed bit patterns the tests
+ * generate, preserving the random stream exactly; pauli_words reads them back
+ * so that the oracles below can keep their own, independently written
+ * amplitude arithmetic -- delegating the extraction, not the formula, is what
+ * keeps them oracles.
+ */
+static limdd_pauli_t
+pauli_from_words(uint64_t xw, uint64_t zw)
+{
+    limdd_pauli_t p = limdd_pauli_identity();
+    for (size_t q = 0; q < NQUBITS; q++) {
+        const unsigned op = 2u * ((unsigned)(xw >> q) & 1u)
+                          +      ((unsigned)(zw >> q) & 1u);
+        if (op) limdd_pauli_set(&p, q, (limdd_pauli_op_t)op);
+    }
+    return p;
+}
+
+static void
+pauli_words(limdd_pauli_t p, uint64_t *xw, uint64_t *zw)
+{
+    *xw = 0; *zw = 0;
+    for (size_t q = 0; q < NQUBITS; q++) {
+        const limdd_pauli_op_t op = limdd_pauli_get(p, q);
+        if (op & 2u) *xw |= UINT64_C(1) << q;
+        if (op & 1u) *zw |= UINT64_C(1) << q;
+    }
+}
+
 static cx
 eval_at(LIMDD e, uint64_t b, uint32_t level)
 {
@@ -90,9 +122,11 @@ eval_at(LIMDD e, uint64_t b, uint32_t level)
 
     const LIMDD_LIM lim = limdd_label(e);
     const limdd_pauli_t p = limdd_lim_pauli(lim);
-    const uint64_t c = b ^ p.x;
-    const unsigned k = ((unsigned)__builtin_popcountll(p.x & p.z)
-                        + 2u * (unsigned)__builtin_popcountll(p.z & c)) & 3u;
+    uint64_t px, pz;
+    pauli_words(p, &px, &pz);
+    const uint64_t c = b ^ px;
+    const unsigned k = ((unsigned)__builtin_popcountll(px & pz)
+                        + 2u * (unsigned)__builtin_popcountll(pz & c)) & 3u;
     complex_t w;
     weight_value(limdd_lim_weight(lim), &w);
     const cx acc = cx_mul((cx){ w.r, w.i }, ipow[k]);
@@ -121,10 +155,8 @@ random_word_above(uint32_t var)
 {
     const uint64_t all = (UINT64_C(1) << NQUBITS) - 1;
     const uint64_t above = (var + 1 >= 64) ? 0 : ~((UINT64_C(1) << (var + 1)) - 1);
-    limdd_pauli_t p;
-    p.x = rnd() & all & above;
-    p.z = rnd() & all & above;
-    return p;
+    const uint64_t xw = rnd() & all & above, zw = rnd() & all & above;
+    return pauli_from_words(xw, zw);
 }
 
 static EVBDD_WGT
@@ -211,7 +243,9 @@ check_stab_below(LIMDD_TARG t)
     for (size_t i = 0; i < ng; i++) {
         const LIMDD_LIM e = limdd_stab_element(s, i);
         const limdd_pauli_t p = limdd_lim_pauli(e);
-        got[i] = ((p.x >> var) << 33) | ((p.z >> var) << 1)
+        uint64_t px, pz;
+        pauli_words(p, &px, &pz);
+        got[i] = ((px >> var) << 33) | ((pz >> var) << 1)
                | (uint64_t)(limdd_lim_weight(e) != EVBDD_ONE);
     }
     qsort(got, ng, sizeof(uint64_t), cmp_u64);

@@ -62,7 +62,11 @@ rnd(void)
 static bool
 bit_at(limdd_pauli_t p, size_t c)
 {
-    return (c < NQUBITS) ? ((p.x >> c) & 1) : ((p.z >> (c - NQUBITS)) & 1);
+    /* The column order is this file's own, deliberately written out a second
+     * time; only the extraction of a qubit's letter is delegated. */
+    const size_t q = (c < NQUBITS) ? c : c - NQUBITS;
+    const limdd_pauli_op_t op = limdd_pauli_get(p, q);
+    return (c < NQUBITS) ? ((op & 2u) != 0) : ((op & 1u) != 0);
 }
 
 static int
@@ -153,8 +157,15 @@ random_group_on(size_t want, uint32_t lo)
         const uint64_t above = (lo >= 64) ? 0 : ~((UINT64_C(1) << lo) - 1);
         const uint64_t mask = ((UINT64_C(1) << NQUBITS) - 1) & above;
         limdd_pauli_t p;
-        p.x = rnd() & mask;
-        p.z = rnd() & mask;
+        {
+            const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+            p = limdd_pauli_identity();
+            for (size_t qq = 0; qq < NQUBITS; qq++) {
+                const unsigned op = 2u * ((unsigned)(xw >> qq) & 1u)
+                                  +      ((unsigned)(zw >> qq) & 1u);
+                if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+            }
+        }
         if (limdd_pauli_is_identity(p)) continue;
 
         bool ok = true;
@@ -184,8 +195,15 @@ random_lim(void)
 {
     const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
     limdd_pauli_t p;
-    p.x = rnd() & mask;
-    p.z = rnd() & mask;
+    {
+        const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+        p = limdd_pauli_identity();
+        for (size_t qq = 0; qq < NQUBITS; qq++) {
+            const unsigned op = 2u * ((unsigned)(xw >> qq) & 1u)
+                              +      ((unsigned)(zw >> qq) & 1u);
+            if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+        }
+    }
     static const double re[6] = { 1.0, 0.0, -1.0,  0.0, 0.5, -0.25 };
     static const double im[6] = { 0.0, 1.0,  0.0, -1.0, 0.0,  0.5  };
     const unsigned w = rnd() % 6;
@@ -276,7 +294,12 @@ test_extended_groups(void)
         uint64_t ext = 0;
         for (uint32_t j = from0; j < to0; j++) ext |= UINT64_C(1) << j;
         for (uint32_t j = from1; j < to1; j++) ext |= UINT64_C(1) << j;
-        test_assert((limdd_lim_pauli(got).x & ext) == 0);
+        {   /* no X component on any extended level */
+            const limdd_pauli_t gp = limdd_lim_pauli(got);
+            for (size_t qq = 0; qq < NQUBITS; qq++)
+                if ((ext >> qq) & 1)
+                    test_assert((limdd_pauli_get(gp, qq) & 2u) == 0);
+        }
     }
     return 0;
 }

@@ -211,9 +211,15 @@ test_random_invariance(void)
         size_t k = 0;
         for (int attempt = 0; attempt < 64 && k < 4; attempt++) {
             const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
-            limdd_pauli_t p;
-            p.x = rnd() & mask;
-            p.z = rnd() & mask;
+            limdd_pauli_t p = limdd_pauli_identity();
+            {
+                const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+                for (size_t qq = 0; qq < NQUBITS; qq++) {
+                    const unsigned op = 2u * ((unsigned)(xw >> qq) & 1u)
+                                      +      ((unsigned)(zw >> qq) & 1u);
+                    if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+                }
+            }
             if (limdd_pauli_is_identity(p)) continue;
 
             bool commutes = true;
@@ -328,7 +334,15 @@ test_extend_skipped(void)
         LIMDD_LIM g[NQUBITS + 1];
         size_t k = 0;
         for (int attempt = 0; attempt < 32 && k + to < NQUBITS; attempt++) {
-            limdd_pauli_t p = { rnd() & mask, rnd() & mask };
+            limdd_pauli_t p = limdd_pauli_identity();
+            {
+                const uint64_t xw = rnd() & mask, zw = rnd() & mask;
+                for (size_t qq = 0; qq < NQUBITS; qq++) {
+                    const unsigned op = 2u * ((unsigned)(xw >> qq) & 1u)
+                                      +      ((unsigned)(zw >> qq) & 1u);
+                    if (op) limdd_pauli_set(&p, qq, (limdd_pauli_op_t)op);
+                }
+            }
             if (limdd_pauli_is_identity(p)) continue;
             bool ok = true;
             for (size_t i = 0; i < k; i++) {
@@ -346,7 +360,7 @@ test_extend_skipped(void)
         const LIMDD_STAB fast = limdd_stab_extend_skipped(s, from, to);
 
         for (uint32_t j = from; j < to; j++) {
-            limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+            limdd_pauli_t xj = limdd_pauli_single(j, LIMDD_PAULI_X);
             g[k++] = limdd_lim_make(xj, EVBDD_ONE);
         }
         const LIMDD_STAB slow = limdd_stab_make(g, k);
@@ -354,7 +368,7 @@ test_extend_skipped(void)
         test_assert(fast == slow);
         test_assert(limdd_stab_ngens(fast) == k);
         for (uint32_t j = from; j < to; j++) {
-            limdd_pauli_t xj = { UINT64_C(1) << j, 0 };
+            limdd_pauli_t xj = limdd_pauli_single(j, LIMDD_PAULI_X);
             test_assert(limdd_stab_contains(fast, limdd_lim_make(xj, EVBDD_ONE)));
         }
     }
@@ -367,8 +381,14 @@ test_concurrent(void)
     const uint64_t mask = (UINT64_C(1) << NQUBITS) - 1;
     for (size_t i = 0; i < NSHARED; i++) {
         /* Z-type generators always commute, so every pair is a valid group. */
-        limdd_pauli_t p = { 0, (rnd() & mask) | 1 };
-        limdd_pauli_t q = { 0, (rnd() & mask) | 2 };
+        limdd_pauli_t p = limdd_pauli_identity();
+        { const uint64_t zw = (rnd() & mask) | 1;
+          for (size_t qq = 0; qq < NQUBITS; qq++)
+              if ((zw >> qq) & 1) limdd_pauli_set(&p, qq, LIMDD_PAULI_Z); }
+        limdd_pauli_t q = limdd_pauli_identity();
+        { const uint64_t zw = (rnd() & mask) | 2;
+          for (size_t qq = 0; qq < NQUBITS; qq++)
+              if ((zw >> qq) & 1) limdd_pauli_set(&q, qq, LIMDD_PAULI_Z); }
         shared_gens[i][0] = limdd_lim_make(p, EVBDD_ONE);
         shared_gens[i][1] = limdd_lim_make(q, EVBDD_ONE);
         seen[i] = 0;
