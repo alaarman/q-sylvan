@@ -28,8 +28,10 @@
  * one freed almost nothing, running another immediately is a loop that gets
  * slower each time round rather than a garbage collector.
  */
-static _Atomic(uint64_t) limdd_gc_floor_lim = 0;
-static _Atomic(uint64_t) limdd_gc_floor_wgt = 0;
+static _Atomic(uint64_t) limdd_gc_floor_lim  = 0;
+static _Atomic(uint64_t) limdd_gc_floor_node = 0;
+static _Atomic(uint64_t) limdd_gc_floor_stab = 0;
+static _Atomic(uint64_t) limdd_gc_floor_wgt  = 0;
 
 #include "sylvan_refs.h"
 
@@ -341,8 +343,10 @@ VOID_TASK_0(limdd_gc_go)
     /* Remember what is left, so a collection that freed nothing is not
      * immediately repeated. The weight table has also just doubled if it was
      * collected, so its floor is measured against the new size. */
-    limdd_gc_floor_lim = limdd_lim_table_count();
-    limdd_gc_floor_wgt = wgt_table_entries_estimate();
+    limdd_gc_floor_lim  = limdd_lim_table_count();
+    limdd_gc_floor_node = limdd_node_table_count();
+    limdd_gc_floor_stab = limdd_stab_table_count();
+    limdd_gc_floor_wgt  = wgt_table_entries_estimate();
 }
 
 static _Atomic(int) limdd_gc_in_progress = 0;
@@ -369,18 +373,31 @@ VOID_TASK_IMPL_0(limdd_gc)
 }
 
 /**
- * Is a table close enough to full that an operation should stop and collect?
+ * Is a table close enough to full that the caller should collect?
  *
- * Checked at the head of each recursive step rather than between gates: one
- * gate on a large diagram can mint millions of intermediates, so a
- * between-gate check cannot intervene in the only place that matters.
+ * This is the whole trigger policy, in one place. It used to be duplicated in
+ * the simulator's gate loop, which is what let the damping below sit dead: the
+ * loop tested its own undamped thresholds and never consulted this.
+ *
+ * It cannot be asked from inside an operation, which is where a full table is
+ * actually hit -- one gate on a large diagram mints millions of intermediates.
+ * Collecting mid-flight needs the operation cache to survive a sweep, which it
+ * does not; see the note on 736bc97. So this is a between-gate check, and the
+ * headroom below is what has to absorb a whole gate.
  */
 /** Wanted when a table is nearly full AND the last collection left room. */
 static bool
 table_wants_gc(uint64_t count, uint64_t size, uint64_t floor)
 {
     if (size == 0) return false;
-    if (count <= size - (size >> 3)) return false;      /* under 7/8 full */
+    /*
+     * A quarter free, not an eighth. The headroom has to absorb a whole gate,
+     * because nothing can collect in the middle of one, and one gate on a
+     * large diagram mints millions of weights. Measured: at an eighth,
+     * rand_n20_d700 dies with a full weight table at 2^24, where a quarter
+     * finishes it in 50s.
+     */
+    if (count <= size - (size >> 2)) return false;      /* under 3/4 full */
     /* Re-collect only once a quarter of what the last one freed is used up
      * again. When it freed nothing the condition never holds, and the caller
      * runs out of table and reports it rather than spinning. */
@@ -390,8 +407,24 @@ table_wants_gc(uint64_t count, uint64_t size, uint64_t floor)
 bool
 limdd_gc_wanted(void)
 {
+    /*
+     * The weight table keeps a plain counter, so it is asked every time. The
+     * other three walk an occupancy bitmap to count, which cost 17% of a run
+     * on a 20-qubit Clifford+T circuit when asked every gate -- more than the
+     * coset search -- so they are asked every 16th time. The eighth of
+     * headroom in table_wants_gc is what absorbs those 16 gates.
+     */
+    if (table_wants_gc(wgt_table_entries_estimate(),
+                       sylvan_get_edge_weight_table_size(), limdd_gc_floor_wgt))
+        return true;
+
+    static _Atomic(uint64_t) calls = 0;
+    if ((atomic_fetch_add(&calls, 1) & 15u) != 0) return false;
+
     return table_wants_gc(limdd_lim_table_count(), limdd_lim_table_size(),
                           limdd_gc_floor_lim)
-        || table_wants_gc(wgt_table_entries_estimate(),
-                          sylvan_get_edge_weight_table_size(), limdd_gc_floor_wgt);
+        || table_wants_gc(limdd_node_table_count(), limdd_node_table_size(),
+                          limdd_gc_floor_node)
+        || table_wants_gc(limdd_stab_table_count(), limdd_stab_table_size(),
+                          limdd_gc_floor_stab);
 }

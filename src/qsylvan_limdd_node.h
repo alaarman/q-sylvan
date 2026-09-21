@@ -166,6 +166,9 @@ void limdd_nodes_quit(void);
 /** Number of nodes currently in the table, terminal excluded. */
 size_t limdd_node_table_count(void);
 
+/** Buckets in the node table, or 0 before it exists. */
+size_t limdd_node_table_size(void);
+
 /** Pack a LIM and a target into an edge. */
 static inline LIMDD
 limdd_bundle(LIMDD_LIM lim, LIMDD_TARG target)

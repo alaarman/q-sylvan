@@ -76,6 +76,12 @@ die(void)
 }
 
 size_t
+limdd_stab_table_size(void)
+{
+    return stab_table == NULL ? 0 : llmsset_get_size(stab_table);
+}
+
+size_t
 limdd_stab_table_count(void)
 {
     if (stab_table == NULL) return 0;

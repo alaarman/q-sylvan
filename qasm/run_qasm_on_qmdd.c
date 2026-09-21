@@ -513,7 +513,7 @@ limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
     return true;
 }
 
-TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize)
+TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
 {
     const BDDVAR n = circuit->qreg_size;
     if (n > LIMDD_MAX_QUBITS) {
@@ -524,7 +524,6 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
     }
 
     const double t_start = wctime();
-    unsigned gate_counter = 0;
     LIMDD state = limdd_all_zero_state(n);
     limdd_protect(&state);
 
@@ -552,25 +551,13 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
          * roots and does not see a half-finished operation's temporaries.
          */
         /*
-         * The three table counts walk a whole occupancy bitmap each, so
-         * asking every gate cost 17% of the run on a 20-qubit Clifford+T
-         * circuit -- more than the coset search. Asked every 16th gate
-         * instead, which the quarter of headroom in the thresholds below
-         * comfortably absorbs. The weight estimate is a plain counter, so it
-         * stays on every gate.
+         * The thresholds, the every-16th-gate amortisation of the bitmap
+         * scans, and the damping that stops a collection which freed nothing
+         * from being repeated all live in limdd_gc_wanted. They were once
+         * spelled out here instead, which is how the damping came to be
+         * written and never used: this loop tested its own undamped copy.
          */
-        const uint64_t wgt_size = sylvan_get_edge_weight_table_size();
-        const bool scan = (++gate_counter & 15u) == 0;
-        if ((scan && (limdd_lim_table_count() > tabsize - (tabsize >> 2) ||
-                      limdd_node_table_count() > tabsize - (tabsize >> 2) ||
-                      limdd_stab_table_count() > tabsize - (tabsize >> 2))) ||
-            /* The weight table too, or it fills to the brim and aborts while
-             * the tables that do drive a collection are still half empty --
-             * which is what happened, since a LIMDD mints far more weights
-             * than it keeps and nothing else ever reclaims them. */
-            wgt_table_entries_estimate() > wgt_size - (wgt_size >> 2)) {
-            CALL(limdd_gc);
-        }
+        if (limdd_gc_wanted()) CALL(limdd_gc);
     }
 
     /* A final rebuild, so a deferred run is compared in its canonical form
@@ -724,7 +711,7 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          * they reach it, so a value larger than the diagram is deep sends
          * them past the terminal. */
         limdd_nodes_init(circuit->qreg_size, lt, lt, lim_t, lt);
-        if (CALL(limdd_simulate_circuit, circuit, lt) != 0) {
+        if (CALL(limdd_simulate_circuit, circuit) != 0) {
             limdd_nodes_quit();
             exit(1);
         }

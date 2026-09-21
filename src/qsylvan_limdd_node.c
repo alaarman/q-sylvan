@@ -240,6 +240,12 @@ limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
 }
 
 size_t
+limdd_node_table_size(void)
+{
+    return limdd_nodes == NULL ? 0 : llmsset_get_size(limdd_nodes);
+}
+
+size_t
 limdd_node_table_count(void)
 {
     if (limdd_nodes == NULL) return 0;
