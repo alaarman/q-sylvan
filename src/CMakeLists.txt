@@ -159,6 +159,18 @@ if(BUILD_SHARED_LIBS)
     )
 endif()
 
+# ── LIMDD Pauli width ───────────────────────────────────────────────────────
+#
+# 64-bit words per component of a Pauli word, so the qubit limit is 64 times
+# this. One is the historical width and generates the same code as before it
+# was a variable; raising it costs 16 bytes per Pauli table entry per extra
+# word and moves those entries off the bucket onto the heap.
+set(LIMDD_PAULI_WORDS 1 CACHE STRING "64-bit words per Pauli component (qubit limit is 64x this)")
+if(NOT LIMDD_PAULI_WORDS MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "LIMDD_PAULI_WORDS must be a positive integer, got '${LIMDD_PAULI_WORDS}'")
+endif()
+target_compile_definitions(qsylvan PUBLIC LIMDD_PAULI_WORDS=${LIMDD_PAULI_WORDS})
+
 # ── Compiler flags ──────────────────────────────────────────────────────────
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
