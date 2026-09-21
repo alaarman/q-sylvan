@@ -406,6 +406,17 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
     if (!high_determinism) return t;
 
     /*
+     * Nothing to record when the node already says its group is trivial: the
+     * bit is in the node, limdd_node_stab answers from it, and the cache is
+     * never consulted for this node again. Skipping the store is the point of
+     * that bit -- otherwise every node would still write one word into an
+     * array shared by all the workers, and those writes are not confined to
+     * the region a worker allocates from, since a worker computes the group
+     * of whatever node it descends into.
+     */
+    if (limdd_node_stab_is_trivial(t)) return t;
+
+    /*
      * A fresh bucket may be one a collection has recycled, so whatever is in
      * its cache slot belongs to whoever had it before and must be replaced,
      * not read.
