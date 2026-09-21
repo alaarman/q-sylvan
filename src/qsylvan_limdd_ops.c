@@ -454,6 +454,9 @@ typedef struct {
     uint64_t support_sum[64];  /* summed Pauli support of their high LIMs */
     uint64_t support_max[64];
     uint64_t by_support[65];   /* distinct LIMs with a given support */
+    uint64_t stab_uncomputed, stab_trivial;
+    uint64_t by_ngens[66];     /* nodes whose cached group has k generators */
+    uint64_t *handles; size_t nhandles, caphandles;
     LIMDD_LIM *lims;           /* distinct high LIMs seen */
     size_t    nlims, caplims;
 } lim_stats_t;
@@ -469,6 +472,25 @@ lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
     const uint32_t var = limdd_node_var(t);
     const LIMDD high = limdd_node_high(t);
     st->nodes[var]++;
+
+    {   /* the cached stabiliser group, read raw so nothing is computed here */
+        const uint64_t g = limdd_node_stab_raw(t);
+        if (g == 0) st->stab_uncomputed++;
+        else if (limdd_stab_is_trivial(g)) st->stab_trivial++;
+        else {
+            const size_t k = limdd_stab_ngens(g);
+            st->by_ngens[k <= 65 ? k : 65]++;
+            bool fresh = true;
+            for (size_t i = 0; i < st->nhandles; i++) if (st->handles[i] == g) { fresh = false; break; }
+            if (fresh) {
+                if (st->nhandles == st->caphandles) {
+                    st->caphandles = st->caphandles ? st->caphandles * 2 : 1024;
+                    st->handles = realloc(st->handles, st->caphandles * sizeof(uint64_t));
+                }
+                st->handles[st->nhandles++] = g;
+            }
+        }
+    }
 
     if (!limdd_edge_is_zero(high)) {
         const LIMDD_LIM l = limdd_label(high);
@@ -520,14 +542,24 @@ limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
         tot += st.nodes[v];
         if (dense <= 23) fit23 += st.nodes[v];
     }
+    fprintf(out, "LIMSTAT-TABLES pauli=%zu lim=%zu nodes=%zu stabcells=%zu\n",
+            limdd_pauli_table_count(), limdd_lim_table_count(),
+            limdd_node_table_count(), limdd_stab_table_count());
     fprintf(out, "LIMSTAT-TOTAL nodes=%llu fit_dense_23bit=%llu (%.1f%%) distinct_high_lims=%zu\n",
             (unsigned long long)tot, (unsigned long long)fit23,
             tot ? 100.0 * (double)fit23 / (double)tot : 0.0, st.nlims);
+    fprintf(out, "LIMSTAT-STAB uncomputed=%llu trivial=%llu nontrivial_distinct=%zu\n",
+            (unsigned long long)st.stab_uncomputed, (unsigned long long)st.stab_trivial,
+            st.nhandles);
+    for (unsigned k = 0; k <= 65; k++) {
+        if (st.by_ngens[k]) fprintf(out, "LIMGENS %u %llu\n", k, (unsigned long long)st.by_ngens[k]);
+    }
     fprintf(out, "# distinct high LIMs by Pauli support\n");
     for (unsigned k = 0; k <= 64; k++) {
         if (st.by_support[k]) fprintf(out, "LIMSUP %u %llu\n", k, (unsigned long long)st.by_support[k]);
     }
 
+    free(st.handles);
     free(st.lims);
     free(s.slot);
 }
