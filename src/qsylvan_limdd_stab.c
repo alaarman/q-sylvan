@@ -519,6 +519,24 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
     assert(stab_table != NULL);
     assert(!limdd_lim_is_zero(b) && "the zero map has no coset to minimise");
 
+    /*
+     * Memoised on its three arguments, all of which are interned handles, so
+     * the key names the problem exactly. Worth it because the expensive part
+     * -- stack_generators, which runs a full elimination over both groups --
+     * depends only on s0 and s1, and makeedge asks for the same pair of child
+     * groups over and over as a diagram is built. Two results, so this uses
+     * the six-word cache: the representative, and the witness with the sign
+     * flip in its top bit.
+     */
+    {
+        uint64_t r1, r2;
+        if (cache_get6(CACHE_LIMDD_MINCOSET, b, s0, s1, 0, 0, &r1, &r2)) {
+            if (witness != NULL) *witness = (LIMDD_LIM)(r2 & ~(UINT64_C(1) << 63));
+            if (negated != NULL) *negated = (r2 >> 63) != 0;
+            return (LIMDD_LIM)r1;
+        }
+    }
+
     const size_t nqubits = limdd_lims_nqubits();
 
     size_t n;
@@ -563,6 +581,9 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
 
     const bool flip = !sign_is_canonical(limdd_lim_weight(e));
     if (flip) e = limdd_lim_make(limdd_lim_pauli(e), wgt_neg(limdd_lim_weight(e)));
+
+    cache_put6(CACHE_LIMDD_MINCOSET, b, s0, s1, 0, 0,
+               (uint64_t)e, (uint64_t)g | ((uint64_t)flip << 63));
 
     if (witness != NULL) *witness = g;
     if (negated != NULL) *negated = flip;
