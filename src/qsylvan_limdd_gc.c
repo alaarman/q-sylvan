@@ -118,6 +118,26 @@ VOID_TASK_0(limdd_gc_go)
 
     limdd_gc_purge_stab_cache();
 
+    /*
+     * Edge weights, between marking and the rehash below -- the only window
+     * where the live set is known and the LIM buckets may still be rewritten.
+     *
+     * Gated on the weight table filling rather than done on every collection,
+     * because a collection here is triggered by the LIM, node or stabiliser
+     * table and says nothing about the weights, while wgt_table_gc_init_new
+     * doubles the table each time it runs. Collecting when there is no
+     * pressure would grow it for no reason.
+     */
+    const uint64_t wgt_size = sylvan_get_edge_weight_table_size();
+    if (wgt_table_entries_estimate() > wgt_size / 2 &&
+        getenv("LIMDD_NO_WGT_GC") == NULL) {
+        const uint64_t before = wgt_table_entries_estimate();
+        const size_t kept = limdd_gc_remap_weights();
+        if (getenv("LIMDD_GC_VERBOSE"))
+            fprintf(stderr, "[gc] weights: %llu -> %zu kept (table %llu)\n",
+                    (unsigned long long)before, kept, (unsigned long long)wgt_size);
+    }
+
     limdd_gc_rehash_lims();
     limdd_gc_rehash_stabs();
     limdd_gc_rehash_nodes();

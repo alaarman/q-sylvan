@@ -543,9 +543,15 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
          * Between gates is the only safe moment: the collector has explicit
          * roots and does not see a half-finished operation's temporaries.
          */
+        const uint64_t wgt_size = sylvan_get_edge_weight_table_size();
         if (limdd_lim_table_count() > tabsize - (tabsize >> 2) ||
             limdd_node_table_count() > tabsize - (tabsize >> 2) ||
-            limdd_stab_table_count() > tabsize - (tabsize >> 2)) {
+            limdd_stab_table_count() > tabsize - (tabsize >> 2) ||
+            /* The weight table too, or it fills to the brim and aborts while
+             * the tables that do drive a collection are still half empty --
+             * which is what happened, since a LIMDD mints far more weights
+             * than it keeps and nothing else ever reclaims them. */
+            wgt_table_entries_estimate() > wgt_size - (wgt_size >> 2)) {
             CALL(limdd_gc);
         }
     }

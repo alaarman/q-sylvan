@@ -290,6 +290,29 @@ limdd_gc_clear_lims(void)
     llmsset_clear_data(pauli_table);
 }
 
+size_t
+limdd_gc_remap_weights(void)
+{
+    assert(lim_table != NULL);
+
+    /* The new table is seeded with 1, 0, -1 and the gate entries: gates[][]
+     * holds weight indices too, and they are about to go stale, so the hook
+     * Q-Sylvan recorded at init has to re-create them in the new table. */
+    wgt_table_gc_init_new(init_wgt_table_entries);
+
+    size_t kept = 0;
+    const size_t n = llmsset_get_size(lim_table);
+    for (size_t i = 2; i < n; i++) {          /* 0 and 1 are reserved */
+        if (!llmsset_is_marked(lim_table, i)) continue;
+        uint64_t *bucket = (uint64_t *)llmsset_index_to_ptr(lim_table, i);
+        bucket[1] = (uint64_t)wgt_table_gc_keep((EVBDD_WGT)bucket[1]);
+        kept++;
+    }
+
+    wgt_table_gc_delete_old();
+    return kept;
+}
+
 void
 limdd_gc_rehash_lims(void)
 {

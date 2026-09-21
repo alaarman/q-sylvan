@@ -209,6 +209,24 @@ void limdd_gc_clear_lims(void);
 /** Rebuild both hash arrays, and re-mark the reserved LIMs. */
 void limdd_gc_rehash_lims(void);
 
+/**
+ * Move the edge weights of every live LIM into a fresh weight table, and
+ * discard the old one. Returns the number kept.
+ *
+ * Nothing else reclaims them. The weight table is collected by copying, which
+ * assigns new indices, and Q-Sylvan's own collector rewrites every EVBDD to
+ * match -- a path a LIMDD never takes, so limdd_nodes_init switches it off and
+ * the table then only grows. Measured, 95% to 99.8% of it is dead.
+ *
+ * Copying is safe here for a reason particular to llmsset: a bucket keeps its
+ * index across a collection. A LIM is interned under (Pauli, weight), so a new
+ * weight index changes the bucket's CONTENTS but not the index it sits at, and
+ * every node referring to that LIM stays valid. Only the LIM table's hash has
+ * to be rebuilt -- which limdd_gc_rehash_lims already does, so this must run
+ * between marking and that rehash, and nowhere else.
+ */
+size_t limdd_gc_remap_weights(void);
+
 /** Print `lim` as "(re,im) * IXYZ" to `out`, without a trailing newline. */
 void limdd_lim_fprint(FILE *out, LIMDD_LIM lim);
 

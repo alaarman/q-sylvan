@@ -461,6 +461,8 @@ typedef struct {
     uint64_t *handles; size_t nhandles, caphandles;
     LIMDD_LIM *lims;           /* distinct high LIMs seen */
     size_t    nlims, caplims;
+    EVBDD_WGT *wgts;           /* distinct weights among live labels */
+    size_t    nwgts, capwgts;
 } lim_stats_t;
 
 static void
@@ -509,6 +511,17 @@ lim_stats_rec(LIMDD e, seen_t *s, lim_stats_t *st, uint32_t nqubits)
                 st->lims = realloc(st->lims, st->caplims * sizeof(LIMDD_LIM));
             }
             st->lims[st->nlims++] = l;
+            const EVBDD_WGT wv = limdd_lim_weight(l);
+            bool wfresh = true;
+            for (size_t i = 0; i < st->nwgts; i++)
+                if (st->wgts[i] == wv) { wfresh = false; break; }
+            if (wfresh) {
+                if (st->nwgts == st->capwgts) {
+                    st->capwgts = st->capwgts ? st->capwgts * 2 : 1024;
+                    st->wgts = realloc(st->wgts, st->capwgts * sizeof(EVBDD_WGT));
+                }
+                st->wgts[st->nwgts++] = wv;
+            }
             st->by_support[sup <= LIMDD_MAX_QUBITS ? sup : LIMDD_MAX_QUBITS]++;
         }
     }
@@ -550,6 +563,8 @@ limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
     fprintf(out, "LIMSTAT-TOTAL nodes=%llu fit_dense_23bit=%llu (%.1f%%) distinct_high_lims=%zu\n",
             (unsigned long long)tot, (unsigned long long)fit23,
             tot ? 100.0 * (double)fit23 / (double)tot : 0.0, st.nlims);
+    fprintf(out, "LIMSTAT-WGT live_distinct=%zu interned_estimate=%llu\n",
+            st.nwgts, (unsigned long long)wgt_table_entries_estimate());
     fprintf(out, "LIMSTAT-STAB uncomputed=%llu trivial=%llu nontrivial_distinct=%zu\n",
             (unsigned long long)st.stab_uncomputed, (unsigned long long)st.stab_trivial,
             st.nhandles);
@@ -561,6 +576,7 @@ limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
         if (st.by_support[k]) fprintf(out, "LIMSUP %u %llu\n", k, (unsigned long long)st.by_support[k]);
     }
 
+    free(st.wgts);
     free(st.handles);
     free(st.lims);
     free(s.slot);
