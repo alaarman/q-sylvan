@@ -517,6 +517,7 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
     }
 
     const double t_start = wctime();
+    unsigned gate_counter = 0;
     LIMDD state = limdd_all_zero_state(n);
     limdd_protect(&state);
 
@@ -543,10 +544,19 @@ TASK_2(int, limdd_simulate_circuit, quantum_circuit_t*, circuit, size_t, tabsize
          * Between gates is the only safe moment: the collector has explicit
          * roots and does not see a half-finished operation's temporaries.
          */
+        /*
+         * The three table counts walk a whole occupancy bitmap each, so
+         * asking every gate cost 17% of the run on a 20-qubit Clifford+T
+         * circuit -- more than the coset search. Asked every 16th gate
+         * instead, which the quarter of headroom in the thresholds below
+         * comfortably absorbs. The weight estimate is a plain counter, so it
+         * stays on every gate.
+         */
         const uint64_t wgt_size = sylvan_get_edge_weight_table_size();
-        if (limdd_lim_table_count() > tabsize - (tabsize >> 2) ||
-            limdd_node_table_count() > tabsize - (tabsize >> 2) ||
-            limdd_stab_table_count() > tabsize - (tabsize >> 2) ||
+        const bool scan = (++gate_counter & 15u) == 0;
+        if ((scan && (limdd_lim_table_count() > tabsize - (tabsize >> 2) ||
+                      limdd_node_table_count() > tabsize - (tabsize >> 2) ||
+                      limdd_stab_table_count() > tabsize - (tabsize >> 2))) ||
             /* The weight table too, or it fills to the brim and aborts while
              * the tables that do drive a collection are still half empty --
              * which is what happened, since a LIMDD mints far more weights

@@ -655,9 +655,25 @@ norm_sq(LIMDD e, uint32_t var, uint32_t nqubits)
         return skipped * (w.r * w.r + w.i * w.i);
     }
 
+    /*
+     * Memoised on the edge and the level. Without this the walk is a tree
+     * walk over a DAG, so a shared subdiagram is re-summed once per path
+     * reaching it -- 25% of the run on a 20-qubit Clifford+T circuit, and
+     * that is only the norm the simulator reports at the end, not the
+     * simulation. The level is part of the key for the same reason it is in
+     * limdd_plus's: an edge does not say what level it is read at, and the
+     * skipped levels above it each double the result.
+     */
+    union { double d; uint64_t u; } conv;
+    if (cache_get3(CACHE_LIMDD_NORMSQ, var, e, 0, &conv.u)) return conv.d;
+
     LIMDD lo, hi;
     limdd_cofactors(e, lev, &lo, &hi);
-    return skipped * (norm_sq(lo, lev + 1, nqubits) + norm_sq(hi, lev + 1, nqubits));
+    const double res = skipped * (norm_sq(lo, lev + 1, nqubits)
+                                + norm_sq(hi, lev + 1, nqubits));
+    conv.d = res;
+    cache_put3(CACHE_LIMDD_NORMSQ, var, e, 0, conv.u);
+    return res;
 }
 
 double
