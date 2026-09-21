@@ -153,6 +153,10 @@ limdd_node_stab(LIMDD_TARG p)
 {
     if (p == LIMDD_TERMINAL) return LIMDD_STAB_TRIVIAL;
 
+    /* The common case, answered from the node itself: no cache line outside
+     * this node is touched, so it costs nothing and contends with nobody. */
+    if (limdd_node_stab_is_trivial(p)) return LIMDD_STAB_TRIVIAL;
+
     const uint64_t cached = limdd_node_stab_raw(p);
     if (cached != 0) return cached;
 

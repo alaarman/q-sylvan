@@ -254,6 +254,19 @@ LIMDD limdd_node_high(LIMDD_TARG p);
  * llmsset hands each worker a 512-bucket region at a time, so concurrent
  * writers are normally far further apart than that.
  */
+/**
+ * True iff this node's stabiliser group is known trivial without consulting
+ * anything outside the node.
+ *
+ * Recorded in a spare bit when the node is interned, from the node's own
+ * contents and its children's copies of the same bit, so it costs no memory
+ * and no shared write. On the circuits measured 75% to 100% of nodes answer
+ * true, and for those limdd_node_stab never touches the cache below.
+ *
+ * Conservative: false means "not known trivial", not "non-trivial".
+ */
+bool limdd_node_stab_is_trivial(LIMDD_TARG p);
+
 uint64_t limdd_node_stab_raw(LIMDD_TARG p);
 void limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v);
 

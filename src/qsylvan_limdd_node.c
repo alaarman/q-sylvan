@@ -46,6 +46,14 @@ static LIMDD one_edge  = 0;
 /* Bit 63 of the high word is the GC mark. It has no constant here because
  * nothing collects yet; llmsset_index_to_ptr hands out the whole bucket, so
  * the mark loop will set it directly when GC is wired up. */
+/*
+ * Bit 63 of the LOW word: set iff this node's stabiliser group is provably
+ * trivial by the cheap test in stab_trivially_trivial() below. Bit 63 of the
+ * low word is the one spare bit that neither EVBDD nor LIMDD uses for
+ * anything else -- EVBDD's mark is bit 63 of the HIGH word, and its
+ * wgt_val flag is bit 45 of the low one.
+ */
+static const uint64_t limdd_stab_triv_mask = UINT64_C(0x8000000000000000);
 static const uint64_t limdd_var_mask      = UINT64_C(0x7fff800000000000); // bits 47..62
 static const uint64_t limdd_low_zero_mask = UINT64_C(0x0000400000000000); // bit 46
 static const uint64_t limdd_lim_mask      = UINT64_C(0x7fffff0000000000); // bits 40..62
@@ -64,6 +72,48 @@ limdd_getnode(LIMDD_TARG p)
     assert(limdd_nodes != NULL);
     assert(p != LIMDD_TERMINAL);
     return (limddnode_t) llmsset_index_to_ptr(limdd_nodes, p);
+}
+
+bool
+limdd_node_stab_is_trivial(LIMDD_TARG p)
+{
+    if (p == LIMDD_TERMINAL) return true;   /* the empty product fixes nothing */
+    return (limdd_getnode(p)->low & limdd_stab_triv_mask) != 0;
+}
+
+/**
+ * Is this node's stabiliser group trivial, by a test that costs nothing?
+ *
+ * Reading limdd_stab_of_node: with neither branch dead, the only generators
+ * are the diagonal part -- the elements of s0 whose word lies in s1's span --
+ * and one anti-diagonal representative, which exists only when the two child
+ * edges point at the same node. If EITHER child group is trivial the diagonal
+ * part is empty: with s0 trivial there is nothing to draw from, and with s1
+ * trivial its span is {0}, which admits only the identity word, and no
+ * stabiliser group holds a non-identity element with the identity word. So
+ * the group is exactly trivial when neither branch is dead, the targets
+ * differ, and one child contributes nothing.
+ *
+ * A child contributes nothing when its own group is trivial AND its edge
+ * skips no level: a skipped level adds an X_j generator (see
+ * limdd_stab_extend_skipped), which would survive the intersection.
+ *
+ * Conservative in one direction only -- when both children have non-trivial
+ * groups this answers false and the caller computes properly -- and it is a
+ * pure function of the node's contents, so every caller that builds the same
+ * node derives the same bit and hash consing is unaffected.
+ */
+static bool
+stab_trivially_trivial(uint32_t var, LIMDD low, LIMDD high)
+{
+    if (limdd_lim_is_zero(limdd_label(low)) ||
+        limdd_lim_is_zero(limdd_label(high))) return false;   /* a dead branch adds Z */
+
+    const LIMDD_TARG lt = limdd_target(low), ht = limdd_target(high);
+    if (lt == ht) return false;                               /* anti-diagonal may fire */
+
+    return (limdd_node_stab_is_trivial(lt) && limdd_level(lt) == var + 1)
+        || (limdd_node_stab_is_trivial(ht) && limdd_level(ht) == var + 1);
 }
 
 uint64_t
@@ -177,6 +227,7 @@ limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
     struct limddnode n;
     n.low  = ((uint64_t)var << LIMDD_VAR_SHIFT)
            | (limdd_lim_is_zero(low_lim) ? limdd_low_zero_mask : 0)
+           | (stab_trivially_trivial(var, low, high) ? limdd_stab_triv_mask : 0)
            | low_targ;
     n.high = ((uint64_t)high_lim << LIMDD_TARG_BITS) | high_targ;
 
