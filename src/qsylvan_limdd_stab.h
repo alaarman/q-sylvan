@@ -116,6 +116,15 @@ size_t limdd_stab_ngens(LIMDD_STAB s);
 /** The i-th generator in RREF order; i must be below limdd_stab_ngens(s). */
 LIMDD_LIM limdd_stab_gen(LIMDD_STAB s, size_t i);
 
+/**
+ * The list a group is made of: its first generator, and the group of the
+ * rest. Walking with these costs one pointer chase per generator, where
+ * calling limdd_stab_gen for each index restarts from the head and costs
+ * O(k^2) for the whole list.
+ */
+LIMDD_LIM  limdd_stab_head(LIMDD_STAB s);
+LIMDD_STAB limdd_stab_tail(LIMDD_STAB s);
+
 /** True iff `s` is the trivial group {I}. */
 static inline bool
 limdd_stab_is_trivial(LIMDD_STAB s)

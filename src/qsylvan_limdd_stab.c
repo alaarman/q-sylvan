@@ -63,6 +63,7 @@ typedef struct {
     limdd_pauli_t w;
     uint64_t mask0;   /* which generators of s0 went into this row */
     uint64_t mask1;   /* and which of s1 */
+    size_t   pivot;   /* leading column, for rows 0..top-1 of the RREF */
 } isect_row_t;
 
 static SYLVAN_TLS isect_row_t isect[STAB_SCRATCH_ROWS];
@@ -116,11 +117,32 @@ limdd_stab_ngens(LIMDD_STAB s)
 }
 
 LIMDD_LIM
+limdd_stab_head(LIMDD_STAB s)
+{
+    return stab_head(s);
+}
+
+LIMDD_STAB
+limdd_stab_tail(LIMDD_STAB s)
+{
+    return stab_tail(s);
+}
+
+LIMDD_LIM
 limdd_stab_gen(LIMDD_STAB s, size_t i)
 {
     while (i-- > 0) s = stab_tail(s);
     return stab_head(s);
 }
+
+/*
+ * A group is a linked list, so limdd_stab_gen(s, i) walks from the head every
+ * time and reading all k generators by index costs O(k^2) pointer chases.
+ * That showed up as the second hottest function in the profile, under
+ * stack_generators. Everything below walks the list once instead. The ORDER
+ * is preserved exactly: Pauli products do not commute, and the callers that
+ * multiply tagged generators back together recover the phase from it.
+ */
 
 /* --- reduction ----------------------------------------------------------- */
 
@@ -386,17 +408,21 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
     assert(k0 <= 64 && k1 <= 64 && "generator tags are 64-bit masks");
 
     size_t n = 0;
-    for (size_t i = 0; i < k0; i++) {
-        isect[n].w = limdd_lim_pauli(limdd_stab_gen(s0, i));
-        isect[n].mask0 = UINT64_C(1) << i;
-        isect[n].mask1 = 0;
-        n++;
-    }
-    for (size_t j = 0; j < k1; j++) {
-        isect[n].w = limdd_lim_pauli(limdd_stab_gen(s1, j));
-        isect[n].mask0 = 0;
-        isect[n].mask1 = UINT64_C(1) << j;
-        n++;
+    {
+        LIMDD_STAB c = s0;
+        for (size_t i = 0; i < k0; i++, c = stab_tail(c)) {
+            isect[n].w = limdd_lim_pauli(stab_head(c));
+            isect[n].mask0 = UINT64_C(1) << i;
+            isect[n].mask1 = 0;
+            n++;
+        }
+        c = s1;
+        for (size_t j = 0; j < k1; j++, c = stab_tail(c)) {
+            isect[n].w = limdd_lim_pauli(stab_head(c));
+            isect[n].mask0 = 0;
+            isect[n].mask1 = UINT64_C(1) << j;
+            n++;
+        }
     }
 
     /*
@@ -428,6 +454,11 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
             isect[r].mask0 ^= isect[top].mask0;
             isect[r].mask1 ^= isect[top].mask1;
         }
+        /* Recorded here, where it is already known. limdd_stab_min_coset
+         * would otherwise rescan each row from column 0 to find it again --
+         * O(top * 2n) bit tests on every coset minimisation, and this is the
+         * hottest function in the profile. */
+        isect[top].pivot = c;
         top++;
     }
 
@@ -440,8 +471,8 @@ static LIMDD_LIM
 product_of(LIMDD_STAB s, uint64_t mask)
 {
     LIMDD_LIM acc = LIMDD_LIM_IDENTITY;
-    for (size_t i = 0; mask != 0; i++, mask >>= 1) {
-        if (mask & 1) acc = limdd_lim_mul(acc, limdd_stab_gen(s, i));
+    for (; mask != 0; mask >>= 1, s = stab_tail(s)) {
+        if (mask & 1) acc = limdd_lim_mul(acc, stab_head(s));
     }
     return acc;
 }
@@ -504,11 +535,16 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
     uint64_t mask0 = 0, mask1 = 0;
 
     for (size_t r = 0; r < top; r++) {
-        size_t c = 0;
-        const gen_row_t row = { isect[r].w, false };
-        while (c < 2 * nqubits && !row_bit(&row, c, nqubits)) c++;
+        const size_t c = isect[r].pivot;     /* recorded by stack_generators */
         assert(c < 2 * nqubits && "an eliminated row is never the identity");
-
+#ifndef NDEBUG
+        {   /* the recorded pivot must still be the row's leading column */
+            const gen_row_t row = { isect[r].w, false };
+            size_t chk = 0;
+            while (chk < 2 * nqubits && !row_bit(&row, chk, nqubits)) chk++;
+            assert(chk == c);
+        }
+#endif
         if (!row_bit(&cur, c, nqubits)) continue;
         limdd_pauli_xor(&cur.p, isect[r].w);
         mask0 ^= isect[r].mask0;
@@ -559,8 +595,8 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
          * losing some to the intersection.
          */
         out[nout++] = limdd_lim_make(z_here, EVBDD_ONE);
-        const size_t k0 = limdd_stab_ngens(s0);
-        for (size_t i = 0; i < k0; i++) out[nout++] = limdd_stab_gen(s0, i);
+        for (LIMDD_STAB c = s0; c != LIMDD_STAB_TRIVIAL; c = stab_tail(c))
+            out[nout++] = stab_head(c);
         return limdd_stab_make(out, nout);
     }
 
@@ -573,8 +609,8 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
          * here, and Stab(v1) arrives conjugated by B.
          */
         out[nout++] = limdd_lim_make(z_here, EVBDD_MIN_ONE);
-        const size_t k1 = limdd_stab_ngens(s1);
-        for (size_t i = 0; i < k1; i++) out[nout++] = conjugate(limdd_stab_gen(s1, i), q);
+        for (LIMDD_STAB c = s1; c != LIMDD_STAB_TRIVIAL; c = stab_tail(c))
+            out[nout++] = conjugate(stab_head(c), q);
         return limdd_stab_make(out, nout);
     }
 

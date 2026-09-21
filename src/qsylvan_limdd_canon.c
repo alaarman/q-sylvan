@@ -202,13 +202,14 @@ limdd_edge_stab(uint32_t level, LIMDD e)
      * sign their commutation gives. That covers the skipped levels too: X_j
      * anticommutes with a Z or Y at j and comes back as -X_j, which is right,
      * since that level then holds |0>-|1>. */
+    /* One walk, not one per index: limdd_stab_gen restarts at the head. */
     LIMDD_LIM gens[LIMDD_MAX_QUBITS];
-    const size_t k = limdd_stab_ngens(s);
-    for (size_t i = 0; i < k; i++) {
-        const LIMDD_LIM g = limdd_stab_gen(s, i);
-        gens[i] = (limdd_pauli_commutation_phase(limdd_lim_pauli(g), q) == 0)
-                ? g
-                : limdd_lim_make(limdd_lim_pauli(g), wgt_neg(limdd_lim_weight(g)));
+    size_t k = 0;
+    for (LIMDD_STAB c = s; c != LIMDD_STAB_TRIVIAL; c = limdd_stab_tail(c)) {
+        const LIMDD_LIM g = limdd_stab_head(c);
+        gens[k++] = (limdd_pauli_commutation_phase(limdd_lim_pauli(g), q) == 0)
+                  ? g
+                  : limdd_lim_make(limdd_lim_pauli(g), wgt_neg(limdd_lim_weight(g)));
     }
     return limdd_stab_make(gens, k);
 }
