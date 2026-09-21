@@ -382,6 +382,15 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
      */
     evbdd_set_auto_gc_wgt_table(false);
 
+    /* One reference stack per worker, so operations can be interrupted by a
+     * collection without losing what they are holding. Declared here rather
+     * than included: qsylvan_limdd_gc.h reaches this header through canon.h,
+     * so including it back would be circular. */
+    {
+        extern void limdd_refs_init(void);
+        limdd_refs_init();
+    }
+
     zero_edge = limdd_bundle(LIMDD_LIM_ZERO, LIMDD_TERMINAL);
     one_edge  = limdd_bundle(LIMDD_LIM_IDENTITY, LIMDD_TERMINAL);
 }

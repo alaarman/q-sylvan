@@ -132,6 +132,9 @@ size_t limdd_pauli_table_count(void);
 /** Number of distinct LIMs interned so far. Needs a running Lace. */
 size_t limdd_lim_table_count(void);
 
+/** Capacity of the LIM table, for deciding when to collect. */
+size_t limdd_lim_table_size(void);
+
 /**
  * Intern `p`, returning its reference. Equal words always give equal
  * references. Aborts if the table is full.

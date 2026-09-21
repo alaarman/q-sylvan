@@ -70,6 +70,8 @@
 
 #include <stddef.h>
 
+#include <lace.h>
+
 #include "qsylvan_limdd_canon.h"
 
 #ifdef __cplusplus
@@ -88,6 +90,42 @@ void limdd_unprotect(LIMDD *a);
 
 /** How many variables are currently protected. */
 size_t limdd_count_protected(void);
+
+/* --- per-worker reference stacks ------------------------------------------
+ *
+ * limdd_protect is for the few long-lived roots a caller holds -- a
+ * simulator's state edge. It is a shared set, so protecting an intermediate
+ * there would have every worker writing to one structure on the hot path.
+ * These stacks are the opposite: private to a worker, and the mechanism that
+ * lets a collection run WHILE an operation is in flight.
+ *
+ * Use is the same discipline as Sylvan's own, which these mirror:
+ *
+ *   limdd_refs_push(e)    keep this value across a collection
+ *   limdd_refs_pop(n)     drop the last n
+ *   limdd_refs_pushptr(&v) keep whatever the variable holds, re-read at
+ *                         collection time, so assigning to v is safe
+ *   limdd_refs_popptr(n)
+ *   limdd_refs_spawn(SPAWN(...))  keep a branch's result while it runs
+ *   e = limdd_refs_sync(SYNC(...))
+ *
+ * Must be called from a Lace worker; the stack lives in thread-local storage
+ * and is padded to its own cache line, since the cursors are written on every
+ * push and pop.
+ */
+/**
+ * True when a table is close enough to full that an operation should stop and
+ * collect. Cheap: two counter reads.
+ */
+bool limdd_gc_wanted(void);
+
+void  limdd_refs_init(void);
+LIMDD limdd_refs_push(LIMDD e);
+void  limdd_refs_pop(long amount);
+void  limdd_refs_pushptr(const LIMDD *ptr);
+void  limdd_refs_popptr(size_t amount);
+void  limdd_refs_spawn(Task *t);
+LIMDD limdd_refs_sync(LIMDD result);
 
 /**
  * Collect the four LIMDD tables, keeping only what the protected edges reach.

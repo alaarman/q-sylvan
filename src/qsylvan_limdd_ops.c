@@ -21,6 +21,7 @@
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_ops.h"
+#include "qsylvan_limdd_gc.h"
 #include "qsylvan_gates.h"
 
 LIMDD
@@ -125,6 +126,11 @@ lim_split_above(LIMDD e, uint32_t level, LIMDD_LIM *hoisted)
 
 TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
 {
+    /* Join a collection another worker has opened, or open one if a table is
+     * nearly full. Here rather than between gates: a single gate can mint
+     * millions of intermediates, and this is the only point inside one where
+     * stopping is safe -- everything live is on the reference stacks. */
+    sylvan_gc_test();
     if (limdd_edge_is_zero(a)) return b;
     if (limdd_edge_is_zero(b)) return a;
 
@@ -172,11 +178,19 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
     limdd_cofactors(na, var, &a0, &a1);
     limdd_cofactors(nb, var, &b0, &b1);
 
-    SPAWN(limdd_plus, a1, b1, var + 1);
+    /* The four cofactors are live across the recursion, and so is the branch
+     * result until makeedge has consumed it. A collection may run inside
+     * either call, and only these stacks tell it so. */
+    limdd_refs_push(a0); limdd_refs_push(a1);
+    limdd_refs_push(b0); limdd_refs_push(b1);
+    limdd_refs_spawn(SPAWN(limdd_plus, a1, b1, var + 1));
     const LIMDD lo = CALL(limdd_plus, a0, b0, var + 1);
-    const LIMDD hi = SYNC(limdd_plus);
+    limdd_refs_push(lo);
+    const LIMDD hi = limdd_refs_sync(SYNC(limdd_plus));
+    limdd_refs_push(hi);
 
     res = limdd_makeedge(var, lo, hi);
+    limdd_refs_pop(6);
     cache_put3(CACHE_LIMDD_PLUS, var, na, nb, res);
 
     return lim_times_edge(A, res);
@@ -201,6 +215,7 @@ gate_entries(uint32_t gateid, EVBDD_WGT u[4])
 TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
             uint32_t, nqubits)
 {
+    sylvan_gc_test();
     if (limdd_edge_is_zero(e)) return e;
 
     /*
@@ -265,15 +280,24 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
         const LIMDD c = limdd_scale(lo, u[2]);
         const LIMDD d = limdd_scale(hi, u[3]);
 
-        SPAWN(limdd_plus, c, d, var + 1);
+        limdd_refs_push(a); limdd_refs_push(b);
+        limdd_refs_push(c); limdd_refs_push(d);
+        limdd_refs_spawn(SPAWN(limdd_plus, c, d, var + 1));
         const LIMDD new_lo = CALL(limdd_plus, a, b, var + 1);
-        const LIMDD new_hi = SYNC(limdd_plus);
+        limdd_refs_push(new_lo);
+        const LIMDD new_hi = limdd_refs_sync(SYNC(limdd_plus));
+        limdd_refs_push(new_hi);
         res = limdd_makeedge(var, new_lo, new_hi);
+        limdd_refs_pop(6);
     } else {
-        SPAWN(limdd_gate, hi, gateid, target, nqubits);
+        limdd_refs_push(lo); limdd_refs_push(hi);
+        limdd_refs_spawn(SPAWN(limdd_gate, hi, gateid, target, nqubits));
         const LIMDD new_lo = CALL(limdd_gate, lo, gateid, target, nqubits);
-        const LIMDD new_hi = SYNC(limdd_gate);
+        limdd_refs_push(new_lo);
+        const LIMDD new_hi = limdd_refs_sync(SYNC(limdd_gate));
+        limdd_refs_push(new_hi);
         res = limdd_makeedge(var, new_lo, new_hi);
+        limdd_refs_pop(4);
     }
 
     cache_put3(opid, 0, e, 0, res);
@@ -283,6 +307,7 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
 TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
             uint32_t, target, uint32_t, nqubits)
 {
+    sylvan_gc_test();
     if (controls == 0) return CALL(limdd_gate, e, gateid, target, nqubits);
     if (limdd_edge_is_zero(e)) return e;
 
@@ -333,15 +358,22 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     if (controls & bit) {
         /* A control qubit: the |0> branch is untouched, and only the |1>
          * branch continues carrying the remaining controls. */
+        limdd_refs_push(lo); limdd_refs_push(hi);
         const LIMDD new_hi = CALL(limdd_cgate, hi, gateid, controls & ~bit,
                                   target, nqubits);
+        limdd_refs_push(new_hi);
         res = limdd_makeedge(var, lo, new_hi);
+        limdd_refs_pop(3);
     } else {
-        SPAWN(limdd_cgate, hi, gateid, controls, target, nqubits);
+        limdd_refs_push(lo); limdd_refs_push(hi);
+        limdd_refs_spawn(SPAWN(limdd_cgate, hi, gateid, controls, target, nqubits));
         const LIMDD new_lo = CALL(limdd_cgate, lo, gateid, controls, target,
                                   nqubits);
-        const LIMDD new_hi = SYNC(limdd_cgate);
+        limdd_refs_push(new_lo);
+        const LIMDD new_hi = limdd_refs_sync(SYNC(limdd_cgate));
+        limdd_refs_push(new_hi);
         res = limdd_makeedge(var, new_lo, new_hi);
+        limdd_refs_pop(4);
     }
 
     cache_put3(opid, 0, e, controls, res);

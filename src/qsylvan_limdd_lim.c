@@ -168,6 +168,12 @@ limdd_pauli_table_count(void)
 }
 
 size_t
+limdd_lim_table_size(void)
+{
+    return lim_table == NULL ? 0 : llmsset_get_size(lim_table);
+}
+
+size_t
 limdd_lim_table_count(void)
 {
     return table_count(lim_table);
