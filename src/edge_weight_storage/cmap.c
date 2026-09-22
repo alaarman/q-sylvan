@@ -248,7 +248,7 @@ cmap_count_entries(const void *dbs)
 {
     cmap_t *cmap = (cmap_t *) dbs;
     uint64_t entries = 0;
-    for (unsigned int c = 0; c < cmap->size; c++) {
+    for (uint64_t c = 0; c < cmap->size; c++) {
         if (cmap->table[c].d[0] != EMPTY)
             entries++;
     }
@@ -274,7 +274,7 @@ cmap_create(uint64_t size, double tolerance)
     cmap->size = size;
     cmap->mask = cmap->size - 1;
     cmap->table = calloc (cmap->size, sizeof(bucket_t));
-    for (unsigned int c = 0; c < cmap->size; c++) {
+    for (uint64_t c = 0; c < cmap->size; c++) {
         cmap->table[c].d[0] = EMPTY;
     }
     cmap->threshold = cmap->size / 100;

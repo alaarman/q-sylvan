@@ -306,6 +306,22 @@ limdd_gc_remap_weights(void)
      * Q-Sylvan recorded at init has to re-create them in the new table. */
     wgt_table_gc_init_new(init_wgt_table_entries);
 
+    /*
+     * The four powers of i, which live in a file static rather than in any
+     * LIM, so the sweep below does not reach them and the re-seeding hook
+     * does not know about them -- it re-creates Q-Sylvan's gate weights, not
+     * ours. Left stale they are indices into a table that has just been
+     * freed.
+     *
+     * They have been right so far only because the LIMDD weight table is
+     * pinned to a single size (min == max in the simulator), so re-interning
+     * the same value reproduces the same hash & mask and hands back the same
+     * index. That is an accident of the pin, not a property of the table, and
+     * it is exactly what would break on the first collection that resized.
+     */
+    for (unsigned k = 0; k < 4; k++)
+        i_pow[k] = (EVBDD_WGT)wgt_table_gc_keep(i_pow[k]);
+
     size_t kept = 0;
     const size_t n = llmsset_get_size(lim_table);
     for (size_t i = 2; i < n; i++) {          /* 0 and 1 are reserved */

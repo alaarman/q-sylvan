@@ -233,7 +233,7 @@ qisq2_map_count_entries(const void *dbs)
 {
     qisq2_map_t *qisq2_map = (qisq2_map_t *) dbs;
     uint64_t entries = 0;
-    for (unsigned int c = 0; c < qisq2_map->size; c++) {
+    for (uint64_t c = 0; c < qisq2_map->size; c++) {
         if (qisq2_map->table[c].d[0] != EMPTY)
             entries++;
     }
@@ -258,7 +258,7 @@ qisq2_map_create(uint64_t size, double tolerance)
     qisq2_map->size = size;
     qisq2_map->mask = qisq2_map->size - 1;
     qisq2_map->table = calloc (qisq2_map->size, sizeof(bucket_t));
-    for (unsigned int c = 0; c < qisq2_map->size; c++) {
+    for (uint64_t c = 0; c < qisq2_map->size; c++) {
         qisq2_map->table[c].d[0] = EMPTY;
     }
     qisq2_map->threshold = qisq2_map->size / 100;
@@ -284,7 +284,7 @@ void
 qisq2_map_free(void *dbs)
 {
     qisq2_map_t * qisq2_map = (qisq2_map_t *) dbs;
-    for (unsigned int c = 0; c < qisq2_map->size; c++) {
+    for (uint64_t c = 0; c < qisq2_map->size; c++) {
         if (qisq2_map->table[c].d[0] != EMPTY){
             /*
             // sanity check for debugging
