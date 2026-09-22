@@ -59,10 +59,36 @@ static SYLVAN_TLS gen_row_t scratch[STAB_SCRATCH_ROWS];
  * cancels to the identity the mask names a product of Stab(v0) generators that
  * also lies in Stab(v1). That is one generator of the intersection.
  */
+/*
+ * Which generators went into a row.
+ *
+ * One bit per generator, and a group on n qubits has up to n of them, so a
+ * single word only reaches 64 qubits. It used to be a single word, guarded by
+ * an assertion -- which compiles out, leaving `1 << i` with i >= 64 as
+ * undefined behaviour and a silently wrong answer above 64 qubits, exactly
+ * where a wide Pauli word is the point. It is now as wide as the Pauli word.
+ */
+typedef struct { uint64_t w[LIMDD_PAULI_WORDS]; } genmask_t;
+
+static inline void genmask_clear(genmask_t *m)
+{ for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) m->w[i] = 0; }
+
+static inline void genmask_set(genmask_t *m, size_t b)
+{ genmask_clear(m); m->w[LIMDD_PAULI_LANE(b)] = LIMDD_PAULI_BIT(b); }
+
+static inline void genmask_xor(genmask_t *a, const genmask_t *b)
+{ for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) a->w[i] ^= b->w[i]; }
+
+static inline bool genmask_is_zero(const genmask_t *m)
+{ for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) if (m->w[i]) return false; return true; }
+
+static inline bool genmask_test(const genmask_t *m, size_t b)
+{ return (m->w[LIMDD_PAULI_LANE(b)] & LIMDD_PAULI_BIT(b)) != 0; }
+
 typedef struct {
     limdd_pauli_t w;
-    uint64_t mask0;   /* which generators of s0 went into this row */
-    uint64_t mask1;   /* and which of s1 */
+    genmask_t mask0;  /* which generators of s0 went into this row */
+    genmask_t mask1;  /* and which of s1 */
     size_t   pivot;   /* leading column, for rows 0..top-1 of the RREF */
 } isect_row_t;
 
@@ -411,22 +437,22 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
     const size_t k0 = limdd_stab_ngens(s0);
     const size_t k1 = limdd_stab_ngens(s1);
     assert(k0 + k1 <= STAB_SCRATCH_ROWS);
-    assert(k0 <= 64 && k1 <= 64 && "generator tags are 64-bit masks");
+    assert(k0 <= LIMDD_MAX_QUBITS && k1 <= LIMDD_MAX_QUBITS);
 
     size_t n = 0;
     {
         LIMDD_STAB c = s0;
         for (size_t i = 0; i < k0; i++, c = stab_tail(c)) {
             isect[n].w = limdd_lim_pauli(stab_head(c));
-            isect[n].mask0 = UINT64_C(1) << i;
-            isect[n].mask1 = 0;
+            genmask_set(&isect[n].mask0, i);
+            genmask_clear(&isect[n].mask1);
             n++;
         }
         c = s1;
         for (size_t j = 0; j < k1; j++, c = stab_tail(c)) {
             isect[n].w = limdd_lim_pauli(stab_head(c));
-            isect[n].mask0 = 0;
-            isect[n].mask1 = UINT64_C(1) << j;
+            genmask_clear(&isect[n].mask0);
+            genmask_set(&isect[n].mask1, j);
             n++;
         }
     }
@@ -457,8 +483,8 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
             const gen_row_t g = { isect[r].w, false };
             if (!row_bit(&g, c, nqubits)) continue;
             limdd_pauli_xor(&isect[r].w, isect[top].w);
-            isect[r].mask0 ^= isect[top].mask0;
-            isect[r].mask1 ^= isect[top].mask1;
+            genmask_xor(&isect[r].mask0, &isect[top].mask0);
+            genmask_xor(&isect[r].mask1, &isect[top].mask1);
         }
         /* Recorded here, where it is already known. limdd_stab_min_coset
          * would otherwise rescan each row from column 0 to find it again --
@@ -474,11 +500,11 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
 
 /** The product of the generators of `s` named by `mask`, in index order. */
 static LIMDD_LIM
-product_of(LIMDD_STAB s, uint64_t mask)
+product_of(LIMDD_STAB s, const genmask_t *mask)
 {
     LIMDD_LIM acc = LIMDD_LIM_IDENTITY;
-    for (; mask != 0; mask >>= 1, s = stab_tail(s)) {
-        if (mask & 1) acc = limdd_lim_mul(acc, stab_head(s));
+    for (size_t i = 0; s != LIMDD_STAB_TRIVIAL; i++, s = stab_tail(s)) {
+        if (genmask_test(mask, i)) acc = limdd_lim_mul(acc, stab_head(s));
     }
     return acc;
 }
@@ -499,8 +525,8 @@ intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
     size_t nout = 0;
     for (size_t r = top; r < n; r++) {
         assert(limdd_pauli_is_identity(isect[r].w));
-        if (isect[r].mask0 == 0) continue;   /* a dependency inside s1 alone */
-        out[nout++] = product_of(s0, isect[r].mask0);
+        if (genmask_is_zero(&isect[r].mask0)) continue;  /* inside s1 alone */
+        out[nout++] = product_of(s0, &isect[r].mask0);
     }
     return nout;
 }
@@ -556,7 +582,8 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
      * leading pivot.
      */
     gen_row_t cur = { limdd_lim_pauli(b), false };
-    uint64_t mask0 = 0, mask1 = 0;
+    genmask_t mask0, mask1;
+    genmask_clear(&mask0); genmask_clear(&mask1);
 
     for (size_t r = 0; r < top; r++) {
         const size_t c = isect[r].pivot;     /* recorded by stack_generators */
@@ -571,8 +598,8 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
 #endif
         if (!row_bit(&cur, c, nqubits)) continue;
         limdd_pauli_xor(&cur.p, isect[r].w);
-        mask0 ^= isect[r].mask0;
-        mask1 ^= isect[r].mask1;
+        genmask_xor(&mask0, &isect[r].mask0);
+        genmask_xor(&mask1, &isect[r].mask1);
     }
 
     /*
@@ -580,8 +607,8 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
      * out in order is what recovers the phase: the words alone cannot, since
      * XOR forgets every factor of i the products pick up.
      */
-    const LIMDD_LIM g = product_of(s0, mask0);
-    const LIMDD_LIM h = product_of(s1, mask1);
+    const LIMDD_LIM g = product_of(s0, &mask0);
+    const LIMDD_LIM h = product_of(s1, &mask1);
     LIMDD_LIM e = limdd_lim_mul(limdd_lim_mul(g, b), h);
     assert(limdd_pauli_equals(limdd_lim_pauli(e), cur.p));
 
