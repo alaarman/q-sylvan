@@ -644,7 +644,16 @@ void simulate_circuit(quantum_circuit_t* circuit)
         uint64_t k  = rand();
         bool *x = int_to_bitarray(k, circuit->qreg_size, !(circuit->reversed_qubit_order));
         complex_t c = qmdd_get_amplitude(stats.final_state, x, circuit->qreg_size);
-        stats.unnormed_prob = sqrt(c.r*c.r+c.r*c.i);
+        /*
+         * c.i*c.i, not c.r*c.i. The second term was a typo, so this reported
+         * sqrt(re^2 + re*im) rather than the modulus -- right only when the
+         * amplitude is real, and not even monotone in |c| otherwise.
+         *
+         * Left alone: the name says probability but this is |c|, an
+         * amplitude, and the probability is |c|^2. Changing that would move
+         * published numbers, so it is flagged rather than silently altered.
+         */
+        stats.unnormed_prob = sqrt(c.r*c.r+c.i*c.i);
         if (stats.norm != 0.0){
             stats.normed_prob = stats.unnormed_prob/stats.norm;
         }
