@@ -56,6 +56,7 @@ static const char *canon_name = "always";
 static double rel_tolerance = -1;
 static double zero_tolerance = 1e-14;
 static bool zero_tolerance_set = false;   /* did the user ask for one? */
+static bool force_absolute = false;       /* --merging=abs: keep the historical rule */
 static bool node_tab_size_set = false;    /* was --node-tab-size given? */
 static bool lim_stats = false;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
@@ -88,6 +89,7 @@ static struct argp_option options[] =
     {"canon", 1008, "<always|never|ops:K|adaptive>", 0, "LIMDD only: when to apply the canonical form. always (default) canonicalises inside every operation; never leaves it off; ops:K rebuilds after every K node-building operations; adaptive tunes the interval by how much the last rebuild helped.", 0},
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
+    {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
     {0, 0, 0, 0, 0, 0}
 };
@@ -125,6 +127,11 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1009:
         lim_stats = true;
+        break;
+    case 1011:
+        if (strcasecmp(arg, "abs")==0 || strcasecmp(arg, "absolute")==0) force_absolute = true;
+        else if (strcasecmp(arg, "hybrid")==0) force_absolute = false;
+        else argp_usage(state);
         break;
     case 1010:
         if (atoi(arg) > 30) argp_usage(state);
@@ -786,7 +793,7 @@ int main(int argc, char *argv[])
         min_cachesize = max_cachesize = 1LL << 20;
     }
 
-    if (dd_kind != DD_QMDD && rel_tolerance < 0) {
+    if (dd_kind != DD_QMDD && rel_tolerance < 0 && !force_absolute) {
         /*
          * 1e-12, not the storage tolerance.
          *
@@ -849,6 +856,7 @@ int main(int argc, char *argv[])
      * second entry for it -- two indices for one value, which breaks every
      * comparison that goes through EVBDD_ONE.
      */
+    if (force_absolute) rel_tolerance = -1;
     if (rel_tolerance >= 0)
         sylvan_edge_weights_set_hybrid_tolerance(rel_tolerance, zero_tolerance);
 
