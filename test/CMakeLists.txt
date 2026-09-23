@@ -129,6 +129,14 @@ sylvan_test_warnings(test_limdd_gc)
 
 add_test(NAME test_limdd_gc COMMAND test_limdd_gc)
 
+add_executable(test_limdd_structure)
+target_sources(test_limdd_structure PRIVATE test_limdd_structure.c)
+target_link_libraries(test_limdd_structure PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_structure PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_structure)
+
+add_test(NAME test_limdd_structure COMMAND test_limdd_structure)
+
 add_executable(test_limdd_ops)
 target_sources(test_limdd_ops PRIVATE test_limdd_ops.c)
 target_link_libraries(test_limdd_ops PRIVATE qsylvan::sylvan)
