@@ -58,6 +58,7 @@ static double zero_tolerance = 1e-14;
 static bool zero_tolerance_set = false;   /* did the user ask for one? */
 static bool force_absolute = false;       /* --merging=abs: keep the historical rule */
 static bool node_tab_size_set = false;    /* was --node-tab-size given? */
+static int  lim_tab_size_log2  = 0;       /* --lim-tab-size; 0 = derive from the node table */
 static bool lim_stats = false;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
@@ -82,6 +83,7 @@ static struct argp_option options[] =
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
     {"state-vector", 'v', 0, 0, "Also output the complete state vector", 0},
     {"node-tab-size", 1000, "<size>", 0, "log2 of max node table size (max 40)", 0},
+    {"lim-tab-size", 1012, "<size>", 0, "LIMDD only: log2 of the LIM table size. Default is four times the node table. A LIMDD mints far more labels than it keeps, so this is what fills first on wide circuits; it has no QMDD counterpart, so raising it does not change how a QMDD is resourced.", 0},
     {"wgt-tab-size", 1001, "<size>", 0, "log2 of max edge weigth table size (max 30 (23 if node table >2^30))", 0},
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
@@ -127,6 +129,10 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1009:
         lim_stats = true;
+        break;
+    case 1012:
+        if (atoi(arg) > 40) argp_usage(state);
+        lim_tab_size_log2 = atoi(arg);
         break;
     case 1011:
         if (strcasecmp(arg, "abs")==0 || strcasecmp(arg, "absolute")==0) force_absolute = true;
@@ -720,7 +726,7 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          * LIMDD_LIM_MAX the index does not fit in an edge however much room
          * the table has.
          */
-        size_t lim_t = lt << 2;
+        size_t lim_t = lim_tab_size_log2 ? (1ULL << lim_tab_size_log2) : (lt << 2);
         if (lim_t > LIMDD_LIM_MAX) lim_t = LIMDD_LIM_MAX;
 
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
