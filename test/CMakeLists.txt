@@ -137,6 +137,14 @@ sylvan_test_warnings(test_limdd_structure)
 
 add_test(NAME test_limdd_structure COMMAND test_limdd_structure)
 
+add_executable(test_limdd_shape)
+target_sources(test_limdd_shape PRIVATE test_limdd_shape.c)
+target_link_libraries(test_limdd_shape PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_shape PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_shape)
+
+add_test(NAME test_limdd_shape COMMAND test_limdd_shape)
+
 add_executable(test_limdd_ops)
 target_sources(test_limdd_ops PRIVATE test_limdd_ops.c)
 target_link_libraries(test_limdd_ops PRIVATE qsylvan::sylvan)
