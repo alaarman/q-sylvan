@@ -20,6 +20,8 @@
 
 #include "qsylvan_limdd_inspect.h"
 #include "qsylvan_limdd_lim.h"
+#include "sylvan_edge_weights.h"
+#include "edge_weight_storage/qisq2_map.h"
 
 /*
  * A visited set of its own, rather than llmsset's mark bitmap.
@@ -141,6 +143,45 @@ size_t
 limdd_nodecount(LIMDD e, size_t nqubits)
 {
     return limdd_level_counts(e, NULL, nqubits);
+}
+
+/* --- algebraic bit size -------------------------------------------------- */
+
+static uint64_t
+bits_of(LIMDD_LIM lim)
+{
+    if (limdd_lim_is_zero(lim)) return 0;
+    return qisq2_size(wgt_storage, (uint64_t)limdd_lim_weight(lim));
+}
+
+static uint64_t
+bits_walk(LIMDD e, seen_t *seen)
+{
+    if (limdd_edge_is_zero(e)) return 0;
+    uint64_t best = bits_of(limdd_label(e));
+    const LIMDD_TARG t = limdd_target(e);
+    if (t == LIMDD_TERMINAL) return best;
+    if (seen_add(seen, t)) return best;
+    const uint64_t lo = bits_walk(limdd_node_low(t), seen);
+    const uint64_t hi = bits_walk(limdd_node_high(t), seen);
+    if (lo > best) best = lo;
+    if (hi > best) best = hi;
+    return best;
+}
+
+uint64_t
+limdd_max_wgt_bits(LIMDD e, size_t nqubits)
+{
+    (void)nqubits;
+    if (sylvan_get_edge_weight_type() != WGT_QISQ2) return 0;
+    seen_t seen;
+    if (!seen_init(&seen, 1024)) {
+        fprintf(stderr, "sylvan: out of memory while inspecting a LIMDD\n");
+        exit(1);
+    }
+    const uint64_t res = bits_walk(e, &seen);
+    seen_free(&seen);
+    return res;
 }
 
 /* --- dot ----------------------------------------------------------------- */

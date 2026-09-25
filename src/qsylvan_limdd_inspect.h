@@ -53,6 +53,16 @@ size_t limdd_width(LIMDD e, size_t nqubits);
 size_t limdd_nodecount(LIMDD e, size_t nqubits);
 
 /**
+ * The largest bit size of any algebraic (qisq2) weight in the diagram.
+ *
+ * Zero when the weights are not exact, since a double has no such thing. The
+ * bound of Section 5 is stated in these terms, so this is what an experiment
+ * has to report to check it: a LIMDD keeps every weight inside a LIM, so the
+ * walk visits labels, not nodes.
+ */
+uint64_t limdd_max_wgt_bits(LIMDD e, size_t nqubits);
+
+/**
  * Write the diagram as Graphviz dot.
  *
  * Edges carry their LIM, low edges dashed and high edges solid, and each node

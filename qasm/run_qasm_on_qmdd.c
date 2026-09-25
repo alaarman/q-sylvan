@@ -23,6 +23,7 @@
 #include "qsylvan_limdd_canon.h"
 #include "qsylvan_limdd_ops.h"
 #include "qsylvan_limdd_gc.h"
+#include "qsylvan_limdd_inspect.h"
 #include "qsylvan_qasm_parser.h"
 
 /**********************<Arguments (configured via argp)>***********************/
@@ -60,6 +61,8 @@ static bool force_absolute = false;       /* --merging=abs: keep the historical 
 static bool node_tab_size_set = false;    /* was --node-tab-size given? */
 static int  lim_tab_size_log2  = 0;       /* --lim-tab-size; 0 = derive from the node table */
 static bool lim_stats = false;
+static char *trace_file = NULL;   /* --trace: per-gate telemetry */
+static FILE *trace_out = NULL;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
@@ -78,6 +81,7 @@ static struct argp_option options[] =
     {"json", 'j', "<filename>", 0, "Write stats to given filename as json", 0},
     {"count-nodes", 'c', 0, 0, "Track maximum number of nodes", 0},
     {"cache-size", 1010, "<size>", 0, "log2 of the operation cache size (default 16)", 0},
+    {"trace", 1013, "<filename>", 0, "Write per-gate telemetry as CSV: after every gate, the running T count, the node count, the LIMDD width and the largest algebraic weight in bits. This is what relates the theorems to a run -- width against 2^t, and coefficient size against the bound of Section 5.", 0},
     {"lim-stats", 1009, 0, 0, "For limdd: report the Pauli support of the high-edge LIM per level, to size an inline encoding", 0},
     {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
@@ -129,6 +133,9 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1009:
         lim_stats = true;
+        break;
+    case 1013:
+        trace_file = arg;
         break;
     case 1012:
         if (atoi(arg) > 40) argp_usage(state);
@@ -221,6 +228,9 @@ typedef struct stats_s {
     uint64_t applied_gates;
     uint64_t final_nodes;
     uint64_t max_nodes;
+    uint64_t t_count;        /* T and Tdg gates applied */
+    uint64_t final_width;    /* LIMDD only */
+    uint64_t max_width;
     uint64_t final_qisq_size;
     uint64_t max_qisq_size;
     uint64_t shots;
@@ -262,6 +272,9 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"benchmark\": \"%s\",\n", circuit->name);
     fprintf(stream, "    \"final_nodes\": %" PRIu64 ",\n", stats.final_nodes);
     fprintf(stream, "    \"max_nodes\": %" PRIu64 ",\n", stats.max_nodes);
+    fprintf(stream, "    \"t_count\": %" PRIu64 ",\n", stats.t_count);
+    fprintf(stream, "    \"final_width\": %" PRIu64 ",\n", stats.final_width);
+    fprintf(stream, "    \"max_width\": %" PRIu64 ",\n", stats.max_width);
     fprintf(stream, "    \"final_qisq_size\": %" PRIu64 ",\n", stats.final_qisq_size);
     fprintf(stream, "    \"max_qisq_size\": %" PRIu64 ",\n", stats.max_qisq_size);
     fprintf(stream, "    \"n_qubits\": %d,\n", circuit->qreg_size);
@@ -522,8 +535,29 @@ limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
         return false;
     }
 
+    if (id == GATEID_T || id == GATEID_Tdag) stats.t_count++;
+
     *state = limdd_gate(*state, id, t, nqubits);
     return true;
+}
+
+/**
+ * One line of per-gate telemetry.
+ *
+ * Width and coefficient size both need a walk of the whole diagram, so this
+ * is only done when --trace asks for it: on a circuit with a large diagram it
+ * costs more than the gates do.
+ */
+static void
+trace_row(uint64_t gate_idx, const char *gate, LIMDD state, uint32_t n)
+{
+    if (trace_out == NULL) return;
+    const size_t nodes = limdd_nodecount(state, n);
+    const size_t width = limdd_width(state, n);
+    const uint64_t bits = limdd_max_wgt_bits(state, n);
+    if (width > stats.max_width) stats.max_width = width;
+    fprintf(trace_out, "%" PRIu64 ",%s,%" PRIu64 ",%zu,%zu,%" PRIu64 "\n",
+            gate_idx, gate, stats.t_count, nodes, width, bits);
 }
 
 TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
@@ -539,6 +573,9 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
     const double t_start = wctime();
     LIMDD state = limdd_all_zero_state(n);
     limdd_protect(&state);
+    uint64_t gate_idx = 0;
+    if (trace_out != NULL)
+        fprintf(trace_out, "gate_index,gate,t_count,nodes,width,wgt_bits\n");
 
     for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
         if (op->type == op_gate) {
@@ -556,6 +593,11 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
             if (c > stats.max_nodes) stats.max_nodes = c;
         }
 
+        if (trace_out != NULL) {
+            trace_row(gate_idx, op->type == op_gate ? op->name : "-", state, n);
+        }
+        gate_idx++;
+
         /*
          * Nothing is freed until it is collected, and a few hundred gates
          * intern far more LIMs than stay reachable. `state` is protected, so
@@ -572,6 +614,10 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
          */
         if (limdd_gc_wanted()) CALL(limdd_gc);
     }
+
+    stats.final_width = limdd_width(state, n);
+    if (stats.final_width > stats.max_width) stats.max_width = stats.final_width;
+    stats.final_qisq_size = limdd_max_wgt_bits(state, n);
 
     /* A final rebuild, so a deferred run is compared in its canonical form
      * rather than mid-batch. */
@@ -854,6 +900,14 @@ int main(int argc, char *argv[])
         wgt_norm_strat = NORM_LOW;
     }
 
+    if (trace_file != NULL) {
+        trace_out = fopen(trace_file, "w");
+        if (trace_out == NULL) {
+            fprintf(stderr, "cannot write the trace to %s\n", trace_file);
+            exit(1);
+        }
+    }
+
     if (rseed == 0) rseed = time(NULL);
     srand(rseed);
     
@@ -879,6 +933,8 @@ int main(int argc, char *argv[])
     wgt_set_inverse_chaching(wgt_inv_caching);
 
     RUN(run_simulation, circuit);
+
+    if (trace_out != NULL) fclose(trace_out);
 
     sylvan_quit();
     lace_stop();
