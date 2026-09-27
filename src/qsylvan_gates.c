@@ -1,3 +1,6 @@
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <qsylvan_gates.h>
 #include <sylvan_int.h>
 #include <sylvan_edge_weights_complex.h>
@@ -14,9 +17,27 @@ uint64_t gates[n_predef_gates+256+256][4];
 // store complex values of dynamic gate to re-initialize gate after gc
 complex_t dynamic_gate[4];
 
+/*
+ * The dynamic gates build their entries as complex_t and look them up. On the
+ * qisq2 backend weight_lookup reads its argument as a qisq2_t, four mpq_t and
+ * 128 bytes, so a 16-byte complex_t was taken for limb pointers and GMP
+ * crashed (a SEGV in __gmpz_gcd, or a divide-by-zero abort). An angle is not
+ * a number of Q[i, sqrt2] in general, so there is nothing to look up: refuse.
+ */
+static void
+refuse_on_qisq2(const char *gate)
+{
+    if (sylvan_get_edge_weight_type() == WGT_QISQ2) {
+        fprintf(stderr, "sylvan: the %s gate takes an angle, and exact (qisq2) "
+                        "weights hold only Q[i, sqrt2]; use -e float\n", gate);
+        exit(1);
+    }
+}
+
 uint32_t
 GATEID_Rz(fl_t theta)
 {
+    refuse_on_qisq2("Rz");
     // clear cache to invalidate cached results for GATEID_dynamic
     sylvan_clear_cache();
 
@@ -38,6 +59,7 @@ GATEID_Rz(fl_t theta)
 uint32_t
 GATEID_Rx(fl_t theta)
 {
+    refuse_on_qisq2("Rx");
     // clear cache to invalidate cached results for GATEID_dynamic
     sylvan_clear_cache();
 
@@ -58,6 +80,7 @@ GATEID_Rx(fl_t theta)
 uint32_t
 GATEID_Ry(fl_t theta)
 {
+    refuse_on_qisq2("Ry");
     // clear cache to invalidate cached results for GATEID_dynamic
     sylvan_clear_cache();
 
@@ -78,6 +101,7 @@ GATEID_Ry(fl_t theta)
 uint32_t
 GATEID_Phase(fl_t theta)
 {
+    refuse_on_qisq2("Phase");
     // clear cache to invalidate cached results for GATEID_dynamic
     sylvan_clear_cache();
     
@@ -98,6 +122,7 @@ GATEID_Phase(fl_t theta)
 uint32_t
 GATEID_U(fl_t theta, fl_t phi, fl_t lambda)
 {
+    refuse_on_qisq2("U");
     // clear cache to invalidate cached results for GATEID_dynamic
     sylvan_clear_cache();
 
@@ -262,15 +287,22 @@ qmdd_phase_gates_init(int n)
     fl_t angle;
     complex_t cartesian;
     for (int k=0; k<=n; k++) {
+        /*
+         * 2^k as ldexp and not (1<<k): n is 255, and a shift of an int by 31
+         * or more is undefined. On arm64 it wrapped, so R_31 turned by a
+         * negative angle, R_32 was the identity and R_33 was Z, and a QFT on
+         * more than 32 qubits applied them. ldexp is exact up to 2^1023 in a
+         * double, and the cast to fl_t keeps it exact.
+         */
         // forward rotation
-        angle = 2*Pi / (fl_t)(1<<k);
+        angle = 2*Pi / (fl_t)ldexp(1.0, k);
         cartesian = cmake_angle(angle, 1);
         gate_id = GATEID_Rk(k);
         gates[gate_id][0] = EVBDD_ONE;  gates[gate_id][1] = EVBDD_ZERO;
         gates[gate_id][2] = EVBDD_ZERO; gates[gate_id][3] = weight_lookup(&cartesian);
 
         // backward rotation
-        angle = -2*Pi / (fl_t)(1<<k);
+        angle = -2*Pi / (fl_t)ldexp(1.0, k);
         cartesian = cmake_angle(angle, 1);
         gate_id = GATEID_Rk_dag(k);
         gates[gate_id][0] = EVBDD_ONE;  gates[gate_id][1] = EVBDD_ZERO;

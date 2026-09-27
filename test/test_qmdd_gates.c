@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -280,6 +281,16 @@ int test_phase_gates()
     test_assert(gates[GATEID_Rk_dag(1)][3] == gates[GATEID_Z][3]);
     test_assert(gates[GATEID_Rk_dag(2)][3] == gates[GATEID_Sdag][3]);
     test_assert(gates[GATEID_Rk_dag(3)][3] == gates[GATEID_Tdag][3]);
+
+    // and far down the ladder, where 2^k no longer fits an int: R_k turns by
+    // 2 pi / 2^k, which at k = 40 is still 5.7e-12, far above the tolerance
+    for (int k = 4; k <= 40; k++) {
+        const double th = 2.0 * M_PI / ldexp(1.0, k);
+        const complex_t f = weight_as_complex(gates[GATEID_Rk(k)][3]);
+        const complex_t b = weight_as_complex(gates[GATEID_Rk_dag(k)][3]);
+        test_assert(fabs(f.r - cos(th)) < 1e-13 && fabs(f.i - sin(th)) < 1e-13);
+        test_assert(fabs(b.r - cos(th)) < 1e-13 && fabs(b.i + sin(th)) < 1e-13);
+    }
 
     if(VERBOSE) printf("qmdd phase gates:          ok\n");
     return 0;
