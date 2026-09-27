@@ -404,6 +404,10 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
 void
 limdd_nodes_quit(void)
 {
+    {
+        extern void limdd_refs_quit(void);     /* declared here for the reason above */
+        limdd_refs_quit();
+    }
     if (limdd_nodes != NULL) {
         llmsset_free(limdd_nodes);
         limdd_nodes = NULL;

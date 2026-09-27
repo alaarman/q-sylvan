@@ -197,6 +197,30 @@ limdd_refs_init(void)
     TOGETHER(limdd_refs_init_task);
 }
 
+VOID_TASK_0(limdd_refs_quit_task)
+{
+    limdd_refs_internal_t s = limdd_refs_key;
+    if (s == NULL) return;
+    free(s->pbegin);
+    free(s->rbegin);
+    free(s->sbegin);
+    sylvan_free_padded(s);
+    limdd_refs_key = NULL;
+}
+
+/*
+ * Every init allocates a set per worker, and the key is thread-local, so a
+ * set that is not freed here is unreachable once lace_stop ends its thread.
+ * A program that opens several sessions, as test_bqd does one per label
+ * family, leaked one set per worker per session. evbdd_refs_cleanup is the
+ * same thing for the EVBDD.
+ */
+void
+limdd_refs_quit(void)
+{
+    TOGETHER(limdd_refs_quit_task);
+}
+
 static void SYLVAN_NOINLINE
 limdd_refs_ptrs_up(limdd_refs_internal_t refs)
 {
