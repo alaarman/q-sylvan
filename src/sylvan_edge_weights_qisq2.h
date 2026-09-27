@@ -58,7 +58,9 @@ qisq2_lookup(signed long int anum, unsigned long int aden, signed long int bnum,
 	qisq2_t p;
 	p = qisq2_make(anum, aden, bnum, bden, cnum, cden, dnum, dden);
 	EVBDD_WGT q = weight_lookup(&p);
-	//qisq2_clear(&p);
+	/* the table copies what it keeps (qisq2_map_find_or_put), so p is ours
+	 * to release; this was commented out while the table adopted the limbs */
+	qisq2_clear(&p);
 	return q;
 }
 

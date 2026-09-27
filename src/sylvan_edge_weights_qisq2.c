@@ -104,10 +104,12 @@ weight_qisq2_lookup(qisq2_t *a)
 void
 init_qisq2_one_zero(void *wgt_store)
 {
+    /* each qisq2_make initialises limbs of its own, and the table keeps a
+     * copy, so each is released after its lookup */
     qisq2_t a;
-    a = qisq2_one();     EVBDD_ONE     = _weight_qisq2_lookup_ptr(&a, wgt_store);
-    a = qisq2_zero();    EVBDD_ZERO    = _weight_qisq2_lookup_ptr(&a, wgt_store);
-    a = qisq2_mone();    EVBDD_MIN_ONE = _weight_qisq2_lookup_ptr(&a, wgt_store);
+    a = qisq2_one();     EVBDD_ONE     = _weight_qisq2_lookup_ptr(&a, wgt_store); qisq2_clear(&a);
+    a = qisq2_zero();    EVBDD_ZERO    = _weight_qisq2_lookup_ptr(&a, wgt_store); qisq2_clear(&a);
+    a = qisq2_mone();    EVBDD_MIN_ONE = _weight_qisq2_lookup_ptr(&a, wgt_store); qisq2_clear(&a);
 
 }
 
@@ -180,6 +182,7 @@ weight_qisq2_add(qisq2_t *x, qisq2_t *y)
     mpq_add(result.d, x->d, y->d);
     qisq2_reduce(&result);
 
+    qisq2_clear(x);             /* see weight_qisq2_mul */
     *x = result;
 }
 
@@ -194,6 +197,7 @@ weight_qisq2_sub(qisq2_t *x, qisq2_t *y)
     mpq_sub(result.d, x->d, y->d);
     qisq2_reduce(&result);
 
+    qisq2_clear(x);             /* see weight_qisq2_mul */
     *x = result;
 }
 
@@ -258,9 +262,19 @@ weight_qisq2_mul(qisq2_t *x, qisq2_t *y)
     mpq_clear(temp);
     mpq_clear(two);
 
-    //qisq2_clear(x); // deallocate previous memory of x
-
-    // copy result of multiplication to x
+    /*
+     * x owns its limbs, and the struct assignment below replaces the
+     * pointers to them, so they are released first or never. They were
+     * never: every wgt_mul, wgt_div, wgt_add and wgt_sub that missed the
+     * cache leaked the limbs of its first operand, and a divide leaked those
+     * of its intermediate products as well -- 2.9 million blocks, 70 MB, over
+     * one run of test_bqd. The clear was commented out
+     * when a "copy" here could still alias a table entry. Nothing can now:
+     * weight_value deep-copies (6ff7afe), and every caller passes a value it
+     * made that way or initialised itself. y may be x (weight_qisq2_sqr),
+     * which is safe, since result is complete before x is cleared.
+     */
+    qisq2_clear(x);
     *x = result;
     qisq2_reduce(x);
 }
