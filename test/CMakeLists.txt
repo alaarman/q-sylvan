@@ -153,6 +153,14 @@ sylvan_test_warnings(test_bqd)
 
 add_test(NAME test_bqd COMMAND test_bqd)
 
+add_executable(test_bqd_ops)
+target_sources(test_bqd_ops PRIVATE test_bqd_ops.c)
+target_link_libraries(test_bqd_ops PRIVATE qsylvan::sylvan)
+target_compile_features(test_bqd_ops PRIVATE c_std_11)
+sylvan_test_warnings(test_bqd_ops)
+
+add_test(NAME test_bqd_ops COMMAND test_bqd_ops)
+
 add_executable(test_limdd_ops)
 target_sources(test_limdd_ops PRIVATE test_limdd_ops.c)
 target_link_libraries(test_limdd_ops PRIVATE qsylvan::sylvan)

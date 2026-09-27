@@ -138,6 +138,7 @@ static const uint64_t CACHE_LIMDD_CGATE              = (86LL<<40);
 static const uint64_t CACHE_LIMDD_CANONIZE           = (87LL<<40);
 static const uint64_t CACHE_LIMDD_NORMSQ             = (88LL<<40);
 static const uint64_t CACHE_LIMDD_MINCOSET           = (89LL<<40);
+static const uint64_t CACHE_BQD_PROD                 = (91LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);
