@@ -116,8 +116,8 @@ class QASMParser {
             "u3", "u2", "u1", "id", "u0", "u", "p", "x", "y", "z", "h", "s", "sdg",
             "t", "tdg", "rx", "ry", "rz", "sx", "sxdg",                                 // single qubit gates
             "cx", "cz", "cy", "swap", "ch", "crx", "cry", "crz", "cu1", "cp", "cu3", 
-            "csx", "cu", "rxx", "rzz",                                                  // 2 qubit gates
-            "ccx", "cswap", "rccx",                                                     // 3 qubit gates
+            "csx", "cu", "rxx", "rzz", "cs", "csdg",                                    // 2 qubit gates
+            "ccx", "cswap", "rccx", "ccz",                                              // 3 qubit gates
             "rc3x", "c3x", "c3sx", "c3sqrtx",                                           // 4 qubit gates
             "c4x"                                                                       // 5 qubit gates
         }; 
@@ -377,7 +377,7 @@ class QASMParser {
             }
             // two-qubit controlled gates with no additional parameters
             else if (name == "cx" || name == "cy" || name == "cz" || name == "ch" ||
-                     name == "csx") {
+                     name == "csx" || name == "cs" || name == "csdg") {
                 try {
                     strcpy(op->name, name.c_str());
                     op->targets[0] = get_seq_index(qregisters, args[3], stoi(args[4]));
@@ -435,7 +435,7 @@ class QASMParser {
                 }
             }
             // three-qubit controlled gates with no additional parameters
-            else if (name == "ccx" || name == "rccx") {
+            else if (name == "ccx" || name == "rccx" || name == "ccz") {
                 try {
                     strcpy(op->name, name.c_str());
                     op->targets[0] = get_seq_index(qregisters, args[5], stoi(args[6]));
@@ -669,7 +669,7 @@ void order_cphase_gates(quantum_circuit_t *circuit)
     while (head != NULL) {
         if (head->type == op_gate) {
             std::string name = std::string(head->name);
-            if (name == "cz" || name == "cp") {
+            if (name == "cz" || name == "cp" || name == "cs" || name == "csdg") {
                 if (head->ctrls[0] > head->targets[0]) {
                     int tmp = head->targets[0];
                     head->targets[0] = head->ctrls[0];

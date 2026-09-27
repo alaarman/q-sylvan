@@ -232,3 +232,36 @@ it needs either much longer budgets or smaller depths (the ladder suggests
 exact QMDD at 20 qubits tops out somewhere between depth 100 and 150 within a
 2-minute budget). The paper's gate-count reading is the tractable one, which is
 presumably why the artifact is what it is.
+
+## IQP circuits and the BQD arm
+
+`gen_iqp.py` writes the IQP fragment of a circuit: a Hadamard on every qubit,
+then diagonal gates drawn from the third level of the Clifford hierarchy on at
+most three qubits (`t`, `z`, `s`, `sdg`, `cz`, `cs`, `csdg`, `ccz`), and no
+closing layer. Every intermediate state is a phase state, which is the class
+the binary quotient diagram (`--dd=bqd`, `src/qsylvan_bqd.h`) has an algorithm
+for, and the file stops where all three arms can go: the BQD has no Hadamard.
+
+The `cs` and `ccz` gates are what makes the set worth running. With `t` and
+`cz` alone the high cofactor at every level is a Pauli times the low one, so
+the LIMDD keeps width 1 and n nodes however many T gates there are (measured:
+19 nodes at 20 qubits, 29 at 30). The parser and all three arms take the three
+gates as one gate each; the LIMDD arm goes through `limdd_cgate` with a
+control mask, since they are symmetric and the highest qubit can be the
+target. `cp` with an angle is not used because it is not exact on `qisq2`.
+
+The T-count reported by the runner counts `cs` as 3 and `ccz` as 7, their
+ancilla-free Clifford+T decompositions, on every arm.
+
+```
+python3 gen_iqp.py --out gen_iqp --qubits 20 30 40 50 60 --gates 700 1000
+run_qasm_on_qmdd gen_iqp/iqp_20_700.qasm --dd=bqd   -e qisq2 -s low -c -m
+run_qasm_on_qmdd gen_iqp/iqp_20_700.qasm --dd=limdd -e qisq2 -s low -c -m
+run_qasm_on_qmdd gen_iqp/iqp_20_700.qasm --dd=qmdd  -e qisq2 -s low -c -m
+```
+
+The BQD arm reports `norm` and `first_qubit_measurement_prob` as -1 above 24
+qubits: it has no summation algorithm, and below that they come from decoding
+the whole state, which is how `qasm/test/test_sim_qasm_bqd.py` checks the arm
+against the EVDD arm amplitude for amplitude. Its node counts follow the
+paper's convention (no level skipping), so they are not the LIMDD's.

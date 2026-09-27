@@ -24,6 +24,8 @@
 #include "qsylvan_limdd_ops.h"
 #include "qsylvan_limdd_gc.h"
 #include "qsylvan_limdd_inspect.h"
+#include "qsylvan_bqd.h"
+#include "qsylvan_bqd_ops.h"
 #include "qsylvan_qasm_parser.h"
 
 /**********************<Arguments (configured via argp)>***********************/
@@ -63,12 +65,15 @@ static int  lim_tab_size_log2  = 0;       /* --lim-tab-size; 0 = derive from the
 static bool lim_stats = false;
 static char *trace_file = NULL;   /* --trace: per-gate telemetry */
 static FILE *trace_out = NULL;
-typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR } dd_kind_t;
+typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR, DD_BQD } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
 static char* json_outputfile = NULL;
+/* The BQD arm has no amplitude algorithm; -v and -m decode the whole state
+ * into this vector when it fits (see BQD_DECODE_MAX_QUBITS). */
+static EVBDD_WGT *bqd_vector = NULL;
 
 
 static struct argp_option options[] =
@@ -96,7 +101,7 @@ static struct argp_option options[] =
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
-    {"dd", 'd', "<qmdd|limdd|limdd-heur>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging.", 0},
+    {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram with scalar labels, which has an algorithm for the IQP fragment only: a Hadamard on every qubit, then z, s, sdg, t, tdg, cz, cs, csdg and ccz. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -202,6 +207,7 @@ parse_opt(int key, char *arg, struct argp_state *state)
         if (strcmp(arg, "qmdd") == 0)             dd_kind = DD_QMDD;
         else if (strcmp(arg, "limdd") == 0)       dd_kind = DD_LIMDD;
         else if (strcmp(arg, "limdd-heur") == 0)  dd_kind = DD_LIMDD_HEUR;
+        else if (strcmp(arg, "bqd") == 0)         dd_kind = DD_BQD;
         else argp_error(state, "unknown dd type '%s'", arg);
         break;
     case ARGP_KEY_ARG:
@@ -250,12 +256,24 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "  \"measurement_results\": {\n");
     fprintf(stream, "    \""); fprint_creg(stream, circuit); fprintf(stream, "\": 1\n");
     fprintf(stream, "  },\n");
-    if (output_vector)
+    if (output_vector && (dd_kind != DD_BQD || bqd_vector != NULL))
     {
         fprintf(stream, "  \"state_vector\": [\n");
         for (int k = 0; k < (1<<(circuit->qreg_size)); k++) {
             bool *x = int_to_bitarray(k, circuit->qreg_size, !(circuit->reversed_qubit_order));
-            complex_t c = qmdd_get_amplitude(stats.final_state, x, circuit->qreg_size);
+            complex_t c;
+            if (dd_kind == DD_BQD) {
+                /* qmdd_get_amplitude reads x reversed, path[var] = x[n-1-var],
+                 * so qubit q's value is x[n-1-q]; the decoded vector has qubit
+                 * q at bit (n-1-q), so bit j of its index is x[j]. Same order
+                 * as the QMDD arm prints, whichever way the parser numbered. */
+                uint64_t idx = 0;
+                for (int j = 0; j < circuit->qreg_size; j++)
+                    if (x[j]) idx |= UINT64_C(1) << j;
+                c = weight_as_complex(bqd_vector[idx]);
+            } else {
+                c = qmdd_get_amplitude(stats.final_state, x, circuit->qreg_size);
+            }
             fprintf(stream, "    [\n");
             fprintf(stream, "      %.16lf,\n", c.r);
             fprintf(stream, "      %.16lf\n", c.i);
@@ -346,9 +364,12 @@ QMDD apply_gate(QMDD state, quantum_op_t* gate, BDDVAR nqubits)
         return qmdd_gate(state, GATEID_Sdag, gate->targets[0]);
     }
     else if (strcmp(gate->name, "t") == 0) {
+        stats.t_count++;   /* counted on both paths: it is a property of the
+                            * circuit, and the bounds are stated in terms of it */
         return qmdd_gate(state, GATEID_T, gate->targets[0]);
     }
     else if (strcmp(gate->name, "tdg") == 0) {
+        stats.t_count++;
         return qmdd_gate(state, GATEID_Tdag, gate->targets[0]);
     }
     else if (strcmp(gate->name, "sx") == 0) {
@@ -402,6 +423,21 @@ QMDD apply_gate(QMDD state, quantum_op_t* gate, BDDVAR nqubits)
     }
     else if (strcmp(gate->name, "cp") == 0) {
         return qmdd_cgate(state, GATEID_Phase(gate->angle[0]), gate->ctrls[0], gate->targets[0], nqubits);
+    }
+    /*
+     * cs, csdg and ccz are level-3 diagonal gates that every arm applies as
+     * one gate. Their T-count is that of the ancilla-free Clifford+T
+     * decomposition, 3 for a controlled S and 7 for a CCZ, so that t_count
+     * stays the T-count of the circuit and the bounds stated in it apply.
+     */
+    else if (strcmp(gate->name, "cs") == 0 || strcmp(gate->name, "csdg") == 0) {
+        stats.t_count += 3;
+        return qmdd_cgate(state, gate->name[2] == 'd' ? GATEID_Sdag : GATEID_S,
+                          gate->ctrls[0], gate->targets[0], nqubits);
+    }
+    else if (strcmp(gate->name, "ccz") == 0) {
+        stats.t_count += 7;
+        return qmdd_cgate2(state, GATEID_Z, gate->ctrls[0], gate->ctrls[1], gate->targets[0], nqubits);
     }
     else if (strcmp(gate->name, "cu") == 0) {
         return qmdd_cgate(state, GATEID_U(gate->angle[0], gate->angle[1], gate->angle[2]), gate->ctrls[0], gate->targets[0], nqubits);
@@ -530,6 +566,26 @@ limdd_apply_gate(LIMDD *state, quantum_op_t *gate, BDDVAR nqubits)
         }
         return true;
     }
+    else if (strcmp(gate->name, "cs") == 0 || strcmp(gate->name, "csdg") == 0) {
+        /* symmetric, so the lower qubit is the control: limdd_cgate needs
+         * every control above the target. T-count as in apply_gate. */
+        const uint32_t a = gate->ctrls[0] < t ? gate->ctrls[0] : t;
+        const uint32_t b = gate->ctrls[0] < t ? t : gate->ctrls[0];
+        stats.t_count += 3;
+        *state = limdd_cgate(*state, gate->name[2] == 'd' ? GATEID_Sdag : GATEID_S,
+                             UINT64_C(1) << a, b, nqubits);
+        return true;
+    }
+    else if (strcmp(gate->name, "ccz") == 0) {
+        /* symmetric in all three: the highest-numbered qubit is the target */
+        uint32_t q[3] = { (uint32_t)gate->ctrls[0], (uint32_t)gate->ctrls[1], t };
+        for (int i = 0; i < 2; i++) for (int j = i + 1; j < 3; j++)
+            if (q[j] < q[i]) { const uint32_t x = q[i]; q[i] = q[j]; q[j] = x; }
+        stats.t_count += 7;
+        *state = limdd_cgate(*state, GATEID_Z, (UINT64_C(1) << q[0]) | (UINT64_C(1) << q[1]),
+                             q[2], nqubits);
+        return true;
+    }
     else {
         fprintf(stderr, "limdd: gate '%s' is outside Clifford+T\n", gate->name);
         return false;
@@ -647,6 +703,182 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
     return 0;
 }
 
+/**
+ * The BQD arm: the IQP fragment of a circuit, and nothing else.
+ *
+ * The paper (Laarman, "Binary Quotient Diagrams") proves one operation on a
+ * BQD of the scalar family, the pointwise product (prop:prodscalar), and a
+ * diagonal gate is a product with a monomial phase (prop:diag). That covers
+ * a circuit that starts with a Hadamard on every qubit, which makes the
+ * all-ones vector up to scale, and then applies diagonal gates: every
+ * intermediate state is a phase state, the class the paper's size theorem
+ * is about. A Hadamard anywhere else, or any gate that is not diagonal, has
+ * no algorithm on this structure, and the arm refuses it rather than
+ * quietly falling back to something else.
+ *
+ * The gates are z, s, sdg, t, tdg, cz, cs, csdg and ccz, which is the
+ * diagonal part of the third level of the Clifford hierarchy as gates on at
+ * most three qubits, and not the parser's p or cp with an angle: on the
+ * exact backend a dynamic phase gate goes through a double (see
+ * GATEID_Phase). The LIMDD arm applies the same nine as single gates, cs and
+ * ccz through limdd_cgate with a control mask, so the three arms run the
+ * same files.
+ */
+#define BQD_DECODE_MAX_QUBITS 24     /* 2^24 weights, 128 MB */
+
+static bool
+bqd_diagonal_gate(const quantum_op_t *gate, uint32_t n, uint64_t *A, EVBDD_WGT *phase)
+{
+    /* qubit q is bit (n-1-q) of a vector index, the BQD's convention */
+    *A = UINT64_C(1) << (n - 1 - (uint32_t)gate->targets[0]);
+    if      (strcmp(gate->name, "id")  == 0) { *A = 0; *phase = EVBDD_ONE; }
+    else if (strcmp(gate->name, "z")   == 0) *phase = gates[GATEID_Z][3];
+    else if (strcmp(gate->name, "s")   == 0) *phase = gates[GATEID_S][3];
+    else if (strcmp(gate->name, "sdg") == 0) *phase = gates[GATEID_Sdag][3];
+    else if (strcmp(gate->name, "t")   == 0) { *phase = gates[GATEID_T][3];    stats.t_count++; }
+    else if (strcmp(gate->name, "tdg") == 0) { *phase = gates[GATEID_Tdag][3]; stats.t_count++; }
+    else if (strcmp(gate->name, "cz")  == 0) {
+        *A |= UINT64_C(1) << (n - 1 - (uint32_t)gate->ctrls[0]);
+        *phase = gates[GATEID_Z][3];
+    }
+    else if (strcmp(gate->name, "cs") == 0 || strcmp(gate->name, "csdg") == 0) {
+        *A |= UINT64_C(1) << (n - 1 - (uint32_t)gate->ctrls[0]);
+        *phase = gates[gate->name[2] == 'd' ? GATEID_Sdag : GATEID_S][3];
+        stats.t_count += 3;                 /* the convention of apply_gate */
+    }
+    else if (strcmp(gate->name, "ccz") == 0) {
+        *A |= UINT64_C(1) << (n - 1 - (uint32_t)gate->ctrls[0]);
+        *A |= UINT64_C(1) << (n - 1 - (uint32_t)gate->ctrls[1]);
+        *phase = gates[GATEID_Z][3];
+        stats.t_count += 7;
+    }
+    else return false;
+    return true;
+}
+
+/** |+>^n: the all-ones chain with the scalar (1/sqrt2)^n on the root. */
+static BQD
+bqd_plus_state(uint32_t n)
+{
+    EVBDD_WGT c = EVBDD_ONE;
+    for (uint32_t q = 0; q < n; q++) c = wgt_mul(c, gates[GATEID_H][0]);
+    return limdd_bundle(bqd_lim_make(c, 0, 0, n), bqd_ones(0, n));
+}
+
+TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
+{
+    const uint32_t n = (uint32_t)circuit->qreg_size;
+    if (n > 63) {
+        fprintf(stderr, "bqd: %u qubits, but a vector index is one 64-bit word\n", n);
+        return 1;
+    }
+    const uint64_t every_qubit = (UINT64_C(1) << n) - 1;
+    const double t_start = wctime();
+    uint64_t had = 0;              /* the qubits whose Hadamard has been seen */
+    bool started = false;          /* is the layer complete, so a state exists */
+    BQD state = limdd_zero_edge();
+    limdd_protect(&state);
+    uint64_t gate_idx = 0;
+    if (trace_out != NULL)
+        fprintf(trace_out, "gate_index,gate,t_count,nodes,width,wgt_bits\n");
+
+    for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
+        if (op->type == op_measurement) break;   /* nothing to take from it */
+        if (op->type != op_gate) continue;
+        stats.applied_gates++;
+
+        if (!started) {
+            if (strcmp(op->name, "h") != 0) {
+                fprintf(stderr, "bqd: '%s' before the Hadamard layer is complete; "
+                                "the IQP fragment starts with a Hadamard on every qubit\n",
+                        op->name);
+                limdd_unprotect(&state);
+                return 1;
+            }
+            const uint64_t bit = UINT64_C(1) << (n - 1 - (uint32_t)op->targets[0]);
+            if (had & bit) {
+                fprintf(stderr, "bqd: a second Hadamard on qubit %d\n", op->targets[0]);
+                limdd_unprotect(&state);
+                return 1;
+            }
+            had |= bit;
+            if (had == every_qubit) {
+                state = bqd_plus_state(n);
+                started = true;
+            }
+        } else {
+            uint64_t A;
+            EVBDD_WGT phase;
+            if (!bqd_diagonal_gate(op, n, &A, &phase)) {
+                fprintf(stderr, "bqd: gate '%s' is not one of z, s, sdg, t, tdg, cz, cs, "
+                                "csdg, ccz; the BQD has no algorithm for it\n", op->name);
+                limdd_unprotect(&state);
+                return 1;
+            }
+            if (A != 0) state = bqd_apply_diagonal(state, A, phase, n);
+        }
+
+        /* The gate index counts the Hadamard layer too, so a trace lines up
+         * gate for gate with the other arms' traces of the same file; rows
+         * start once there is a state to measure. */
+        if (started) {
+            if (count_nodes) {
+                const uint64_t c = limdd_countnodes(state);
+                if (c > stats.max_nodes) stats.max_nodes = c;
+            }
+            if (trace_out != NULL) trace_row(gate_idx, op->name, state, n);
+        }
+        gate_idx++;
+
+        /* Between gates only, as on the LIMDD arm: the root is protected and
+         * the product's temporaries are gone. */
+        if (limdd_gc_wanted()) CALL(limdd_gc);
+    }
+    if (!started) {
+        fprintf(stderr, "bqd: the circuit never completes its Hadamard layer\n");
+        limdd_unprotect(&state);
+        return 1;
+    }
+
+    stats.final_width = limdd_width(state, n);
+    if (stats.final_width > stats.max_width) stats.max_width = stats.final_width;
+    stats.final_qisq_size = limdd_max_wgt_bits(state, n);
+    stats.final_nodes = limdd_countnodes(state);
+    stats.simulation_time = wctime() - t_start;
+
+    /*
+     * No norm and no measurement: the paper leaves every summation query
+     * open, and computing one here by decoding would make the arm look as if
+     * it had an algorithm it does not have. The two figures are taken from
+     * the decoded vector when that fits, as a correctness check against the
+     * other arms, and reported as -1 otherwise. The decode is not timed.
+     */
+    stats.norm = -1.0;
+    stats.first_qubit_prob = -1.0;
+    if (calc_measurement_prob || output_vector) {
+        if (n > BQD_DECODE_MAX_QUBITS) {
+            fprintf(stderr, "bqd: %u qubits is too many to decode; norm and "
+                            "measurement probability are reported as -1\n", n);
+        } else {
+            const uint64_t len = UINT64_C(1) << n;
+            bqd_vector = malloc(len * sizeof(EVBDD_WGT));
+            bqd_to_vector(state, n, bqd_vector);
+            double norm = 0.0, p_top_zero = 0.0;
+            for (uint64_t x = 0; x < len; x++) {
+                const complex_t c = weight_as_complex(bqd_vector[x]);
+                const double m = c.r * c.r + c.i * c.i;
+                norm += m;
+                if ((x >> (n - 1)) == 0) p_top_zero += m;
+            }
+            stats.norm = norm;
+            stats.first_qubit_prob = (norm > 0.0) ? p_top_zero / norm : 1e10;
+            if (!output_vector) { free(bqd_vector); bqd_vector = NULL; }
+        }
+    }
+    limdd_unprotect(&state);
+    return 0;
+}
+
 void simulate_circuit(quantum_circuit_t* circuit)
 {
     double t_start = wctime();
@@ -743,7 +975,9 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          * and the thread that called lace_start is not a worker. */
         /* --canon wins; otherwise --dd picks: limdd canonicalises eagerly,
          * limdd-heur never does. */
-        if (canon_policy >= 0)
+        if (dd_kind == DD_BQD)
+            ;                       /* no canonical form to schedule: every node is built canonical */
+        else if (canon_policy >= 0)
             limdd_set_canon_policy((limdd_canon_policy_t) canon_policy, canon_interval);
         else
             limdd_set_canon_policy(dd_kind == DD_LIMDD ? LIMDD_CANON_ALWAYS
@@ -778,12 +1012,22 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
          * they reach it, so a value larger than the diagram is deep sends
          * them past the terminal. */
-        limdd_nodes_init(circuit->qreg_size, lt, lt, lim_t, lt);
-        if (CALL(limdd_simulate_circuit, circuit) != 0) {
+        if (dd_kind == DD_BQD) {
+            /* The same tables, read under the quotient rule; see qsylvan_bqd.h. */
+            bqd_init(BQD_FAMILY_SCALAR, circuit->qreg_size, lt, lt, lim_t, lt);
+            if (CALL(bqd_simulate_circuit, circuit) != 0) {
+                bqd_quit();
+                exit(1);
+            }
+            bqd_quit();
+        } else {
+            limdd_nodes_init(circuit->qreg_size, lt, lt, lim_t, lt);
+            if (CALL(limdd_simulate_circuit, circuit) != 0) {
+                limdd_nodes_quit();
+                exit(1);
+            }
             limdd_nodes_quit();
-            exit(1);
         }
-        limdd_nodes_quit();
     } else {
         simulate_circuit(circuit);
     }
@@ -907,6 +1151,8 @@ int main(int argc, char *argv[])
             exit(1);
         }
     }
+
+    if (dd_kind == DD_BQD) canon_name = "n/a";
 
     if (rseed == 0) rseed = time(NULL);
     srand(rseed);
