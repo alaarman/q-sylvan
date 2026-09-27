@@ -4,25 +4,42 @@
  *
  *   round trip        decode(build(f)) = f, and the amplitude query agrees,
  *                     on random vectors at several zero densities
- *   canonicity        building a vector twice gives the same edge, and the
- *                     representative is idempotent
+ *   determinism       building a vector twice, on four workers, gives the
+ *                     same edge
+ *   def:rep           c.f and f have the same root node, in every family:
+ *                     the representative divides the scale out, so the
+ *                     orbit under scalars is one node; and taking the
+ *                     representative again changes nothing
  *   thm:coset         on a level-k coset state the X-BQD has at most
- *                     sum_{i<k} C(v, i) + 2 nodes at the level with v decided
- *                     variables, in random orders, and the copy clause never
- *                     fires there
- *   thm:pcoset        the Pauli-BQD has at most sum_{i<k-1} C(v, i) + 2, so at
- *                     most 3 per level on every stabiliser state
+ *                     sum_{i<k} C(v, i) + 1 nodes at the level with v decided
+ *                     variables, the node 0 counted where it occurs as the
+ *                     paper counts it, in random orders, and the copy clause
+ *                     never fires there
+ *   thm:pcoset        the Pauli-BQD has at most sum_{i<k-1} C(v, i) + 1
+ *                     nodes that are not 0 at such a level. The theorem says
+ *                     + 2, and one of the two is the node 0 (bqd2.tex, after
+ *                     thm:pcoset), which this port keeps as an edge and never
+ *                     counts. At k = 2 that is two per level.
  *   def:prep          the Pauli representative is invariant under scalars
  *                     and sign patterns wherever the pivots span the support,
- *                     which is every node of a coset state
+ *                     which is every node of a coset state; and, on vectors
+ *                     over Z[sqrt2, i] with both signs in a component, every
+ *                     pivot value of the representative has its argument in
+ *                     [0, pi), decided exactly (A + B sqrt2 with A, B of
+ *                     opposite sign is the case sign_sqrt2 has to compare)
  *   full support      the X-BQD carries no translation, so it is the BQD
  *   scalar labels     on a coset state with a proper support the copy fires,
  *                     which is the degradation the translation label removes
+ *   float weights     the Pauli family on the float backend, whose sign
+ *                     decision is a comparison of doubles: round trip,
+ *                     the pivot arguments, and def:prep invariance
  *
- * Everything is exact, in Q(w_8): coset states have amplitudes that are
- * eighth roots of unity or zero, which is what the paper's prototype stores.
+ * Everything but the last is exact, in Q(w_8, sqrt2): coset states have
+ * amplitudes that are eighth roots of unity or zero, which is what the
+ * paper's prototype stores.
  */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +50,9 @@
 #include "qsylvan_bqd.h"
 #include "qsylvan_limdd_inspect.h"
 #include "qsylvan_simulator.h"
+#include "sylvan_edge_weights_complex.h"
 #include "sylvan_edge_weights_qisq2.h"
+#include "edge_weight_storage/qisq2_map.h"
 
 #define NQ 12
 #define MAXV (1u << NQ)
@@ -156,6 +175,13 @@ rand_vector(unsigned n, double pzero, EVBDD_WGT *f)
         f[x] = ((double)rnd_below(1000) / 1000.0 < pzero) ? EVBDD_ZERO : pw[rnd_below(8)];
 }
 
+static int64_t
+lexmin_nonzero(const EVBDD_WGT *f, uint64_t len)
+{
+    for (uint64_t x = 0; x < len; x++) if (f[x] != EVBDD_ZERO) return (int64_t)x;
+    return -1;
+}
+
 /* --- diagram walks used by the checks ------------------------------------- */
 
 /**
@@ -201,6 +227,22 @@ copies_below(LIMDD_TARG p, unsigned var, unsigned n)
     return fires;
 }
 
+/**
+ * The least variable of a node with a zero child, or n if none. The paper
+ * counts the function 0 as a node at every level it occurs (thm:coset), and
+ * it occurs at every level below such a node, where this port keeps an edge.
+ */
+static unsigned
+min_zero_var(LIMDD_TARG p, unsigned var, unsigned n)
+{
+    if (var == n) return n;
+    const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
+    if (limdd_edge_is_zero(low) || limdd_edge_is_zero(high)) return var;
+    const unsigned a = min_zero_var(limdd_target(low), var + 1, n);
+    const unsigned b = min_zero_var(limdd_target(high), var + 1, n);
+    return a < b ? a : b;
+}
+
 /** Whether any high label below carries a translation. */
 static bool
 any_translation(LIMDD_TARG p, unsigned var, unsigned n)
@@ -222,7 +264,7 @@ static void
 check_round_trip(void)
 {
     EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT));
-    unsigned bad = 0, badeval = 0, badcanon = 0, tot = 0;
+    unsigned bad = 0, badeval = 0, badcanon = 0, badscale = 0, tot = 0;
     const double dens[4] = { 0.0, 0.2, 0.5, 0.8 };
     for (unsigned n = 1; n <= 8; n++) {
         for (unsigned di = 0; di < 4; di++) {
@@ -237,6 +279,14 @@ check_round_trip(void)
                     if (bqd_eval(e, n, x) != f[x]) { badeval++; break; }
                 }
                 if (bqd_from_vector(f, n) != e) badcanon++;
+
+                /* def:rep: c.f is f up to the root's label, so one node */
+                const EVBDD_WGT c = pw[1 + rnd_below(7)];
+                for (uint64_t x = 0; x < (UINT64_C(1) << n); x++)
+                    g[x] = (f[x] == EVBDD_ZERO) ? EVBDD_ZERO : wgt_mul(c, f[x]);
+                const BQD ec = bqd_from_vector(g, n);
+                if (limdd_target(ec) != limdd_target(e)) badscale++;
+                else if (!limdd_edge_is_zero(e) && limdd_label(ec) == limdd_label(e)) badscale++;
             }
         }
     }
@@ -246,7 +296,9 @@ check_round_trip(void)
     snprintf(buf, sizeof(buf), "%u of %u vectors have an amplitude the query gets wrong", badeval, tot);
     expect(badeval == 0, "amplitude query", buf);
     snprintf(buf, sizeof(buf), "%u of %u vectors built twice gave two different edges", badcanon, tot);
-    expect(badcanon == 0, "canonicity", buf);
+    expect(badcanon == 0, "determinism", buf);
+    snprintf(buf, sizeof(buf), "%u of %u: c.f and f do not share the root node, or share its label", badscale, tot);
+    expect(badscale == 0, "def:rep, scalar orbit", buf);
     free(f); free(g);
 }
 
@@ -301,12 +353,19 @@ check_coset_states(void)
                 for (unsigned v = 0; v < n; v++) if (counts[v] > max_width) max_width = counts[v];
 
                 if (fam == BQD_FAMILY_X || fam == BQD_FAMILY_PAULI) {
-                    /* thm:coset / thm:pcoset, per level: v decided variables */
+                    /* thm:coset / thm:pcoset, per level: v decided variables,
+                     * nonzero nodes only, since that is what this port counts */
                     const unsigned kk = (fam == BQD_FAMILY_X) ? k : k - 1;
+                    /* thm:coset counts the node 0 within its + 1; thm:pcoset's
+                     * + 2 is the code-state node and 0, so its nonzero nodes
+                     * are within + 1 whether or not 0 occurs */
+                    const unsigned zmin = limdd_edge_is_zero(e) ? n
+                                        : min_zero_var(limdd_target(e), 0, n);
                     for (unsigned v = 0; v < n; v++) {
-                        uint64_t bound = 2;
+                        uint64_t bound = 1;
                         for (unsigned i = 0; i < kk; i++) bound += binom(v, i);
-                        if (counts[v] > bound) {
+                        const size_t zero_node = (fam == BQD_FAMILY_X && v > zmin) ? 1 : 0;
+                        if (counts[v] + zero_node > bound) {
                             bound_bad++;
                             fprintf(stderr, "  %s: n=%u k=%u level v=%u has %zu nodes, bound %llu\n",
                                     bqd_family_name(fam), n, k, v, counts[v],
@@ -339,8 +398,7 @@ check_coset_states(void)
                         }
                         h[y] = v;
                     }
-                    if (bqd_from_vector(h, n) != e && limdd_target(bqd_from_vector(h, n)) != limdd_target(e))
-                        prep_bad++;
+                    if (limdd_target(bqd_from_vector(h, n)) != limdd_target(e)) prep_bad++;
                     free(h);
                 }
             }
@@ -373,6 +431,89 @@ check_coset_states(void)
     free(f); free(g); free(code); free(terms);
 }
 
+/** Whether arg(w) is in [0, pi), from the value as doubles. */
+static bool
+upper_by_double(EVBDD_WGT w)
+{
+    const complex_t z = weight_as_complex(w);
+    return z.i > 0.0 || (z.i == 0.0 && z.r > 0.0);
+}
+
+/** Whether deciding the sign of A + B sqrt2 needs the comparison of A^2 with 2B^2. */
+static bool
+mixed(const mpq_t A, const mpq_t B)
+{
+    return (mpq_sgn(A) > 0 && mpq_sgn(B) < 0) || (mpq_sgn(A) < 0 && mpq_sgn(B) > 0);
+}
+
+/**
+ * def:prep on values the eighth roots of unity never produce. Every entry is
+ * a + b sqrt2 + i (c + d sqrt2) with small integers of either sign, so the
+ * ratios at the pivots have components like 1 - sqrt2, whose sign is the
+ * comparison sign_sqrt2 makes, and every one of these vectors has full
+ * support, so the pivots are the unit vectors and span it. Checked: the
+ * round trip, the argument at every pivot of the representative (against the
+ * doubles, which cannot be wrong here: an exact zero is 0.0, and A + B sqrt2
+ * with integers A, B not both 0 is at least 1/(|A| + |B| sqrt2) from it, far
+ * above the rounding at these sizes), and invariance under c Z^s.
+ */
+static void
+check_prep_algebraic(void)
+{
+    EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT)),
+              *r = malloc(MAXV * sizeof(EVBDD_WGT));
+    unsigned tot = 0, badrt = 0, badarg = 0, badinv = 0;
+    uint64_t pivots = 0, needed_compare = 0;
+    for (unsigned n = 1; n <= 7; n++) for (int rep = 0; rep < 40; rep++) {
+        const uint64_t len = UINT64_C(1) << n;
+        for (uint64_t x = 0; x < len; x++) {
+            long a, b, c, d;
+            do {
+                a = (long)rnd_below(7) - 3; b = (long)rnd_below(7) - 3;
+                c = (long)rnd_below(7) - 3; d = (long)rnd_below(7) - 3;
+            } while (a == 0 && b == 0 && c == 0 && d == 0);
+            f[x] = qisq2_lookup(a, 1, b, 1, c, 1, d, 1);
+        }
+        tot++;
+        const BQD e = bqd_from_vector(f, n);
+        bqd_to_vector(e, n, g);
+        if (memcmp(f, g, len * sizeof(EVBDD_WGT)) != 0) badrt++;
+
+        EVBDD_WGT c0; uint64_t sv, p;
+        bqd_representative(f, len, r, &c0, &sv, &p);
+        for (unsigned b = 0; b < n; b++) {
+            const EVBDD_WGT w = r[UINT64_C(1) << b];
+            pivots++;
+            if (!upper_by_double(w)) badarg++;
+            const qisq2_t *q = (const qisq2_t *)qisq2_map_get(wgt_storage, (uint64_t)w);
+            const bool im_zero = mpq_sgn(q->c) == 0 && mpq_sgn(q->d) == 0;
+            if (mixed(q->c, q->d) || (im_zero && mixed(q->a, q->b))) needed_compare++;
+        }
+
+        const EVBDD_WGT cc = f[rnd_below(len)];
+        const uint64_t s = rnd_below(len);
+        for (uint64_t y = 0; y < len; y++) {
+            EVBDD_WGT v = wgt_mul(cc, f[y]);
+            g[y] = __builtin_parityll(s & y) ? wgt_neg(v) : v;
+        }
+        if (limdd_target(bqd_from_vector(g, n)) != limdd_target(e)) badinv++;
+    }
+    char buf[160];
+    printf("  %u vectors over Z[sqrt2, i]: %llu pivot values, %llu of them decided by "
+           "comparing A^2 with 2B^2\n", tot, (unsigned long long)pivots,
+           (unsigned long long)needed_compare);
+    snprintf(buf, sizeof(buf), "%u of %u vectors do not decode to themselves", badrt, tot);
+    expect(badrt == 0, "round trip over Z[sqrt2, i]", buf);
+    snprintf(buf, sizeof(buf), "%u of %llu pivot values have an argument outside [0, pi)",
+             badarg, (unsigned long long)pivots);
+    expect(badarg == 0, "def:prep pivot arguments", buf);
+    snprintf(buf, sizeof(buf), "%u of %u: (c Z^s) f and f got different nodes", badinv, tot);
+    expect(badinv == 0, "def:prep invariance over Z[sqrt2, i]", buf);
+    expect(needed_compare > 0, "sign_sqrt2 exercised",
+           "no pivot value needed the A^2 against 2B^2 comparison");
+    free(f); free(g); free(r);
+}
+
 /* --- harness -------------------------------------------------------------- */
 
 TASK_1(int, runtests, int, fam)
@@ -389,6 +530,7 @@ TASK_1(int, runtests, int, fam)
     check_round_trip();
     check_representative_idempotent();
     check_coset_states();
+    if (fam == BQD_FAMILY_PAULI) check_prep_algebraic();
 
     bqd_quit();
     return failures != before;
@@ -411,6 +553,63 @@ run_family(bqd_family_t fam)
     return res;
 }
 
+/**
+ * The Pauli family on float weights, where arg_in_upper compares doubles.
+ * Amplitudes are eighth roots of unity and zero, which the weight table
+ * holds as single entries, so -1 is stored with an imaginary part of exactly
+ * 0.0 and the comparison sees what the exact one does. Values are compared
+ * to 1e-9, not by index.
+ */
+TASK_0(int, run_float_pauli)
+{
+    bqd_init(BQD_FAMILY_PAULI, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    for (int e = 0; e < 8; e++) pw[e] = complex_lookup_angle((fl_t)e * 0.25 * M_PI, 1.0);
+    pw[0] = EVBDD_ONE;
+    pw[4] = EVBDD_MIN_ONE;
+
+    const int before = failures;
+    EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT)),
+              *r = malloc(MAXV * sizeof(EVBDD_WGT));
+    unsigned tot = 0, badrt = 0, badarg = 0, badinv = 0, full = 0;
+    for (unsigned n = 1; n <= 8; n++) for (int rep = 0; rep < 40; rep++) {
+        const uint64_t len = UINT64_C(1) << n;
+        rand_vector(n, (rep & 1) ? 0.0 : 0.3, f);
+        tot++;
+        const BQD e = bqd_from_vector(f, n);
+        bqd_to_vector(e, n, g);
+        for (uint64_t x = 0; x < len; x++) {
+            const complex_t a = weight_as_complex(f[x]), b = weight_as_complex(g[x]);
+            if (fabs(a.r - b.r) > 1e-9 || fabs(a.i - b.i) > 1e-9) { badrt++; break; }
+        }
+        if (lexmin_nonzero(f, len) != 0) continue;
+        bool support_full = true;
+        for (uint64_t x = 0; x < len; x++) if (f[x] == EVBDD_ZERO) support_full = false;
+        if (!support_full) continue;
+        full++;
+        EVBDD_WGT c0; uint64_t sv, p;
+        bqd_representative(f, len, r, &c0, &sv, &p);
+        for (unsigned b = 0; b < n; b++) if (!upper_by_double(r[UINT64_C(1) << b])) { badarg++; break; }
+        const EVBDD_WGT cc = pw[rnd_below(8)];
+        const uint64_t s = rnd_below(len);
+        for (uint64_t y = 0; y < len; y++) {
+            const EVBDD_WGT v = wgt_mul(cc, f[y]);
+            g[y] = __builtin_parityll(s & y) ? wgt_neg(v) : v;
+        }
+        if (limdd_target(bqd_from_vector(g, n)) != limdd_target(e)) badinv++;
+    }
+    char buf[128];
+    printf("  %u vectors, %u of full support\n", tot, full);
+    snprintf(buf, sizeof(buf), "%u of %u vectors do not decode to themselves", badrt, tot);
+    expect(badrt == 0, "float round trip", buf);
+    snprintf(buf, sizeof(buf), "%u of %u representatives have a pivot argument outside [0, pi)", badarg, full);
+    expect(badarg == 0, "float def:prep pivot arguments", buf);
+    snprintf(buf, sizeof(buf), "%u of %u: (c Z^s) f and f got different nodes", badinv, full);
+    expect(badinv == 0, "float def:prep invariance", buf);
+    free(f); free(g); free(r);
+    bqd_quit();
+    return failures != before;
+}
+
 int
 main(void)
 {
@@ -418,5 +617,16 @@ main(void)
     bad |= run_family(BQD_FAMILY_SCALAR);
     bad |= run_family(BQD_FAMILY_X);
     bad |= run_family(BQD_FAMILY_PAULI);
+
+    printf("== Pauli-BQD, float weights ==\n");
+    lace_start(4, 0);
+    sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
+    sylvan_init_package();
+    qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, COMP_HASHMAP, NORM_LOW);
+    const int res = RUN(run_float_pauli);
+    sylvan_quit();
+    lace_stop();
+    printf("  %s\n", res ? "FAILED" : "ok");
+    bad |= res;
     return bad;
 }

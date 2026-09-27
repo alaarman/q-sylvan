@@ -153,6 +153,12 @@ sylvan_test_warnings(test_bqd)
 
 add_test(NAME test_bqd COMMAND test_bqd)
 
+# Two cache operations with one id read each other's entries; nothing else
+# would notice. Checked on the header itself, so it needs no build.
+add_test(NAME test_cache_opids
+         COMMAND ${CMAKE_COMMAND} -DHEADER=${PROJECT_SOURCE_DIR}/src/sylvan_int.h
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/check_cache_opids.cmake)
+
 add_executable(test_bqd_ops)
 target_sources(test_bqd_ops PRIVATE test_bqd_ops.c)
 target_link_libraries(test_bqd_ops PRIVATE qsylvan::sylvan)
@@ -160,6 +166,14 @@ target_compile_features(test_bqd_ops PRIVATE c_std_11)
 sylvan_test_warnings(test_bqd_ops)
 
 add_test(NAME test_bqd_ops COMMAND test_bqd_ops)
+
+add_executable(test_bqd_gates)
+target_sources(test_bqd_gates PRIVATE test_bqd_gates.c)
+target_link_libraries(test_bqd_gates PRIVATE qsylvan::sylvan)
+target_compile_features(test_bqd_gates PRIVATE c_std_11)
+sylvan_test_warnings(test_bqd_gates)
+
+add_test(NAME test_bqd_gates COMMAND test_bqd_gates)
 
 add_executable(test_limdd_ops)
 target_sources(test_limdd_ops PRIVATE test_limdd_ops.c)

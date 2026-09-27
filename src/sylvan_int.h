@@ -138,7 +138,17 @@ static const uint64_t CACHE_LIMDD_CGATE              = (86LL<<40);
 static const uint64_t CACHE_LIMDD_CANONIZE           = (87LL<<40);
 static const uint64_t CACHE_LIMDD_NORMSQ             = (88LL<<40);
 static const uint64_t CACHE_LIMDD_MINCOSET           = (89LL<<40);
-static const uint64_t CACHE_BQD_PROD                 = (91LL<<40);
+/* 95, and not 91, which is CACHE_QMDD_CGATE below: the comment above applies
+ * to every block, and test_cache_opids checks that no two ids agree. */
+static const uint64_t CACHE_BQD_PROD                 = (95LL<<40);
+/* the BQD's pointwise operations on any support, and its gates */
+static const uint64_t CACHE_BQD_MUL                  = (96LL<<40);
+static const uint64_t CACHE_BQD_ADD                  = (97LL<<40);
+static const uint64_t CACHE_BQD_XPROD                = (98LL<<40);
+static const uint64_t CACHE_BQD_XQUOT                = (99LL<<40);
+static const uint64_t CACHE_BQD_COF1                 = (114LL<<40);
+static const uint64_t CACHE_BQD_GATE                 = (115LL<<40);
+static const uint64_t CACHE_BQD_FULL                 = (116LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);

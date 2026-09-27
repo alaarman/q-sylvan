@@ -52,35 +52,44 @@
  * LIMDD operation, which would read the same triple under the Shannon rule.
  *
  * Canonical form. Every stored node is the REPRESENTATIVE of the function it
- * denotes: translated so that the least point of its support is 0, scaled so
- * that the value there is 1, and, for the Pauli family, multiplied by the
- * sign pattern that gives the value at every pivot an argument in [0, pi)
- * (def:rep, def:prep). The representative is a function of the vector, so the
- * reduced diagram in a fixed order is unique and equality is a comparison of
- * two edges. Building a node is a table lookup, with no search over the label
+ * denotes: for the X and Pauli families translated so that the least point
+ * of its support is 0; scaled so that the value at the least point is 1;
+ * and, for the Pauli family, multiplied by the sign pattern that gives the
+ * value at every pivot an argument in [0, pi) (def:rep, def:prep). The scalar
+ * family has no translation, so there only the scale is divided out and the
+ * least point stays where it is. The representative is a function of the
+ * vector, so the reduced diagram in a fixed order is unique and equality is a
+ * comparison of two edges. Building a node is a table lookup, with no search over the label
  * orbit -- the point of the design, and the difference from the LIMDD, whose
  * canonical form is an orbit computation. The price is that a function and
  * its translate can be two nodes, since the least point of a translated
  * support is not the translate of the least point: the diagram is reduced in
  * the sense that no two nodes denote one function, and not in the LIMDD's
  * sense that no two nodes are equal up to a label. Storing representatives
- * also means the low edge of every node carries the identity label, which is
- * what lets a node pack exactly like a LIMDD node.
+ * also means the low edge of every node carries the identity label, or is the
+ * zero edge where the low cofactor is zero, which happens in the scalar
+ * family only: in the other two, 0 is in the support of every stored node.
+ * That is what lets a node pack exactly like a LIMDD node, whose low edge is
+ * the identity or zero too. It is a consequence of def:rep, not a theorem.
  *
  * Conventions, fixed once. Qubit 0 is the top variable and is decided first.
  * A vector of length 2^n is indexed by x with qubit q at bit (n-1-q), so the
  * top qubit is the most significant bit and the first half of a vector is the
  * cofactor at x_top = 0. Translations and sign patterns are masks in that
  * same convention. The terminal is reached at level n only: levels are never
- * skipped and a redundant node is kept, which is the paper's counting
- * convention and NOT the fully reduced LIMDD's, so the two node counts are
- * not comparable without saying so.
+ * skipped and a redundant node is kept, which is the paper's convention and
+ * NOT the fully reduced LIMDD's. One difference from the paper's counts
+ * remains: the paper counts the function 0 as a node at every level where it
+ * occurs (the +2 of thm:pcoset is the code-state node and 0), and here zero
+ * is an edge, never a node. limdd_level_counts is therefore the paper's count
+ * minus one at every level with a zero cofactor, and a comparison with the
+ * paper's tables has to add it back.
  *
- * Scope. The only way to build a diagram here is from an amplitude vector,
- * exponential in n, which is what the paper's evaluation does. A Hadamard
- * has no algorithm on this structure (the paper leaves it open), so this is
- * not a circuit simulator.
- *
+ * Scope. Here a diagram is built from an amplitude vector, exponential in n,
+ * which is what the paper's evaluation does. qsylvan_bqd_ops.h has the two
+ * operations the paper proves, and qsylvan_bqd_gates.h the states and gates
+ * of a circuit simulator, the Hadamard among them, correct on every function
+ * and without the bound the paper leaves open. *
  * Parallelism follows the rest of the LIMDD code. The builder and the decoder
  * are Lace tasks that spawn the low cofactor and compute the high one, and
  * every representative is computed in per-call storage; the only shared state

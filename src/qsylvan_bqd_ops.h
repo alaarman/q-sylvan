@@ -15,7 +15,8 @@
  */
 
 /**
- * Operations on a BQD: the ones the paper proves.
+ * Operations on a BQD: two of the five the paper proves, the two that act
+ * on states of full support with scalar labels.
  *
  * The cofactors of a pointwise product are the products of the cofactors,
  * and under the quotient rule the ratio of the products is the product of
@@ -24,21 +25,30 @@
  * low child the node of u.p and high child the node of v.q, the scalars
  * multiply, and memoised on node pairs the work is at most |f||g| entries.
  *
- * A diagonal gate is a product with a phase of full support, and one
- * monomial of it is a product with a diagram that is the constant one at
- * every level outside the monomial, so the recursion makes one call per
- * level (prop:diag). Z, S, T, CZ, CS, CCZ and their inverses are monomials.
+ * A diagonal gate is a product with a phase of full support. For one
+ * monomial the gate's operand has the constant one as a child at every
+ * level, and a product with the constant one returns the other operand, so
+ * the recursion is a single path of at most n steps (prop:diag).
+ * bqd_apply_diagonal walks that path directly. Z, S, T, CZ, CS, CCZ and
+ * their inverses are monomials.
  *
- * That is exactly the class of phase states, which is what the paper's main
- * size theorem is about, and it is the IQP fragment of a circuit: a layer of
- * Hadamards, then diagonal gates. What is NOT here, because the paper has no
- * algorithm for it: the product with translation labels in general (only the
- * corrected recursion of thm:prodx under its hypotheses), the Hadamard, and
- * any summation query. None of that is a limitation of this port.
+ * Together they keep every state a phase state (def:level), the state in
+ * the middle of an IQP circuit, which is what thm:size bounds: a Hadamard on
+ * every qubit, then diagonal gates. Proved in the paper and NOT here: the
+ * character rewrite on support-nested X-BQDs (prop:chi), the product on
+ * aligned cosets with translation labels (thm:prodx), and the CNOT with its
+ * control decided first as a relabelling (prop:cnot). The Hadamard and the
+ * product on any support have no bounded algorithm in the paper; they are in
+ * qsylvan_bqd_gates.h, exact and without a bound. A summation query is not
+ * anywhere.
  *
- * Everything here needs the scalar family, since the theorems are stated for
- * it, and full support, since a zero would make the copy fire and the ratio
- * of the products stop being the product of the ratios.
+ * Both need the scalar family, and exit without it. Both need full support
+ * too, since a zero makes the copy fire and the ratio of the products stop
+ * being the product of the ratios; outside it they return a wrong diagram
+ * rather than failing. So each tests full support of its whole input, a walk
+ * memoised on nodes (bqd_has_full_support), and hands a state with a zero to
+ * the general product of qsylvan_bqd_gates.h, which is correct on any support
+ * and has no bound.
  */
 
 #ifndef QSYLVAN_BQD_OPS_H
@@ -51,9 +61,11 @@ extern "C" {
 #endif
 
 /**
- * The pointwise product f.g of two full-support diagrams of the scalar
- * family, canonical, as a Lace task memoised on node pairs. `var` is the
- * level both operands are read at: 0 for two root edges.
+ * The pointwise product f.g of two diagrams of the scalar family, canonical,
+ * as a Lace task memoised on node pairs: prop:prodscalar when both have full
+ * support, and bqd_multiply otherwise. `var` is the level both operands are
+ * read at, and must be 0 for two root edges, since that is where the support
+ * is tested.
  */
 TASK_DECL_3(BQD, bqd_product, BQD, BQD, uint32_t);
 #define bqd_product(f, g, var) RUN(bqd_product, f, g, var)
@@ -63,14 +75,27 @@ LIMDD_TARG bqd_ones(uint32_t var, uint32_t nqubits);
 
 /**
  * The phase state phase^{x_{i_1} ... x_{i_d}} for the monomial on the qubits
- * of `A` (a vector-index mask), which has one node per level: the constant
- * one as a child everywhere outside A. This is the diagram of a diagonal
- * gate, and a product with it costs one call per level.
+ * of `A` (a vector-index mask): the path of monomial nodes and, beside it,
+ * the constant-one chain they point at, so at most two nodes per level. The
+ * diagram of a diagonal gate, for bqd_product; bqd_apply_diagonal does not
+ * need it.
  */
 BQD bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
 
-/** Apply the diagonal gate that multiplies by phase^{monomial on A}. */
+/**
+ * Multiply e by phase^{x_A}, the diagonal gate of the monomial on the qubits
+ * of `A` (prop:diag). On full support one node of e per level at most is
+ * visited, whatever |e| is, and at most one new node per level is made,
+ * after the test for full support, which is memoised and so costs only the
+ * nodes it has not seen. Without full support it is bqd_multiply with the
+ * monomial. The result is the canonical diagram, the same edge as
+ * bqd_product(e, bqd_monomial(...)). From a Lace worker.
+ */
 BQD bqd_apply_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
+
+/** As bqd_apply_diagonal, and set *visits to the number of nodes of e visited. */
+BQD bqd_apply_diagonal_counted(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits,
+                               uint32_t *visits);
 
 #ifdef __cplusplus
 }

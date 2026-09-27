@@ -4,14 +4,18 @@
  *
  *   prop:prodscalar   the product of two full-support phase states equals the
  *                     canonical build of the pointwise product vector, as an
- *                     edge, so the recursion is canonical and not merely right
- *   prop:diag         a monomial gate is the same, and its operand has one node
- *                     per level
- *   thm:size          an IQP circuit -- Hadamards then Z, S, T, CZ, CS, CCZ --
- *                     keeps every intermediate state within
- *                     sum_{i<3} C(v, i) + 1 nodes at the level with v decided
- *                     variables, and the final amplitudes are the phase
- *                     polynomial
+ *                     edge, so the recursion is canonical and not merely right;
+ *                     g.f is the same edge, and so is a second call, which is
+ *                     answered from the memo at the root
+ *   prop:diag         a monomial gate gives that same edge, equal to the
+ *                     product with the gate's diagram, and visits at most one
+ *                     node per level, whatever the size of the state; the
+ *                     gate's own diagram has at most two nodes per level
+ *   thm:size          an IQP middle state -- Hadamards, then Z, S, T, CZ, CS,
+ *                     CCZ -- is, after every gate, the canonical diagram of
+ *                     its amplitude vector, within sum_{i<3} C(v, i) + 1
+ *                     nodes at the level with v decided variables, and its
+ *                     amplitudes are the phase polynomial
  *
  * Scalar family, exact weights in Q(w_8).
  */
@@ -102,7 +106,7 @@ check_product(void)
 {
     EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT)),
               *h = malloc(MAXV * sizeof(EVBDD_WGT));
-    unsigned bad = 0, tot = 0;
+    unsigned bad = 0, badsym = 0, tot = 0;
     for (unsigned n = 1; n <= 8; n++) for (int rep = 0; rep < 30; rep++) {
         phase_state(n, 2 + (unsigned)rnd_below(2), f);
         phase_state(n, 2 + (unsigned)rnd_below(2), g);
@@ -112,10 +116,13 @@ check_product(void)
         const BQD got = bqd_product(F, G, 0);
         tot++;
         if (got != want) bad++;
+        if (bqd_product(G, F, 0) != want || bqd_product(F, G, 0) != want) badsym++;
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "%u of %u products differ from the canonical build of f.g", bad, tot);
     expect(bad == 0, "prop:prodscalar", buf);
+    snprintf(buf, sizeof(buf), "%u of %u: g.f, or f.g from the memo, is another edge", badsym, tot);
+    expect(badsym == 0, "product commutes and memoises", buf);
     free(f); free(g); free(h);
 }
 
@@ -124,8 +131,10 @@ check_diagonal(void)
 {
     EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *h = malloc(MAXV * sizeof(EVBDD_WGT));
     size_t counts[NQ];
-    unsigned bad = 0, badshape = 0, tot = 0;
-    for (unsigned n = 1; n <= 8; n++) for (int rep = 0; rep < 30; rep++) {
+    unsigned bad = 0, badshape = 0, badprod = 0, badvisits = 0, tot = 0;
+    uint32_t max_visits = 0;
+    size_t max_size = 0;
+    for (unsigned n = 1; n <= NQ; n++) for (int rep = 0; rep < 30; rep++) {
         phase_state(n, 2 + (unsigned)rnd_below(2), f);
         const unsigned arity = 1 + (unsigned)rnd_below(n < 3 ? n : 3);
         uint64_t A = 0;
@@ -141,13 +150,30 @@ check_diagonal(void)
         for (uint64_t x = 0; x < (UINT64_C(1) << n); x++)
             h[x] = ((x & A) == A) ? wgt_mul(f[x], phase) : f[x];
         const BQD want = bqd_from_vector(h, n);
-        const BQD got = bqd_apply_diagonal(bqd_from_vector(f, n), A, phase, n);
+        const BQD psi = bqd_from_vector(f, n);
+        uint32_t visits;
+        const BQD got = bqd_apply_diagonal_counted(psi, A, phase, n, &visits);
         tot++;
         if (got != want) bad++;
+        if (bqd_product(psi, gate, 0) != want) badprod++;
+        /* prop:diag: one node per level down to the last variable of A,
+         * whatever |psi| is. Exactly that many, so a fallback that walks
+         * nothing (or everything) fails too; A's last variable is its lowest
+         * set bit, since qubit q is bit n-1-q. */
+        if (visits != n - (uint32_t)__builtin_ctzll(A)) badvisits++;
+        if (visits > max_visits) max_visits = visits;
+        const size_t size = limdd_nodecount(psi, n);
+        if (size > max_size) max_size = size;
     }
     char buf[128];
+    printf("  %u gates on states of up to %zu nodes, at most %u nodes visited\n",
+           tot, max_size, max_visits);
     snprintf(buf, sizeof(buf), "%u of %u gate applications differ from the canonical build", bad, tot);
     expect(bad == 0, "prop:diag", buf);
+    snprintf(buf, sizeof(buf), "%u of %u: the product with the gate's diagram is another edge", badprod, tot);
+    expect(badprod == 0, "prop:diag agrees with prop:prodscalar", buf);
+    snprintf(buf, sizeof(buf), "%u of %u gates did not visit one node per level down to A", badvisits, tot);
+    expect(badvisits == 0, "prop:diag, one call per level", buf);
     snprintf(buf, sizeof(buf), "%u monomial diagrams have more than two nodes at a level", badshape);
     expect(badshape == 0, "monomial shape", buf);
     free(f); free(h);
@@ -158,7 +184,8 @@ static void
 check_iqp(void)
 {
     size_t counts[NQ];
-    unsigned states = 0, bound_bad = 0, amp_bad = 0;
+    unsigned states = 0, bound_bad = 0, amp_bad = 0, canon_bad = 0;
+    EVBDD_WGT *v = malloc(MAXV * sizeof(EVBDD_WGT));
     size_t max_width = 0;
     term_t *poly = malloc(4096 * sizeof(term_t));
     for (unsigned n = 2; n <= 10; n++) {
@@ -175,6 +202,11 @@ check_iqp(void)
             poly[npoly].W = A; poly[npoly].c = expo[gi]; npoly++;
 
             states++;
+            /* node for node: limdd_level_counts cannot see a node below
+             * level n, and the bound has slack, so neither would notice a
+             * diagram that is right in value and wrong in shape */
+            for (uint64_t x = 0; x < (UINT64_C(1) << n); x++) v[x] = pw[poly_val(poly, npoly, x)];
+            if (bqd_from_vector(v, n) != e) canon_bad++;
             limdd_level_counts(e, counts, n);
             for (unsigned v = 0; v < n; v++) {
                 if (counts[v] > max_width) max_width = counts[v];
@@ -194,7 +226,9 @@ check_iqp(void)
     expect(bound_bad == 0, "thm:size on an IQP circuit", buf);
     snprintf(buf, sizeof(buf), "%u circuits have a final amplitude that is not w_8^P(x)", amp_bad);
     expect(amp_bad == 0, "IQP amplitudes", buf);
-    free(poly);
+    snprintf(buf, sizeof(buf), "%u of %u intermediate states are not the canonical diagram", canon_bad, states);
+    expect(canon_bad == 0, "IQP states are canonical", buf);
+    free(poly); free(v);
 }
 
 TASK_0(int, runtests)

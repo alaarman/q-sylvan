@@ -239,8 +239,9 @@ presumably why the artifact is what it is.
 then diagonal gates drawn from the third level of the Clifford hierarchy on at
 most three qubits (`t`, `z`, `s`, `sdg`, `cz`, `cs`, `csdg`, `ccz`), and no
 closing layer. Every intermediate state is a phase state, which is the class
-the binary quotient diagram (`--dd=bqd`, `src/qsylvan_bqd.h`) has an algorithm
-for, and the file stops where all three arms can go: the BQD has no Hadamard.
+the binary quotient diagram (`--dd=bqd`, `src/qsylvan_bqd.h`) has the paper's
+O(n)-per-gate algorithm for, and the file stops there on purpose: a closing
+Hadamard layer is where the BQD leaves the proved operations (see below).
 
 The `cs` and `ccz` gates are what makes the set worth running. With `t` and
 `cz` alone the high cofactor at every level is a Pauli times the low one, so
@@ -265,3 +266,14 @@ qubits: it has no summation algorithm, and below that they come from decoding
 the whole state, which is how `qasm/test/test_sim_qasm_bqd.py` checks the arm
 against the EVDD arm amplitude for amplitude. Its node counts follow the
 paper's convention (no level skipping), so they are not the LIMDD's.
+
+The BQD arm takes the LIMDD arm's whole gate set, through the same dispatch
+(`src/qsylvan_bqd_gates.h` has the signatures of `limdd_gate` and friends).
+Diagonal gates on a state of full support use the paper's O(n) walk
+(prop:diag); every other gate, the Hadamard included, and a diagonal gate on a
+state with a zero amplitude, go through a recursion on the diagram that is
+exact and has no size bound. The paper shows that none can have one for the
+Hadamard in general (sec:ops:hadamard). On float weights the arm takes only
+the diagonal gates and a Hadamard on an untouched qubit: once a gate can
+cancel, a rounding residue under the copy clause turns an amplitude of size 1
+into 0, and no merging tolerance prevents it (`test/test_bqd_gates.c`).
