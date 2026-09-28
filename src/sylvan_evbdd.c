@@ -581,6 +581,15 @@ norm_commuting_cache_key(EVBDD a, EVBDD b, EVBDD *x, EVBDD *y)
     }
 }
 
+/** w times the edge r; a product that merges with zero (floats) is the zero edge. */
+static inline EVBDD
+plus_rescale(EVBDD r, EVBDD_WGT w)
+{
+    const EVBDD_WGT p = wgt_mul(w, EVBDD_WEIGHT(r));
+    return (p == EVBDD_ZERO) ? evbdd_bundle(EVBDD_TERMINAL, EVBDD_ZERO)
+                             : evbdd_bundle(EVBDD_TARGET(r), p);
+}
+
 TASK_IMPL_2(EVBDD, evbdd_plus, EVBDD, a, EVBDD, b)
 {
     // Trivial cases
@@ -612,14 +621,42 @@ TASK_IMPL_2(EVBDD, evbdd_plus, EVBDD, a, EVBDD, b)
         return res;
     }
 
-    // Check cache
+    /*
+     * Check the cache modulo a common factor. The sum is linear, so
+     * w_a A + w_b B = w_a (A + (w_b / w_a) B): the key is the two nodes and
+     * the ratio of the weights, and w_a goes back on the result. The key was
+     * the two edges as they came, ordered, so c a + c b missed the entry for
+     * a + b. The order is by target, so both operand orders divide by the
+     * same weight.
+     *
+     * Exact weights only. On floats the division and the product that undoes
+     * it each round, which moves which weights merge: on the benchmark
+     * circuits that gave up to 3.6x the nodes, so there the key stays the two
+     * edges, ordered, as before.
+     */
+    const bool modulo_weight = (sylvan_get_edge_weight_type() == WGT_QISQ2);
+    EVBDD_WGT w_out = EVBDD_ONE;
     EVBDD x, y;
-    norm_commuting_cache_key(a, b, &x, &y); // (a+b) = (b+a) so normalize cache key
+    if (modulo_weight) {
+        if (EVBDD_TARGET(a) > EVBDD_TARGET(b)) {
+            const EVBDD t = a; a = b; b = t;
+            EVBDD tl = low_a; low_a = low_b; low_b = tl;
+            EVBDD th = high_a; high_a = high_b; high_b = th;
+        }
+        w_out = EVBDD_WEIGHT(a);
+        a = evbdd_bundle(EVBDD_TARGET(a), EVBDD_ONE);
+        b = evbdd_bundle(EVBDD_TARGET(b), wgt_div(EVBDD_WEIGHT(b), w_out));
+        x = a;
+        y = b;
+    }
+    else {
+        norm_commuting_cache_key(a, b, &x, &y); // (a+b) = (b+a) so normalize cache key
+    }
     bool cachenow = ((topvar % granularity) == 0);
     if (cachenow) {
         if (cache_get3(CACHE_EVBDD_PLUS, sylvan_false, x, y, &res)) {
             sylvan_stats_count(EVBDD_PLUS_CACHED);
-            return res;
+            return modulo_weight ? plus_rescale(res, w_out) : res;
         }
     }
 
@@ -646,7 +683,7 @@ TASK_IMPL_2(EVBDD, evbdd_plus, EVBDD, a, EVBDD, b)
         if (cache_put3(CACHE_EVBDD_PLUS, sylvan_false, x, y, res)) 
             sylvan_stats_count(EVBDD_PLUS_CACHEDPUT);
     }
-    return res;
+    return modulo_weight ? plus_rescale(res, w_out) : res;
 }
 
 
