@@ -228,6 +228,13 @@ bqd_representative(const EVBDD_WGT *g, uint64_t len, EVBDD_WGT *rep,
  * cofactor supports, then the pointwise quotient with the copy where the low
  * cofactor is zero, then the representative of that, whose recovering label
  * is what the edge carries.
+ *
+ * Before all that, the skip rule of skip:def:fr: a representative with two
+ * equal cofactors does not depend on its variable, and its node is the node
+ * of its low cofactor, which the edge reads at this level by extension. In
+ * the Pauli family this is where a Z at a skipped level comes from, with no
+ * rule of its own: the sign pattern of def:prep has already turned f_1 = -f_0
+ * into two equal cofactors, and put the Z on the label above (skip:lem:normal).
  */
 TASK_3(LIMDD_TARG, bqd_build, const EVBDD_WGT *, g, uint32_t, var, uint32_t, n)
 {
@@ -235,6 +242,7 @@ TASK_3(LIMDD_TARG, bqd_build, const EVBDD_WGT *, g, uint32_t, var, uint32_t, n)
 
     const uint64_t h = UINT64_C(1) << (n - var - 1);
     const EVBDD_WGT *f0 = g, *f1 = g + h;
+    if (memcmp(f0, f1, h * sizeof(EVBDD_WGT)) == 0) return CALL(bqd_build, f0, var + 1, n);
 
     const int64_t s0 = lexmin(f0, h);
     const int64_t s1 = lexmin(f1, h);
@@ -314,29 +322,43 @@ combine_high(EVBDD_WGT *out, const EVBDD_WGT *g1, uint64_t h, LIMDD_LIM lim, uin
     }
 }
 
+/**
+ * The function of p read at level `var`, into out[0..2^(n-var)). An edge that
+ * skips the levels var..v-1 above p's variable v denotes p's function extended
+ * to them (skip:def:skip). They are the leading bits of the index, so the
+ * extension repeats p's block. The terminal sits at n here and not at
+ * limdd_level, which is the width of the tables and not of this vector.
+ */
 VOID_TASK_4(bqd_decode, LIMDD_TARG, p, uint32_t, var, uint32_t, n, EVBDD_WGT *, out)
 {
-    if (var == n) { out[0] = EVBDD_ONE; return; }
-    assert(p != LIMDD_TERMINAL && "a BQD never skips a level");
-    assert(limdd_node_var(p) == var);
+    const uint32_t v = (p == LIMDD_TERMINAL) ? n : limdd_node_var(p);
+    assert(var <= v && v <= n);
+    const uint64_t len = UINT64_C(1) << (n - v);
 
-    const uint64_t h = UINT64_C(1) << (n - var - 1);
-    const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
-    const bool lz = limdd_edge_is_zero(low), hz = limdd_edge_is_zero(high);
+    if (v == n) {
+        out[0] = EVBDD_ONE;
+    } else {
+        const uint64_t h = len >> 1;
+        const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
+        const bool lz = limdd_edge_is_zero(low), hz = limdd_edge_is_zero(high);
 
-    if (!lz) SPAWN(bqd_decode, limdd_target(low), var + 1, n, out);
+        if (!lz) SPAWN(bqd_decode, limdd_target(low), v + 1, n, out);
 
-    EVBDD_WGT *g1 = NULL;
-    if (!hz) {
-        g1 = malloc(h * sizeof(EVBDD_WGT));
-        if (g1 == NULL) { fprintf(stderr, "sylvan: out of memory decoding a BQD\n"); exit(1); }
-        CALL(bqd_decode, limdd_target(high), var + 1, n, g1);
+        EVBDD_WGT *g1 = NULL;
+        if (!hz) {
+            g1 = malloc(h * sizeof(EVBDD_WGT));
+            if (g1 == NULL) { fprintf(stderr, "sylvan: out of memory decoding a BQD\n"); exit(1); }
+            CALL(bqd_decode, limdd_target(high), v + 1, n, g1);
+        }
+
+        if (!lz) SYNC(bqd_decode); else fill_zero(out, h);
+
+        if (hz) fill_zero(out + h, h);
+        else { combine_high(out, g1, h, limdd_label(high), n); free(g1); }
     }
 
-    if (!lz) SYNC(bqd_decode); else fill_zero(out, h);
-
-    if (hz) fill_zero(out + h, h);
-    else { combine_high(out, g1, h, limdd_label(high), n); free(g1); }
+    for (uint64_t y = len; y < (UINT64_C(1) << (n - var)); y += len)
+        memcpy(out + y, out, len * sizeof(EVBDD_WGT));
 }
 
 VOID_TASK_IMPL_3(bqd_to_vector, BQD, e, uint32_t, n, EVBDD_WGT *, out)
@@ -364,14 +386,19 @@ VOID_TASK_IMPL_3(bqd_to_vector, BQD, e, uint32_t, n, EVBDD_WGT *, out)
 
 /* --- one amplitude -------------------------------------------------------- */
 
+/**
+ * The value of p's function at y. Only the bit of p's own variable and the
+ * bits below it are read, so the bits of the levels an edge skips above p
+ * never are: the function does not depend on them.
+ */
 static EVBDD_WGT
-eval_node(LIMDD_TARG p, uint32_t var, uint32_t n, uint64_t y)
+eval_node(LIMDD_TARG p, uint32_t n, uint64_t y)
 {
-    if (var == n) return EVBDD_ONE;
-    const uint64_t h = UINT64_C(1) << (n - var - 1);
+    if (p == LIMDD_TERMINAL) return EVBDD_ONE;
+    const uint64_t h = UINT64_C(1) << (n - limdd_node_var(p) - 1);
     const LIMDD low = limdd_node_low(p);
     if ((y & h) == 0)
-        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), var + 1, n, y);
+        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, y & (h - 1));
 
     const LIMDD high = limdd_node_high(p);
     if (limdd_edge_is_zero(high)) return EVBDD_ZERO;
@@ -381,8 +408,8 @@ eval_node(LIMDD_TARG p, uint32_t var, uint32_t n, uint64_t y)
     const uint64_t yy = y & (h - 1), yt = yy ^ t;
     /* the fork: the high cofactor at yy is the product of both children at yt */
     const EVBDD_WGT a = limdd_edge_is_zero(low) ? EVBDD_ZERO
-                                                : eval_node(limdd_target(low), var + 1, n, yt);
-    const EVBDD_WGT b = eval_node(limdd_target(high), var + 1, n, yt);
+                                                : eval_node(limdd_target(low), n, yt);
+    const EVBDD_WGT b = eval_node(limdd_target(high), n, yt);
     EVBDD_WGT v = (a == EVBDD_ZERO) ? b : (b == EVBDD_ZERO ? EVBDD_ZERO : wgt_mul(a, b));
     if (v == EVBDD_ZERO) return v;
     if (parity(s & yy)) v = wgt_neg(v);
@@ -396,7 +423,7 @@ bqd_eval(BQD e, uint32_t n, uint64_t x)
     if (limdd_edge_is_zero(e)) return EVBDD_ZERO;
     EVBDD_WGT c; uint64_t s, t;
     bqd_lim_masks(limdd_label(e), n, &c, &s, &t);
-    EVBDD_WGT v = eval_node(limdd_target(e), 0, n, x ^ t);
+    EVBDD_WGT v = eval_node(limdd_target(e), n, x ^ t);
     if (v == EVBDD_ZERO) return v;
     if (parity(s & x)) v = wgt_neg(v);
     return wgt_mul(c, v);

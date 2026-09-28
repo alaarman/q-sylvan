@@ -101,15 +101,20 @@ TASK_DECL_1(BQD, bqd_high_cofactor, LIMDD_TARG);
 /**
  * The function with cofactors (a, b), at level var, in canonical form.
  *
- * With a zero, the node is (0, b) and its representative is b's, so the
- * node stores b's node on a high edge with the identity and the scale goes on
- * top. Otherwise the node is f / c_a, whose low half is a's node, a
- * representative already, and whose ratio is xquot(b / c_a, a's node): the
- * scale has to come off b before the quotient and not after, because where
- * a is zero the quotient copies b and does not divide it.
+ * Equal cofactors are a function that does not depend on x_var, and its
+ * canonical edge is theirs, read at var: the level is skipped (Compose of
+ * skip:alg:constructors). Both are canonical, so equal functions are equal
+ * edges and that is the whole test, O(1). With a zero, the node is (0, b)
+ * and its representative is b's, so the node stores b's node on a high edge
+ * with the identity and the scale goes on top. Otherwise the node is f / c_a,
+ * whose low half is a's node, a representative already, and whose ratio is
+ * xquot(b / c_a, a's node): the scale has to come off b before the quotient
+ * and not after, because where a is zero the quotient copies b and does not
+ * divide it.
  */
 TASK_IMPL_3(BQD, bqd_compose, uint32_t, var, BQD, a, BQD, b)
 {
+    if (a == b) return a;
     if (limdd_edge_is_zero(a)) {
         if (limdd_edge_is_zero(b)) return limdd_zero_edge();
         const LIMDD_TARG node = limdd_makenode(var, limdd_zero_edge(), unit(limdd_target(b)));
@@ -122,7 +127,10 @@ TASK_IMPL_3(BQD, bqd_compose, uint32_t, var, BQD, a, BQD, b)
     return edge(ca, node);
 }
 
-/** The high cofactor of a node's function: xprod(low, high). Memoised. */
+/**
+ * The high cofactor of a node's function: xprod(low, high), both read at the
+ * level below the node, which either may skip. Memoised.
+ */
 TASK_IMPL_1(BQD, bqd_high_cofactor, LIMDD_TARG, t)
 {
     const BQD lo = limdd_node_low(t), hi = limdd_node_high(t);
@@ -136,7 +144,7 @@ TASK_IMPL_1(BQD, bqd_high_cofactor, LIMDD_TARG, t)
 }
 
 /**
- * op(f, g) for two edges at the same level. The scalars are taken out first,
+ * op(f, g) for two edges read at one level. The scalars are taken out first,
  * as far as the operation allows, so the memo is on the two nodes and what is
  * left of the scalars:
  *
@@ -144,6 +152,13 @@ TASK_IMPL_1(BQD, bqd_high_cofactor, LIMDD_TARG, t)
  *     add    c.F  d.G  =  c . (F + (d/c) G)
  *     xprod  c.F  d.G  =  d . xprod(c F, G)        (the copy keeps c)
  *     xquot  c.F  d.G  =  c . xquot(F, d G)
+ *
+ * The recursion is at the higher of the two nodes' levels, the smaller
+ * variable. An operand whose node is lower, or is the terminal, skips that
+ * level, and is then its own cofactor on both sides (skip:lem:virtual), so
+ * the two reach the terminal together only when both are there. The key
+ * holds no level: an edge denotes the same function at every level it is
+ * read at, extended to the levels it skips (skip:lem:ext).
  */
 TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
 {
@@ -157,10 +172,8 @@ TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
 
     const LIMDD_TARG tf = limdd_target(f), tg = limdd_target(g);
     const EVBDD_WGT cf = scalar_of(f), cg = scalar_of(g);
-    if (tf == LIMDD_TERMINAL || tg == LIMDD_TERMINAL) {
-        assert(tf == LIMDD_TERMINAL && tg == LIMDD_TERMINAL);
+    if (tf == LIMDD_TERMINAL && tg == LIMDD_TERMINAL)
         return edge(op_scalar(op, cf, cg), LIMDD_TERMINAL);
-    }
 
     EVBDD_WGT outer, k;
     BQD F, G;
@@ -174,12 +187,12 @@ TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
     uint64_t hit;
     if (cache_get3(op_cache_id(op), tf, tg, k, &hit)) return scale(outer, (BQD)hit);
 
-    const uint32_t var = limdd_node_var(tf);
-    assert(limdd_node_var(tg) == var);
-    const BQD f0 = scale(scalar_of(F), limdd_node_low(tf));
-    const BQD g0 = scale(scalar_of(G), limdd_node_low(tg));
-    const BQD f1 = scale(scalar_of(F), CALL(bqd_high_cofactor, tf));
-    const BQD g1 = scale(scalar_of(G), CALL(bqd_high_cofactor, tg));
+    const uint32_t lf = limdd_level(tf), lg = limdd_level(tg);
+    const uint32_t var = lf < lg ? lf : lg;
+    const BQD f0 = CALL(bqd_cofactor, F, var, 0);
+    const BQD g0 = CALL(bqd_cofactor, G, var, 0);
+    const BQD f1 = CALL(bqd_cofactor, F, var, 1);
+    const BQD g1 = CALL(bqd_cofactor, G, var, 1);
 
     /* the two cofactors of the result are independent */
     limdd_refs_spawn(SPAWN(bqd_apply_op, op, f0, g0));
@@ -204,11 +217,14 @@ TASK_IMPL_2(BQD, bqd_add, BQD, f, BQD, g)
     return CALL(bqd_apply_op, OP_ADD, f, g);
 }
 
-TASK_IMPL_2(BQD, bqd_cofactor, BQD, e, int, b)
+TASK_IMPL_3(BQD, bqd_cofactor, BQD, e, uint32_t, var, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
-    assert(t != LIMDD_TERMINAL);
+    assert(var <= limdd_level(t) && "an edge is read at or above its node");
+    /* an edge that skips var denotes a function that does not depend on
+     * x_var, so it is both of its cofactors there (skip:lem:virtual) */
+    if (limdd_level(t) > var) return e;
     const BQD c = b ? CALL(bqd_high_cofactor, t) : limdd_node_low(t);
     return scale(scalar_of(e), c);
 }
@@ -227,28 +243,31 @@ bqd_negate(BQD e)
 
 /*
  * Restriction and projection, both linear, so memoised on the node. Above q
- * the two cofactors are treated and composed again; at q the restriction
- * composes the chosen cofactor with itself, and the projection composes it
- * with zero. A BQD never skips a level, so q is always met.
+ * the two cofactors are treated and composed again. At q the restriction is
+ * the chosen cofactor itself: it does not depend on x_q, so as an edge read
+ * at q it skips q and needs no node there. The projection composes the
+ * chosen cofactor with zero. An edge whose node is below q, or is the
+ * terminal, skips q and denotes a function that does not depend on x_q
+ * (skip:alg:gates): it is its own restriction, and its projection is the
+ * node at q with the edge on one side and zero on the other. Both are
+ * answered before the lookup, in O(1).
  */
 TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
-    assert(t != LIMDD_TERMINAL && "the qubit is below the diagram");
-    const uint32_t var = limdd_node_var(t);
-    assert(var <= q);
+    const uint32_t var = limdd_level(t);
+    if (var > q) return e;
     const uint64_t key = ((uint64_t)q << 1) | (uint64_t)(b & 1);
     uint64_t hit;
     if (cache_get3(CACHE_BQD_RESTRICT, t, key, 0, &hit)) return scale(scalar_of(e), (BQD)hit);
 
     const BQD f0 = limdd_node_low(t);
-    const BQD f1 = CALL(bqd_high_cofactor, t);
     BQD r;
     if (var == q) {
-        const BQD g = b ? f1 : f0;
-        r = CALL(bqd_compose, var, g, g);
+        r = b ? CALL(bqd_high_cofactor, t) : f0;
     } else {
+        const BQD f1 = CALL(bqd_high_cofactor, t);
         limdd_refs_spawn(SPAWN(bqd_restrict, f1, q, b));
         const BQD lo = limdd_refs_push(CALL(bqd_restrict, f0, q, b));
         const BQD hi = limdd_refs_sync(SYNC(bqd_restrict));
@@ -263,9 +282,9 @@ TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
-    assert(t != LIMDD_TERMINAL && "the qubit is below the diagram");
-    const uint32_t var = limdd_node_var(t);
-    assert(var <= q);
+    const uint32_t var = limdd_level(t);
+    if (var > q) return b ? CALL(bqd_compose, q, limdd_zero_edge(), e)
+                          : CALL(bqd_compose, q, e, limdd_zero_edge());
     const uint64_t key = ((uint64_t)q << 1) | (uint64_t)(b & 1);
     uint64_t hit;
     if (cache_get3(CACHE_BQD_PROJECT, t, key, 0, &hit)) return scale(scalar_of(e), (BQD)hit);
@@ -369,45 +388,63 @@ bqd_has_full_support(BQD e)
 /* --- gates ---------------------------------------------------------------- */
 
 /**
- * U on qubit q, conditioned on the qubits of cmask (all above q). Linear, so
- * the memo is on the node and the scalar is multiplied back on. Above q a
- * control keeps its low cofactor and passes the gate to its high one, and any
- * other variable passes it to both; at q the new cofactors are the rows of U
- * applied to the old ones. The key's third word is cmask with bit q set,
- * which is unambiguous since every control is below bit q.
+ * U on qubit q, conditioned on the controls in `cmask` (all above q) that are
+ * still pending, which is Gate of skip:alg:gates. Linear, so the memo is on
+ * the node and the scalar is multiplied back on. The work is at the first
+ * level that matters, p: the highest pending control, or q when none is left.
+ * Where the node is above p any variable passes the gate to both cofactors;
+ * at p a control keeps its low cofactor and passes the gate, without that
+ * control, to its high one, and at q the new cofactors are the rows of U
+ * applied to the old ones. Where the node is below p, or is the terminal, the
+ * edge skips p and is both of its cofactors there (skip:lem:virtual): a
+ * skipped control gives (e, gate(e)), and a skipped target the row sums of U
+ * times e.
+ *
+ * The key's third word is cmask with bit q set, which is unambiguous since
+ * every control is below bit q. It holds no level: a control is dropped from
+ * cmask once passed, so the key names the controls still to come, and with
+ * the node it determines the result whatever level the edge is read at.
  */
 TASK_4(BQD, bqd_cgate_rec, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, q)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
-    assert(t != LIMDD_TERMINAL && "the target qubit is below the diagram");
-    const uint32_t var = limdd_node_var(t);
+    const uint32_t var = limdd_level(t);
     const uint64_t key = cmask | (UINT64_C(1) << q);
+    const uint32_t p = (uint32_t)__builtin_ctzll(key);
 
     uint64_t hit;
     if (cache_get3(CACHE_BQD_GATE, t, gid, key, &hit)) return scale(scalar_of(e), (BQD)hit);
 
-    const BQD f0 = limdd_node_low(t);
-    const BQD f1 = CALL(bqd_high_cofactor, t);
-    BQD lo, hi;
-    if (var < q) {
-        if ((cmask >> var) & 1) {
-            lo = f0;
-            hi = CALL(bqd_cgate_rec, f1, gid, cmask, q);
+    const EVBDD_WGT u00 = gates[gid][0], u01 = gates[gid][1];
+    const EVBDD_WGT u10 = gates[gid][2], u11 = gates[gid][3];
+    BQD r;
+    if (var > p) {
+        const BQD u = unit(t);
+        if (p < q) {
+            const BQD hi = CALL(bqd_cgate_rec, u, gid, cmask & ~(UINT64_C(1) << p), q);
+            r = CALL(bqd_compose, p, u, hi);
         } else {
+            r = CALL(bqd_compose, q, scale(wgt_add(u00, u01), u), scale(wgt_add(u10, u11), u));
+        }
+    } else {
+        const BQD f0 = limdd_node_low(t);
+        const BQD f1 = CALL(bqd_high_cofactor, t);
+        BQD lo, hi;
+        if (var < p) {
             limdd_refs_spawn(SPAWN(bqd_cgate_rec, f0, gid, cmask, q));
             hi = limdd_refs_push(CALL(bqd_cgate_rec, f1, gid, cmask, q));
             lo = limdd_refs_sync(SYNC(bqd_cgate_rec));
             limdd_refs_pop(1);
+        } else if (var < q) {
+            lo = f0;
+            hi = CALL(bqd_cgate_rec, f1, gid, cmask & ~(UINT64_C(1) << var), q);
+        } else {
+            lo = CALL(bqd_apply_op, OP_ADD, scale(u00, f0), scale(u01, f1));
+            hi = CALL(bqd_apply_op, OP_ADD, scale(u10, f0), scale(u11, f1));
         }
-    } else {
-        assert(var == q);
-        const EVBDD_WGT u00 = gates[gid][0], u01 = gates[gid][1];
-        const EVBDD_WGT u10 = gates[gid][2], u11 = gates[gid][3];
-        lo = CALL(bqd_apply_op, OP_ADD, scale(u00, f0), scale(u01, f1));
-        hi = CALL(bqd_apply_op, OP_ADD, scale(u10, f0), scale(u11, f1));
+        r = CALL(bqd_compose, var, lo, hi);
     }
-    const BQD r = CALL(bqd_compose, var, lo, hi);
     cache_put3(CACHE_BQD_GATE, t, gid, key, (uint64_t)r);
     return scale(scalar_of(e), r);
 }

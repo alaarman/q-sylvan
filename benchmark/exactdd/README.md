@@ -264,8 +264,10 @@ run_qasm_on_qmdd gen_iqp/iqp_20_700.qasm --dd=qmdd  -e qisq2 -s low -c -m
 The BQD arm reports `norm` and `first_qubit_measurement_prob` as -1 above 24
 qubits: it has no summation algorithm, and below that they come from decoding
 the whole state, which is how `qasm/test/test_sim_qasm_bqd.py` checks the arm
-against the EVDD arm amplitude for amplitude. Its node counts follow the
-paper's convention (no level skipping), so they are not the LIMDD's.
+against the EVDD arm amplitude for amplitude. Its diagrams skip every level
+their function does not depend on, as the LIMDD's do, so its node counts are
+at most the paper's, which keeps every level; under the quotient rule the
+node skipped is not the Shannon one (`src/qsylvan_bqd.h`).
 
 The BQD arm takes the LIMDD arm's whole gate set, through the same dispatch
 (`src/qsylvan_bqd_gates.h` has the signatures of `limdd_gate` and friends).

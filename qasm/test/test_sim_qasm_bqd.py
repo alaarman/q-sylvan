@@ -40,6 +40,21 @@ def clifford_t_circuit(n, gates, seed):
     return "\n".join(lines)
 
 
+def clifford_circuit(n, gates, seed):
+    """Clifford gates only, Hadamards anywhere: stabiliser states, whose exact
+    amplitudes stay small however long the circuit runs."""
+    rng = random.Random(seed)
+    lines = HEADER + [f"qreg q[{n}];"]
+    one = ['h', 'h', 'x', 'y', 'z', 's', 'sdg']
+    for _ in range(gates):
+        if rng.randrange(2):
+            lines.append(f"{rng.choice(one)} q[{rng.randrange(n)}];")
+        else:
+            a, b = rng.sample(range(n), 2)
+            lines.append(f"{rng.choice(['cx', 'cz', 'swap'])} q[{a}],q[{b}];")
+    return "\n".join(lines)
+
+
 def iqp_circuit(n, gates, seed):
     """A Hadamard on every qubit, then level-3 diagonal gates."""
     rng = random.Random(seed)
@@ -57,9 +72,9 @@ def iqp_circuit(n, gates, seed):
     return "\n".join(lines)
 
 
-def run(path, dd, backend, check=True):
+def run(path, dd, backend, check=True, sizes=SIZES):
     out = subprocess.run([SIM_QASM, path, '-d', dd, '-e', backend, '-s', 'low',
-                          '--state-vector', '-m', *SIZES],
+                          '--state-vector', '-m', *sizes],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if not check:
         return out
@@ -95,6 +110,28 @@ def test_iqp(backend, tmp_path):
             path = tmp_path / f"iqp_{n}_{seed}.qasm"
             path.write_text(iqp_circuit(n, 6 * n, 100 * n + seed))
             agree(str(path), 'bqd', backend, n)
+
+
+@pytest.mark.parametrize("kind, n, gates, log_nodes", [
+    ('clifford', 8, 1500, 14),
+    ('iqp', 12, 3000, 12),
+])
+def test_bqd_collects_between_gates(kind, n, gates, log_nodes, tmp_path):
+    """A node table small enough that the runner collects between gates, on
+    diagrams that skip the qubits a state does not depend on: the sweep, the
+    cleared memo and the buckets built on again must leave the EVDD's state.
+    Each table is the smallest the runner takes, or at least twice the
+    smallest in which its circuit finishes, and the collections are counted,
+    so that the case cannot stop collecting unnoticed."""
+    path = tmp_path / f"{kind}_{n}.qasm"
+    make = clifford_circuit if kind == 'clifford' else iqp_circuit
+    path.write_text(make(n, gates, 7))
+    small = ['--node-tab-size', str(log_nodes), '--wgt-tab-size', '18']
+    vd, sd = run(str(path), 'bqd', 'qisq2', sizes=small)
+    vq, sq = run(str(path), 'qmdd', 'qisq2')
+    assert sd['limdd_collections'] >= 2, sd['limdd_collections']
+    assert len(vd) == len(vq) == 2 ** n
+    assert max(abs(a - b) for a, b in zip(vd, vq)) < 1e-9
 
 
 def test_first_qubit_when_qubit_zero_is_skipped(tmp_path):

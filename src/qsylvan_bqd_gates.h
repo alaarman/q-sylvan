@@ -33,12 +33,16 @@
  * product with the copy where f_0 is zero (def:bqd). Any pointwise operation
  * commutes with taking cofactors, so it is computed on the two cofactors and
  * the result is put back into quotient form: its ratio is the quotient of the
- * two new cofactors, again with the copy. Every step is itself such an
- * operation one level down, so the recursion ends at the terminal. A gate on
- * qubit q is the same walk down to level q, where the two new cofactors are
- * the gate's linear combination of the old ones: for the Hadamard,
- * (f_0 + f_1)/sqrt2 and (f_0 - f_1)/sqrt2. Results are canonical, the same
- * edge bqd_from_vector builds for the same vector.
+ * two new cofactors, again with the copy, or, where the two are equal, no
+ * node at all, since the result does not depend on that variable. Every step
+ * is itself such an operation on the cofactors at the higher of its
+ * operands' levels, where an operand that skips the level is both of its
+ * cofactors, so the recursion ends at the terminal. A gate on qubit q is the
+ * same walk down to level q, where the two new cofactors are the gate's
+ * linear combination of the old ones: for the Hadamard, (f_0 + f_1)/sqrt2
+ * and (f_0 - f_1)/sqrt2. Results are canonical, the same edge
+ * bqd_from_vector builds for the same vector, levels skipped where it skips
+ * them.
  *
  * The cost is the size of what the recursion meets, the diagrams of the
  * cofactors and of the intermediate sums, memoised on node pairs. Where those
@@ -82,14 +86,21 @@ TASK_DECL_2(BQD, bqd_add, BQD, BQD);
 
 /**
  * The canonical edge, at level `var`, of the function whose cofactors are
- * f_0 = lo and f_1 = hi (edges at level var + 1).
+ * f_0 = lo and f_1 = hi (canonical edges read at level var + 1, which may
+ * skip levels below it). Where lo == hi the function does not depend on
+ * x_var, and the result is lo itself, which skips var (skip:alg:constructors).
  */
 TASK_DECL_3(BQD, bqd_compose, uint32_t, BQD, BQD);
 #define bqd_compose(var, lo, hi) RUN(bqd_compose, var, lo, hi)
 
-/** The cofactor of e at its top variable = b, as an edge one level down. */
-TASK_DECL_2(BQD, bqd_cofactor, BQD, int);
-#define bqd_cofactor(e, b) RUN(bqd_cofactor, e, b)
+/**
+ * The cofactor x_var = b of the function e denotes read at level `var`, as an
+ * edge read at var + 1. An edge that skips var, whose node is below it or is
+ * the terminal, denotes a function that does not depend on x_var, and is its
+ * own cofactor on both sides.
+ */
+TASK_DECL_3(BQD, bqd_cofactor, BQD, uint32_t, int);
+#define bqd_cofactor(e, var, b) RUN(bqd_cofactor, e, var, b)
 
 /** c . e, and -e. */
 BQD bqd_scale(BQD e, EVBDD_WGT c);

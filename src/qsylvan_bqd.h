@@ -72,18 +72,38 @@
  * That is what lets a node pack exactly like a LIMDD node, whose low edge is
  * the identity or zero too. It is a consequence of def:rep, not a theorem.
  *
+ * Levels are skipped. A node whose function does not depend on its variable
+ * is redundant and is not stored: an edge may point at a node any number of
+ * levels below, and denotes that node's function extended to the levels it
+ * skips (skip:def:skip, in the note "Binary Quotient Diagrams with Level
+ * Skipping", bqd-skip.tex, whose labels are cited here as skip:...). That is
+ * the LIMDD's convention and NOT the paper's, which keeps every level, but
+ * the redundant node is not the LIMDD's. Under the quotient rule two equal
+ * edges do not make a node redundant: the redundant node has the identity to
+ * a node M as its low edge and the identity to ind M, the indicator of M's
+ * support, as its high edge (skip:thm:redundant), which on full support is
+ * the constant one (skip:cor:full). The builder skips where the
+ * representative has two equal cofactors, and an operation where the two
+ * cofactors of its result are equal, which for two canonical edges is one
+ * comparison. A label on an edge acts on the levels it skips too: it never
+ * translates them, and in the Pauli family it may sign them (skip:lem:normal).
+ * The diagram is the paper's with every redundant node contracted into its
+ * low child (skip:thm:canon), as unique as the paper's, so equality stays
+ * one comparison.
+ *
  * Conventions, fixed once. Qubit 0 is the top variable and is decided first.
  * A vector of length 2^n is indexed by x with qubit q at bit (n-1-q), so the
  * top qubit is the most significant bit and the first half of a vector is the
  * cofactor at x_top = 0. Translations and sign patterns are masks in that
- * same convention. The terminal is reached at level n only: levels are never
- * skipped and a redundant node is kept, which is the paper's convention and
- * NOT the fully reduced LIMDD's. One difference from the paper's counts
- * remains: the paper counts the function 0 as a node at every level where it
- * occurs (the +2 of thm:pcoset is the code-state node and 0), and here zero
- * is an edge, never a node. limdd_level_counts is therefore the paper's count
- * minus one at every level with a zero cofactor, and a comparison with the
- * paper's tables has to add it back.
+ * same convention, and the levels an edge skips are the leading bits of the
+ * index, over which the vector of its node repeats. Two differences from the
+ * paper's counts: the paper keeps the redundant nodes, which this diagram
+ * contracts, so it has at least as many nodes at every level; and it counts
+ * the function 0 as a node at every level where it occurs (the +2 of
+ * thm:pcoset is the code-state node and 0), where here zero is an edge, never
+ * a node. limdd_level_counts is therefore the paper's count less the
+ * redundant nodes, and less one at every level with a zero cofactor, and a
+ * comparison with the paper's tables has to add both back.
  *
  * Scope. Here a diagram is built from an amplitude vector, exponential in n,
  * which is what the paper's evaluation does. qsylvan_bqd_ops.h has the two

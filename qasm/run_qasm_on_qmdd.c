@@ -244,6 +244,7 @@ typedef struct stats_s {
     uint64_t max_width;
     uint64_t final_qisq_size;
     uint64_t max_qisq_size;
+    uint64_t limdd_collections;  /* LIMDD and BQD only: limdd_gc runs between gates */
     uint64_t shots;
     double simulation_time;
     double norm;
@@ -290,6 +291,7 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"max_width\": %" PRIu64 ",\n", stats.max_width);
     fprintf(stream, "    \"final_qisq_size\": %" PRIu64 ",\n", stats.final_qisq_size);
     fprintf(stream, "    \"max_qisq_size\": %" PRIu64 ",\n", stats.max_qisq_size);
+    fprintf(stream, "    \"limdd_collections\": %" PRIu64 ",\n", stats.limdd_collections);
     fprintf(stream, "    \"n_qubits\": %d,\n", circuit->qreg_size);
     fprintf(stream, "    \"norm\": %.5e,\n", stats.norm);
     fprintf(stream, "    \"unnormed_measurement_prob\": %.5e,\n", stats.unnormed_prob);
@@ -687,7 +689,7 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
          * spelled out here instead, which is how the damping came to be
          * written and never used: this loop tested its own undamped copy.
          */
-        if (limdd_gc_wanted()) CALL(limdd_gc);
+        if (limdd_gc_wanted()) { CALL(limdd_gc); stats.limdd_collections++; }
     }
 
     stats.final_width = limdd_width(state, n);
@@ -822,7 +824,7 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
 
         /* Between gates only, as on the LIMDD arm: the root is protected and
          * no operation's temporaries are live. */
-        if (limdd_gc_wanted()) CALL(limdd_gc);
+        if (limdd_gc_wanted()) { CALL(limdd_gc); stats.limdd_collections++; }
     }
 
     stats.final_width = limdd_width(state, n);

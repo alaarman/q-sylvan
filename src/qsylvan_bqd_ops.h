@@ -27,10 +27,15 @@
  *
  * A diagonal gate is a product with a phase of full support. For one
  * monomial the gate's operand has the constant one as a child at every
- * level, and a product with the constant one returns the other operand, so
- * the recursion is a single path of at most n steps (prop:diag).
- * bqd_apply_diagonal walks that path directly. Z, S, T, CZ, CS, CCZ and
- * their inverses are monomials.
+ * level, the levels it skips included, and a product with the constant one
+ * returns the other operand, so the recursion is a single path of at most n
+ * steps (prop:diag). bqd_apply_diagonal walks that path directly. Z, S, T,
+ * CZ, CS, CCZ and their inverses are monomials.
+ *
+ * Diagrams here are fully reduced, as everywhere in the BQD: a level the
+ * function does not depend on is skipped (skip:def:fr). On full support that
+ * is one comparison, of a new node's ratio with the constant one
+ * (skip:cor:full), so neither operation walks anything to decide it.
  *
  * Together they keep every state a phase state (def:level), the state in
  * the middle of an IQP circuit, which is what thm:size bounds: a Hadamard on
@@ -63,32 +68,37 @@ extern "C" {
 /**
  * The pointwise product f.g of two diagrams of the scalar family, canonical,
  * as a Lace task memoised on node pairs: prop:prodscalar when both have full
- * support, and bqd_multiply otherwise. `var` is the level both operands are
- * read at, and must be 0 for two root edges, since that is where the support
- * is tested.
+ * support, and bqd_multiply otherwise. The support of both is tested once,
+ * here, and the recursion below takes it as given.
  */
-TASK_DECL_3(BQD, bqd_product, BQD, BQD, uint32_t);
-#define bqd_product(f, g, var) RUN(bqd_product, f, g, var)
+TASK_DECL_2(BQD, bqd_product, BQD, BQD);
+#define bqd_product(f, g) RUN(bqd_product, f, g)
 
-/** The constant one on the variables from `var` down, an n-node chain. */
+/**
+ * The constant one on the variables from `var` down: the terminal, since it
+ * depends on none of them and every level is skipped. The edge of |+>^n up to
+ * scale is limdd_one_edge().
+ */
 LIMDD_TARG bqd_ones(uint32_t var, uint32_t nqubits);
 
 /**
  * The phase state phase^{x_{i_1} ... x_{i_d}} for the monomial on the qubits
- * of `A` (a vector-index mask): the path of monomial nodes and, beside it,
- * the constant-one chain they point at, so at most two nodes per level. The
- * diagram of a diagonal gate, for bqd_product; bqd_apply_diagonal does not
- * need it.
+ * of `A` (a vector-index mask): one node at each qubit of A and none
+ * elsewhere, a path whose low edges are the constant one, and the terminal
+ * for a phase of one. The diagram of a diagonal gate, for bqd_product;
+ * bqd_apply_diagonal does not need it.
  */
 BQD bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
 
 /**
  * Multiply e by phase^{x_A}, the diagonal gate of the monomial on the qubits
- * of `A` (prop:diag). On full support one node of e per level at most is
- * visited, whatever |e| is, and at most one new node per level is made,
- * after the test for full support, which is memoised and so costs only the
- * nodes it has not seen. Without full support it is bqd_multiply with the
- * monomial. The result is the canonical diagram, the same edge as
+ * of `A` (prop:diag). On full support the nodes of e visited are one path,
+ * at most one per level down to the last qubit of A, n - ctz(A) at most,
+ * whatever |e| is; the walk stops early where e skips a qubit of A
+ * (skip:prop:diag). At most one new node per level is made, after the test
+ * for full support, which is memoised and so costs only the nodes it has not
+ * seen. Without full support it is bqd_multiply with the monomial. The
+ * result is the canonical diagram, the same edge as
  * bqd_product(e, bqd_monomial(...)). From a Lace worker.
  */
 BQD bqd_apply_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits);

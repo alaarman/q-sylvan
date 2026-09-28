@@ -8,9 +8,12 @@
  *                     g.f is the same edge, and so is a second call, which is
  *                     answered from the memo at the root
  *   prop:diag         a monomial gate gives that same edge, equal to the
- *                     product with the gate's diagram, and visits at most one
- *                     node per level, whatever the size of the state; the
- *                     gate's own diagram has at most two nodes per level
+ *                     product with the gate's diagram, and visits one path of
+ *                     the state, at most one node per level down to the last
+ *                     qubit of the monomial and exactly the nodes that
+ *                     skip:prop:diag names, whatever the size of the state;
+ *                     the gate's own diagram has one node at each qubit of
+ *                     the monomial and none elsewhere (skip:alg:diag)
  *   thm:size          an IQP middle state -- Hadamards, then Z, S, T, CZ, CS,
  *                     CCZ -- is, after every gate, the canonical diagram of
  *                     its amplitude vector, within sum_{i<3} C(v, i) + 1
@@ -113,10 +116,10 @@ check_product(void)
         for (uint64_t x = 0; x < (UINT64_C(1) << n); x++) h[x] = wgt_mul(f[x], g[x]);
         const BQD F = bqd_from_vector(f, n), G = bqd_from_vector(g, n);
         const BQD want = bqd_from_vector(h, n);
-        const BQD got = bqd_product(F, G, 0);
+        const BQD got = bqd_product(F, G);
         tot++;
         if (got != want) bad++;
-        if (bqd_product(G, F, 0) != want || bqd_product(F, G, 0) != want) badsym++;
+        if (bqd_product(G, F) != want || bqd_product(F, G) != want) badsym++;
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "%u of %u products differ from the canonical build of f.g", bad, tot);
@@ -126,12 +129,38 @@ check_product(void)
     free(f); free(g); free(h);
 }
 
+/**
+ * The nodes of e that the diagonal walk visits, counted from the diagram
+ * alone (skip:prop:diag): the path from the root that goes low at a node
+ * outside A and high at a node in A, and ends after the node of the last
+ * variable of A, or at the first edge that skips the first variable of A not
+ * yet passed, whose node is not counted.
+ */
+static uint32_t
+diag_path(BQD e, uint64_t A, unsigned n)
+{
+    uint32_t visits = 0;
+    LIMDD_TARG t = limdd_target(e);
+    while (A != 0) {
+        /* the first variable of A left is its highest bit, qubit q being bit n-1-q */
+        const unsigned hb = 63 - (unsigned)__builtin_clzll(A);
+        const unsigned a = n - 1 - hb;
+        const unsigned v = (t == LIMDD_TERMINAL) ? n : limdd_node_var(t);
+        if (v > a) break;
+        visits++;
+        if (v < a) { t = limdd_target(limdd_node_low(t)); continue; }
+        A &= ~(UINT64_C(1) << hb);
+        if (A != 0) t = limdd_target(limdd_node_high(t));
+    }
+    return visits;
+}
+
 static void
 check_diagonal(void)
 {
     EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *h = malloc(MAXV * sizeof(EVBDD_WGT));
     size_t counts[NQ];
-    unsigned bad = 0, badshape = 0, badprod = 0, badvisits = 0, tot = 0;
+    unsigned bad = 0, badshape = 0, badprod = 0, badvisits = 0, tot = 0, at_bound = 0;
     uint32_t max_visits = 0;
     size_t max_size = 0;
     for (unsigned n = 1; n <= NQ; n++) for (int rep = 0; rep < 30; rep++) {
@@ -141,11 +170,13 @@ check_diagonal(void)
         while (__builtin_popcountll(A) < (int)arity) A |= UINT64_C(1) << rnd_below(n);
         const EVBDD_WGT phase = pw[1 + rnd_below(7)];
 
-        /* the gate's own diagram is one chain of monomial nodes and the
-         * constant-one chain they point at: at most two nodes per level */
+        /* the gate's own diagram is one node at each qubit of A, and none
+         * elsewhere: outside A the monomial does not depend on the qubit,
+         * and its constant-one cofactors are the terminal */
         const BQD gate = bqd_monomial(A, phase, n);
         limdd_level_counts(gate, counts, n);
-        for (unsigned v = 0; v < n; v++) if (counts[v] < 1 || counts[v] > 2) { badshape++; break; }
+        for (unsigned v = 0; v < n; v++)
+            if (counts[v] != ((A >> (n - 1 - v)) & 1)) { badshape++; break; }
 
         for (uint64_t x = 0; x < (UINT64_C(1) << n); x++)
             h[x] = ((x & A) == A) ? wgt_mul(f[x], phase) : f[x];
@@ -155,26 +186,30 @@ check_diagonal(void)
         const BQD got = bqd_apply_diagonal_counted(psi, A, phase, n, &visits);
         tot++;
         if (got != want) bad++;
-        if (bqd_product(psi, gate, 0) != want) badprod++;
-        /* prop:diag: one node per level down to the last variable of A,
-         * whatever |psi| is. Exactly that many, so a fallback that walks
-         * nothing (or everything) fails too; A's last variable is its lowest
-         * set bit, since qubit q is bit n-1-q. */
-        if (visits != n - (uint32_t)__builtin_ctzll(A)) badvisits++;
+        if (bqd_product(psi, gate) != want) badprod++;
+        /* prop:diag: at most one node per level down to the last variable
+         * of A, whatever |psi| is, A's last variable being its lowest set
+         * bit, since qubit q is bit n-1-q. Where psi skips a variable of A
+         * the walk stops there, so the bound is met only by a path with a
+         * node at every level: the count must be that of the path, which a
+         * fallback that walks nothing (or everything) is not. */
+        const uint32_t bound = n - (uint32_t)__builtin_ctzll(A);
+        if (visits > bound || visits != diag_path(psi, A, n)) badvisits++;
+        if (visits == bound) at_bound++;
         if (visits > max_visits) max_visits = visits;
         const size_t size = limdd_nodecount(psi, n);
         if (size > max_size) max_size = size;
     }
     char buf[128];
-    printf("  %u gates on states of up to %zu nodes, at most %u nodes visited\n",
-           tot, max_size, max_visits);
+    printf("  %u gates on states of up to %zu nodes, at most %u nodes visited, "
+           "%u walks at the bound n - ctz(A)\n", tot, max_size, max_visits, at_bound);
     snprintf(buf, sizeof(buf), "%u of %u gate applications differ from the canonical build", bad, tot);
     expect(bad == 0, "prop:diag", buf);
     snprintf(buf, sizeof(buf), "%u of %u: the product with the gate's diagram is another edge", badprod, tot);
     expect(badprod == 0, "prop:diag agrees with prop:prodscalar", buf);
-    snprintf(buf, sizeof(buf), "%u of %u gates did not visit one node per level down to A", badvisits, tot);
+    snprintf(buf, sizeof(buf), "%u of %u gates did not visit the path of skip:prop:diag", badvisits, tot);
     expect(badvisits == 0, "prop:diag, one call per level", buf);
-    snprintf(buf, sizeof(buf), "%u monomial diagrams have more than two nodes at a level", badshape);
+    snprintf(buf, sizeof(buf), "%u monomial diagrams are not one node at each qubit of A", badshape);
     expect(badshape == 0, "monomial shape", buf);
     free(f); free(h);
 }
@@ -189,7 +224,7 @@ check_iqp(void)
     size_t max_width = 0;
     term_t *poly = malloc(4096 * sizeof(term_t));
     for (unsigned n = 2; n <= 10; n++) {
-        BQD e = limdd_bundle(LIMDD_LIM_IDENTITY, bqd_ones(0, n));     /* |+>^n up to scale */
+        BQD e = limdd_one_edge();     /* |+>^n up to scale: the terminal, every level skipped */
         unsigned npoly = 0;
         for (unsigned gate = 0; gate < 6 * n; gate++) {
             /* Z, S, T, CZ, CS, CCZ: a monomial of arity d with exponent e in Z_8 */

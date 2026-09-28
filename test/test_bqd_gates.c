@@ -152,7 +152,7 @@ check_basis_and_compose(void)
             const BQD e = bqd_from_vector(f, n);
             tc++;
             if (limdd_edge_is_zero(e)) continue;
-            const BQD c0 = bqd_cofactor(e, 0), c1 = bqd_cofactor(e, 1);
+            const BQD c0 = bqd_cofactor(e, 0, 0), c1 = bqd_cofactor(e, 0, 1);
             bool ok = bqd_compose(0, c0, c1) == e;
             /* (f_0, 0) and (0, f_1) */
             memcpy(g, f, sizeof(EVBDD_WGT) << n);

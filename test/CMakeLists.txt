@@ -175,6 +175,14 @@ sylvan_test_warnings(test_bqd_gates)
 
 add_test(NAME test_bqd_gates COMMAND test_bqd_gates)
 
+add_executable(test_bqd_skip)
+target_sources(test_bqd_skip PRIVATE test_bqd_skip.c)
+target_link_libraries(test_bqd_skip PRIVATE qsylvan::sylvan)
+target_compile_features(test_bqd_skip PRIVATE c_std_11)
+sylvan_test_warnings(test_bqd_skip)
+
+add_test(NAME test_bqd_skip COMMAND test_bqd_skip)
+
 add_executable(test_lowlevel_ops)
 target_sources(test_lowlevel_ops PRIVATE test_lowlevel_ops.c)
 target_link_libraries(test_lowlevel_ops PRIVATE qsylvan::sylvan)

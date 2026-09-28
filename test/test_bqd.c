@@ -30,9 +30,21 @@
  *   full support      the X-BQD carries no translation, so it is the BQD
  *   scalar labels     on a coset state with a proper support the copy fires,
  *                     which is the degradation the translation label removes
+ *   node counts       limdd_countnodes, the count the qasm runner takes after
+ *                     every gate with -c, is limdd_nodecount on vectors of 9
+ *                     to 12 qubits, whose diagrams outgrow the set of met
+ *                     nodes it starts with
  *   float weights     the Pauli family on the float backend, whose sign
  *                     decision is a comparison of doubles: round trip,
  *                     the pivot arguments, and def:prep invariance
+ *   skip:def:fr       levels are skipped: every stored node depends on its
+ *                     variable (skip:thm:canon (ii)), on all of the vectors
+ *                     above and on vectors that do not depend on random
+ *                     qubits, which round-trip; |+>^n is the terminal and a
+ *                     basis state n nodes; and the note's examples of a
+ *                     skipping edge with a label, a Z in the Pauli family and
+ *                     a scalar in the X family, come out as it says
+ *                     (skip:lem:normal)
  *
  * Everything but the last is exact, in Q(w_8, sqrt2): coset states have
  * amplitudes that are eighth roots of unity or zero, which is what the
@@ -49,6 +61,7 @@
 
 #include "qsylvan_bqd.h"
 #include "qsylvan_limdd_inspect.h"
+#include "qsylvan_limdd_ops.h"
 #include "qsylvan_simulator.h"
 #include "sylvan_edge_weights_complex.h"
 #include "sylvan_edge_weights_qisq2.h"
@@ -184,34 +197,51 @@ lexmin_nonzero(const EVBDD_WGT *f, uint64_t len)
 
 /* --- diagram walks used by the checks ------------------------------------- */
 
+/** The level a node sits at: its variable, or n for the terminal of this vector. */
+static unsigned
+level_of(LIMDD_TARG p, unsigned n)
+{
+    return p == LIMDD_TERMINAL ? n : limdd_node_var(p);
+}
+
 /**
- * The support of the function a node denotes, from the diagram alone:
- * supp(g_0 (.) g_1) = supp(g_1) (lem:shadow), so the high half is the
- * translated support of the high child.
+ * The support of the function a node denotes read at level var, from the
+ * diagram alone: supp(g_0 (.) g_1) = supp(g_1) (lem:shadow), so the high half
+ * is the translated support of the high child. An edge that skips levels
+ * denotes its node's function extended to them, so the support repeats.
  */
 static void
 support(LIMDD_TARG p, unsigned var, unsigned n, uint8_t *bits)
 {
-    const uint64_t len = UINT64_C(1) << (n - var);
-    if (var == n) { bits[0] = 1; return; }
-    const uint64_t h = len >> 1;
-    const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
-    if (limdd_edge_is_zero(low)) memset(bits, 0, h);
-    else support(limdd_target(low), var + 1, n, bits);
-    if (limdd_edge_is_zero(high)) { memset(bits + h, 0, h); return; }
-    uint8_t *g1 = malloc(h);
-    support(limdd_target(high), var + 1, n, g1);
-    EVBDD_WGT c; uint64_t s, t;
-    bqd_lim_masks(limdd_label(high), n, &c, &s, &t);
-    for (uint64_t y = 0; y < h; y++) bits[h + y] = g1[y ^ t];
-    free(g1);
+    const unsigned v = level_of(p, n);
+    const uint64_t len = UINT64_C(1) << (n - v);
+    if (v == n) {
+        bits[0] = 1;
+    } else {
+        const uint64_t h = len >> 1;
+        const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
+        if (limdd_edge_is_zero(low)) memset(bits, 0, h);
+        else support(limdd_target(low), v + 1, n, bits);
+        if (limdd_edge_is_zero(high)) {
+            memset(bits + h, 0, h);
+        } else {
+            uint8_t *g1 = malloc(h);
+            support(limdd_target(high), v + 1, n, g1);
+            EVBDD_WGT c; uint64_t s, t;
+            bqd_lim_masks(limdd_label(high), n, &c, &s, &t);
+            for (uint64_t y = 0; y < h; y++) bits[h + y] = g1[y ^ t];
+            free(g1);
+        }
+    }
+    for (uint64_t y = len; y < (UINT64_C(1) << (n - var)); y++) bits[y] = bits[y - len];
 }
 
 /** Points where the copy clause fires: g_0 zero and g_1 nonzero. Over every path. */
 static uint64_t
-copies_below(LIMDD_TARG p, unsigned var, unsigned n)
+copies_below(LIMDD_TARG p, unsigned n)
 {
-    if (var == n) return 0;
+    if (p == LIMDD_TERMINAL) return 0;
+    const unsigned var = limdd_node_var(p);
     const uint64_t h = UINT64_C(1) << (n - var - 1);
     const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
     uint64_t fires = 0;
@@ -221,9 +251,9 @@ copies_below(LIMDD_TARG p, unsigned var, unsigned n)
         support(limdd_target(high), var + 1, n, s1);
         for (uint64_t y = 0; y < h; y++) if (s1[y] && !s0[y]) fires++;
         free(s0); free(s1);
-        fires += copies_below(limdd_target(high), var + 1, n);
+        fires += copies_below(limdd_target(high), n);
     }
-    if (!limdd_edge_is_zero(low)) fires += copies_below(limdd_target(low), var + 1, n);
+    if (!limdd_edge_is_zero(low)) fires += copies_below(limdd_target(low), n);
     return fires;
 }
 
@@ -233,29 +263,62 @@ copies_below(LIMDD_TARG p, unsigned var, unsigned n)
  * it occurs at every level below such a node, where this port keeps an edge.
  */
 static unsigned
-min_zero_var(LIMDD_TARG p, unsigned var, unsigned n)
+min_zero_var(LIMDD_TARG p, unsigned n)
 {
-    if (var == n) return n;
+    if (p == LIMDD_TERMINAL) return n;
     const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
-    if (limdd_edge_is_zero(low) || limdd_edge_is_zero(high)) return var;
-    const unsigned a = min_zero_var(limdd_target(low), var + 1, n);
-    const unsigned b = min_zero_var(limdd_target(high), var + 1, n);
+    if (limdd_edge_is_zero(low) || limdd_edge_is_zero(high)) return limdd_node_var(p);
+    const unsigned a = min_zero_var(limdd_target(low), n);
+    const unsigned b = min_zero_var(limdd_target(high), n);
     return a < b ? a : b;
 }
 
 /** Whether any high label below carries a translation. */
 static bool
-any_translation(LIMDD_TARG p, unsigned var, unsigned n)
+any_translation(LIMDD_TARG p, unsigned n)
 {
-    if (var == n) return false;
+    if (p == LIMDD_TERMINAL) return false;
     const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
     if (!limdd_edge_is_zero(high)) {
         EVBDD_WGT c; uint64_t s, t;
         bqd_lim_masks(limdd_label(high), n, &c, &s, &t);
         if (t != 0) return true;
-        if (any_translation(limdd_target(high), var + 1, n)) return true;
+        if (any_translation(limdd_target(high), n)) return true;
     }
-    return !limdd_edge_is_zero(low) && any_translation(limdd_target(low), var + 1, n);
+    return !limdd_edge_is_zero(low) && any_translation(limdd_target(low), n);
+}
+
+/**
+ * The nodes reachable from p whose function does not depend on their own
+ * variable, from the decoded vector of the edge to each: its two halves at
+ * the node's bit are equal. A fully reduced diagram has none
+ * (skip:thm:canon (ii)). Over every path, which is at most 2^n here.
+ */
+static unsigned
+redundant_below(LIMDD_TARG p, unsigned n, EVBDD_WGT *buf)
+{
+    if (p == LIMDD_TERMINAL) return 0;
+    bqd_to_vector(limdd_bundle(LIMDD_LIM_IDENTITY, p), n, buf);
+    const uint64_t bit = UINT64_C(1) << (n - 1 - limdd_node_var(p));
+    unsigned r = 1;
+    for (uint64_t x = 0; x < (UINT64_C(1) << n); x++)
+        if (!(x & bit) && buf[x] != buf[x | bit]) { r = 0; break; }
+    const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
+    if (!limdd_edge_is_zero(low)) r += redundant_below(limdd_target(low), n, buf);
+    if (!limdd_edge_is_zero(high)) r += redundant_below(limdd_target(high), n, buf);
+    return r;
+}
+
+/** Whether the edge into p, read at `var`, or an edge below p skips a level. */
+static bool
+skips_below(LIMDD_TARG p, unsigned var, unsigned n)
+{
+    const unsigned v = level_of(p, n);
+    if (v > var) return true;
+    if (p == LIMDD_TERMINAL) return false;
+    const LIMDD low = limdd_node_low(p), high = limdd_node_high(p);
+    if (!limdd_edge_is_zero(low) && skips_below(limdd_target(low), v + 1, n)) return true;
+    return !limdd_edge_is_zero(high) && skips_below(limdd_target(high), v + 1, n);
 }
 
 /* --- checks --------------------------------------------------------------- */
@@ -264,7 +327,7 @@ static void
 check_round_trip(void)
 {
     EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT));
-    unsigned bad = 0, badeval = 0, badcanon = 0, badscale = 0, tot = 0;
+    unsigned bad = 0, badeval = 0, badcanon = 0, badscale = 0, redundant = 0, tot = 0;
     const double dens[4] = { 0.0, 0.2, 0.5, 0.8 };
     for (unsigned n = 1; n <= 8; n++) {
         for (unsigned di = 0; di < 4; di++) {
@@ -279,6 +342,7 @@ check_round_trip(void)
                     if (bqd_eval(e, n, x) != f[x]) { badeval++; break; }
                 }
                 if (bqd_from_vector(f, n) != e) badcanon++;
+                if (!limdd_edge_is_zero(e)) redundant += redundant_below(limdd_target(e), n, g);
 
                 /* def:rep: c.f is f up to the root's label, so one node */
                 const EVBDD_WGT c = pw[1 + rnd_below(7)];
@@ -299,7 +363,146 @@ check_round_trip(void)
     expect(badcanon == 0, "determinism", buf);
     snprintf(buf, sizeof(buf), "%u of %u: c.f and f do not share the root node, or share its label", badscale, tot);
     expect(badscale == 0, "def:rep, scalar orbit", buf);
+    snprintf(buf, sizeof(buf), "%u nodes of %u diagrams do not depend on their variable", redundant, tot);
+    expect(redundant == 0, "skip:thm:canon (ii), random vectors", buf);
     free(f); free(g);
+}
+
+/**
+ * limdd_countnodes against limdd_nodecount. The first keeps the nodes it has
+ * met in a set that starts at 1024 slots and doubles at half full, so a
+ * diagram of more than 512 nodes takes it through a doubling at least once.
+ */
+static void
+check_countnodes(void)
+{
+    const uint64_t saved_rng = rng_state;
+    EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT));
+    unsigned bad = 0, big = 0, tot = 0;
+    for (unsigned n = 9; n <= NQ; n++) for (int rep = 0; rep < 3; rep++) {
+        rand_vector(n, (rep == 2) ? 0.3 : 0.0, f);
+        const BQD e = bqd_from_vector(f, n);
+        const size_t want = limdd_nodecount(e, n);
+        tot++;
+        if (want > 512) big++;
+        if (limdd_countnodes(e) != want) bad++;
+    }
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%u of %u diagrams (%u of more than 512 nodes)", bad, tot, big);
+    expect(bad == 0, "limdd_countnodes", buf);
+    expect(big > 0, "limdd_countnodes", "no diagram of more than 512 nodes");
+    free(f);
+    rng_state = saved_rng;
+}
+
+/**
+ * A vector that depends only on the qubits of a random set, then, where the
+ * family has them, times a random sign pattern and translated, so that the
+ * Pauli family meets a Z at a level it skips (skip:lem:normal).
+ */
+static void
+rand_skipping(unsigned n, double pzero, EVBDD_WGT *f)
+{
+    const bqd_family_t fam = bqd_family();
+    const uint64_t len = UINT64_C(1) << n;
+    uint64_t D = 0;
+    for (unsigned b = 0; b < n; b++) if (rnd_below(3) != 0) D |= UINT64_C(1) << b;
+    const uint64_t s = (fam == BQD_FAMILY_PAULI && rnd_below(2)) ? rnd_below(len) : 0;
+    const uint64_t t = (fam != BQD_FAMILY_SCALAR && rnd_below(2)) ? rnd_below(len) : 0;
+    EVBDD_WGT *g = malloc(len * sizeof(EVBDD_WGT));
+    rand_vector(n, pzero, g);
+    for (uint64_t x = 0; x < len; x++) {
+        EVBDD_WGT v = g[(x ^ t) & D];
+        if (v != EVBDD_ZERO && __builtin_parityll(s & x)) v = wgt_neg(v);
+        f[x] = v;
+    }
+    free(g);
+}
+
+static void
+check_skipping(void)
+{
+    /* draws of its own, so that the checks of the next family see the
+     * vectors they saw before this one was added */
+    const uint64_t saved_rng = rng_state;
+    const bqd_family_t fam = bqd_family();
+    EVBDD_WGT *f = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT));
+    unsigned tot = 0, skipping = 0, bad = 0, badeval = 0, badcanon = 0, redundant = 0;
+    for (unsigned n = 1; n <= 8; n++) for (int rep = 0; rep < 40; rep++) {
+        rand_skipping(n, (rep & 1) ? 0.3 : 0.0, f);
+        const BQD e = bqd_from_vector(f, n);
+        if (limdd_edge_is_zero(e)) continue;
+        tot++;
+        if (skips_below(limdd_target(e), 0, n)) skipping++;
+        bqd_to_vector(e, n, g);
+        if (memcmp(f, g, ((size_t)1 << n) * sizeof(EVBDD_WGT)) != 0) bad++;
+        for (int q = 0; q < 8; q++) {
+            const uint64_t x = rnd_below(UINT64_C(1) << n);
+            if (bqd_eval(e, n, x) != f[x]) { badeval++; break; }
+        }
+        if (bqd_from_vector(f, n) != e) badcanon++;
+        redundant += redundant_below(limdd_target(e), n, g);
+    }
+
+    /* the constant one depends on nothing, and a basis state on everything */
+    unsigned badplus = 0, badbasis = 0;
+    for (unsigned n = 1; n <= 8; n++) {
+        const uint64_t len = UINT64_C(1) << n;
+        for (uint64_t x = 0; x < len; x++) f[x] = EVBDD_ONE;
+        if (limdd_target(bqd_from_vector(f, n)) != LIMDD_TERMINAL) badplus++;
+        const uint64_t y = rnd_below(len);
+        for (uint64_t x = 0; x < len; x++) f[x] = (x == y) ? EVBDD_ONE : EVBDD_ZERO;
+        if (limdd_nodecount(bqd_from_vector(f, n), n) != n) badbasis++;
+    }
+
+    /* the note's examples, indexed by (x_top x_bottom), qubit 0 on top */
+    unsigned badex = 0;
+    EVBDD_WGT c; uint64_t sm, tm;
+    if (fam == BQD_FAMILY_PAULI) {
+        /* (1, -1): the representative is (1, 1), and Z goes on the root edge */
+        f[0] = EVBDD_ONE; f[1] = EVBDD_MIN_ONE;
+        const BQD e = bqd_from_vector(f, 1);
+        bqd_lim_masks(limdd_label(e), 1, &c, &sm, &tm);
+        if (limdd_target(e) != LIMDD_TERMINAL || c != EVBDD_ONE || sm != 1 || tm != 0) badex++;
+        /* (1, 0, 1, -1): the copy puts the -1 in the ratio (1, -1), and the
+         * high edge is Z_1 to the terminal, skipping qubit 1 */
+        f[0] = EVBDD_ONE; f[1] = EVBDD_ZERO; f[2] = EVBDD_ONE; f[3] = EVBDD_MIN_ONE;
+        const LIMDD_TARG p = limdd_target(bqd_from_vector(f, 2));
+        const LIMDD high = limdd_node_high(p);
+        bqd_lim_masks(limdd_label(high), 2, &c, &sm, &tm);
+        if (limdd_node_var(p) != 0 || limdd_target(high) != LIMDD_TERMINAL
+            || c != EVBDD_ONE || sm != 1 || tm != 0) badex++;
+    }
+    if (fam == BQD_FAMILY_X) {
+        /* (-1)^{x_1 + x_2}: the root's high edge is -1 to the terminal, with
+         * no translation at the level it skips */
+        f[0] = EVBDD_ONE; f[1] = EVBDD_MIN_ONE; f[2] = EVBDD_MIN_ONE; f[3] = EVBDD_ONE;
+        const LIMDD_TARG p = limdd_target(bqd_from_vector(f, 2));
+        const LIMDD high = limdd_node_high(p);
+        bqd_lim_masks(limdd_label(high), 2, &c, &sm, &tm);
+        if (limdd_node_var(p) != 0 || limdd_target(high) != LIMDD_TERMINAL
+            || c != EVBDD_MIN_ONE || sm != 0 || tm != 0) badex++;
+    }
+
+    char buf[128];
+    printf("  %u of %u vectors that skip qubits skip a level in the diagram\n", skipping, tot);
+    snprintf(buf, sizeof(buf), "%u of %u vectors do not decode to themselves", bad, tot);
+    expect(bad == 0, "round trip, skipping", buf);
+    snprintf(buf, sizeof(buf), "%u of %u vectors have an amplitude the query gets wrong", badeval, tot);
+    expect(badeval == 0, "amplitude query, skipping", buf);
+    snprintf(buf, sizeof(buf), "%u of %u vectors built twice gave two different edges", badcanon, tot);
+    expect(badcanon == 0, "determinism, skipping", buf);
+    snprintf(buf, sizeof(buf), "%u nodes of %u diagrams do not depend on their variable", redundant, tot);
+    expect(redundant == 0, "skip:thm:canon (ii)", buf);
+    expect(skipping > 0, "skip:def:fr", "no diagram skipped a level");
+    snprintf(buf, sizeof(buf), "%u of 8 constant vectors have a node", badplus);
+    expect(badplus == 0, "|+>^n is the terminal", buf);
+    snprintf(buf, sizeof(buf), "%u of 8 basis states are not n nodes", badbasis);
+    expect(badbasis == 0, "a basis state skips nothing", buf);
+    snprintf(buf, sizeof(buf), "%u of the note's examples differ", badex);
+    expect(badex == 0, "skip:lem:normal examples", buf);
+    free(f); free(g);
+    rng_state = saved_rng;
 }
 
 static void
@@ -334,6 +537,7 @@ check_coset_states(void)
     size_t counts[NQ];
 
     unsigned states = 0, bound_bad = 0, copy_bad = 0, copies_seen = 0, trans_bad = 0, prep_bad = 0;
+    unsigned redundant = 0;
     size_t max_width = 0;
 
     for (unsigned n = 3; n <= 8; n++) {
@@ -349,6 +553,7 @@ check_coset_states(void)
 
                 const BQD e = bqd_from_vector(f, n);
                 states++;
+                if (!limdd_edge_is_zero(e)) redundant += redundant_below(limdd_target(e), n, g);
                 limdd_level_counts(e, counts, n);
                 for (unsigned v = 0; v < n; v++) if (counts[v] > max_width) max_width = counts[v];
 
@@ -360,7 +565,7 @@ check_coset_states(void)
                      * + 2 is the code-state node and 0, so its nonzero nodes
                      * are within + 1 whether or not 0 occurs */
                     const unsigned zmin = limdd_edge_is_zero(e) ? n
-                                        : min_zero_var(limdd_target(e), 0, n);
+                                        : min_zero_var(limdd_target(e), n);
                     for (unsigned v = 0; v < n; v++) {
                         uint64_t bound = 1;
                         for (unsigned i = 0; i < kk; i++) bound += binom(v, i);
@@ -374,14 +579,14 @@ check_coset_states(void)
                         }
                     }
                     /* the copy never fires on a coset state */
-                    if (!limdd_edge_is_zero(e) && copies_below(limdd_target(e), 0, n) != 0) copy_bad++;
+                    if (!limdd_edge_is_zero(e) && copies_below(limdd_target(e), n) != 0) copy_bad++;
                 } else {
-                    if (!limdd_edge_is_zero(e) && copies_below(limdd_target(e), 0, n) != 0) copies_seen++;
+                    if (!limdd_edge_is_zero(e) && copies_below(limdd_target(e), n) != 0) copies_seen++;
                 }
 
                 /* full support: the X-BQD is the BQD, no translation anywhere */
                 if (fam == BQD_FAMILY_X && dim == n && !limdd_edge_is_zero(e)
-                    && any_translation(limdd_target(e), 0, n)) trans_bad++;
+                    && any_translation(limdd_target(e), n)) trans_bad++;
 
                 /* def:prep is an invariant under scalars and sign patterns
                  * wherever the pivots span the support, i.e. on a coset state */
@@ -428,6 +633,8 @@ check_coset_states(void)
         snprintf(buf, sizeof(buf), "%u of %u: (c Z^s) f and f got different nodes", prep_bad, states);
         expect(prep_bad == 0, "def:prep invariant under scalars and Z", buf);
     }
+    snprintf(buf, sizeof(buf), "%u nodes of %u coset states do not depend on their variable", redundant, states);
+    expect(redundant == 0, "skip:thm:canon (ii), coset states", buf);
     free(f); free(g); free(code); free(terms);
 }
 
@@ -531,6 +738,8 @@ TASK_1(int, runtests, int, fam)
     check_representative_idempotent();
     check_coset_states();
     if (fam == BQD_FAMILY_PAULI) check_prep_algebraic();
+    check_skipping();
+    check_countnodes();
 
     bqd_quit();
     return failures != before;
