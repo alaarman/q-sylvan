@@ -199,6 +199,24 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
 
 /* --- the low-level operations ------------------------------------------- */
 
+/*
+ * The scalar of a label factors out of the product and of restriction and
+ * projection, which are linear, so they are memoised on edges whose label
+ * has scalar one and the scalars are multiplied back on: c e and e share an
+ * entry. (The sum goes further and divides the whole first label out, Pauli
+ * and all; the product cannot, since a Pauli's translation acts on each
+ * factor separately.) A scaled edge need not be reduced, so the public
+ * macros reduce the root once, on the way out, as limdd_plus does.
+ */
+static inline LIMDD
+unit_scalar(LIMDD e, EVBDD_WGT *w)
+{
+    const LIMDD_LIM l = limdd_label(e);
+    *w = limdd_lim_weight(l);
+    if (*w == EVBDD_ONE) return e;
+    return limdd_bundle(limdd_lim_make(limdd_lim_pauli(l), EVBDD_ONE), limdd_target(e));
+}
+
 TASK_IMPL_3(LIMDD, limdd_times, LIMDD, a, LIMDD, b, uint32_t, var)
 {
     sylvan_gc_test();
@@ -219,9 +237,13 @@ TASK_IMPL_3(LIMDD, limdd_times, LIMDD, a, LIMDD, b, uint32_t, var)
      * (P u)(Q v) is not a label times u v, so the memo is on the two edges
      * as they are, and on the level for the reason limdd_plus gives.
      */
+    EVBDD_WGT wa, wb;
+    a = unit_scalar(a, &wa);
+    b = unit_scalar(b, &wb);
+    const EVBDD_WGT w = wgt_mul(wa, wb);
     if (a > b) { const LIMDD t = a; a = b; b = t; }
     LIMDD res;
-    if (cache_get3(CACHE_LIMDD_TIMES, var, a, b, &res)) return res;
+    if (cache_get3(CACHE_LIMDD_TIMES, var, a, b, &res)) return limdd_scale(res, w);
 
     LIMDD a0, a1, b0, b1;
     limdd_cofactors(a, var, &a0, &a1);
@@ -236,7 +258,7 @@ TASK_IMPL_3(LIMDD, limdd_times, LIMDD, a, LIMDD, b, uint32_t, var)
     res = limdd_makeedge(var, lo, hi);
     limdd_refs_pop(6);
     cache_put3(CACHE_LIMDD_TIMES, var, a, b, res);
-    return res;
+    return limdd_scale(res, w);
 }
 
 LIMDD
@@ -269,8 +291,10 @@ TASK_IMPL_4(LIMDD, limdd_restrict, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
     sylvan_gc_test();
     if (limdd_edge_is_zero(e)) return e;
     assert(var <= q);
+    EVBDD_WGT w;
+    e = unit_scalar(e, &w);
     LIMDD res;
-    if (cache_get3(CACHE_LIMDD_RESTRICT, var, e, qb_key(q, b), &res)) return res;
+    if (cache_get3(CACHE_LIMDD_RESTRICT, var, e, qb_key(q, b), &res)) return limdd_scale(res, w);
 
     LIMDD e0, e1;
     limdd_cofactors(e, var, &e0, &e1);
@@ -297,7 +321,7 @@ TASK_IMPL_4(LIMDD, limdd_restrict, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
         limdd_refs_pop(4);
     }
     cache_put3(CACHE_LIMDD_RESTRICT, var, e, qb_key(q, b), res);
-    return res;
+    return limdd_scale(res, w);
 }
 
 TASK_IMPL_4(LIMDD, limdd_project, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
@@ -305,8 +329,10 @@ TASK_IMPL_4(LIMDD, limdd_project, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
     sylvan_gc_test();
     if (limdd_edge_is_zero(e)) return e;
     assert(var <= q);
+    EVBDD_WGT w;
+    e = unit_scalar(e, &w);
     LIMDD res;
-    if (cache_get3(CACHE_LIMDD_PROJECT, var, e, qb_key(q, b), &res)) return res;
+    if (cache_get3(CACHE_LIMDD_PROJECT, var, e, qb_key(q, b), &res)) return limdd_scale(res, w);
 
     LIMDD e0, e1;
     limdd_cofactors(e, var, &e0, &e1);
@@ -323,7 +349,7 @@ TASK_IMPL_4(LIMDD, limdd_project, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
         limdd_refs_pop(4);
     }
     cache_put3(CACHE_LIMDD_PROJECT, var, e, qb_key(q, b), res);
-    return res;
+    return limdd_scale(res, w);
 }
 
 LIMDD

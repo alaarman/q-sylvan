@@ -123,18 +123,18 @@ LIMDD limdd_reduce_root(LIMDD e, uint32_t var);
 
 /** The pointwise product of two edges, both at level `var`. */
 TASK_DECL_3(LIMDD, limdd_times, LIMDD, LIMDD, uint32_t);
-#define limdd_times(a, b, var) RUN(limdd_times, a, b, var)
+#define limdd_times(a, b, var) limdd_reduce_root(RUN(limdd_times, a, b, var), var)
 
 /** -e */
 LIMDD limdd_negate(LIMDD e);
 
 /** e|_{x_q = b}, e read at level `var` <= q. */
 TASK_DECL_4(LIMDD, limdd_restrict, LIMDD, uint32_t, int, uint32_t);
-#define limdd_restrict(e, q, b, var) RUN(limdd_restrict, e, q, b, var)
+#define limdd_restrict(e, q, b, var) limdd_reduce_root(RUN(limdd_restrict, e, q, b, var), var)
 
 /** e . [x_q = b], e read at level `var` <= q. */
 TASK_DECL_4(LIMDD, limdd_project, LIMDD, uint32_t, int, uint32_t);
-#define limdd_project(e, q, b, var) RUN(limdd_project, e, q, b, var)
+#define limdd_project(e, q, b, var) limdd_reduce_root(RUN(limdd_project, e, q, b, var), var)
 
 /**
  * The dense 2^k x 2^k matrix M (row-major; bit k-1-i of an index is
