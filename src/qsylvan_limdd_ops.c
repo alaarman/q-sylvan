@@ -643,16 +643,56 @@ limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits)
 
 /* --- counting the live nodes --------------------------------------------- */
 
+/*
+ * The set of nodes a walk has met. It starts small and doubles at half full,
+ * so its cost follows the diagram. Sized from the node table instead, it cost
+ * a scan of the table's occupancy bitmap and a set four times the table's
+ * occupancy on every call, which in the qasm runner with -c is every gate: on
+ * a 20-qubit IQP circuit of 170 nodes at 2^25 buckets, 3.7 of 3.8 seconds.
+ */
 typedef struct {
     LIMDD_TARG *slot;
-    size_t      cap;      /* power of two */
+    size_t      cap;      /* power of two, at least twice `used` */
     size_t      used;
 } seen_t;
+
+static inline size_t
+seen_slot(LIMDD_TARG t, size_t cap)
+{
+    return (size_t)((t * UINT64_C(0x9E3779B97F4A7C15)) & (cap - 1));
+}
+
+static bool
+seen_init(seen_t *s)
+{
+    s->cap = 1024;
+    s->used = 0;
+    s->slot = calloc(s->cap, sizeof(LIMDD_TARG));
+    return s->slot != NULL;
+}
+
+static void
+seen_grow(seen_t *s)
+{
+    const size_t cap = s->cap << 1;
+    LIMDD_TARG *slot = calloc(cap, sizeof(LIMDD_TARG));
+    if (slot == NULL) { fprintf(stderr, "sylvan: out of memory counting LIMDD nodes\n"); exit(1); }
+    for (size_t k = 0; k < s->cap; k++) {
+        if (s->slot[k] == 0) continue;
+        size_t i = seen_slot(s->slot[k], cap);
+        while (slot[i] != 0) i = (i + 1) & (cap - 1);
+        slot[i] = s->slot[k];
+    }
+    free(s->slot);
+    s->slot = slot;
+    s->cap = cap;
+}
 
 static bool
 seen_add(seen_t *s, LIMDD_TARG t)
 {
-    size_t i = (size_t)((t * UINT64_C(0x9E3779B97F4A7C15)) & (s->cap - 1));
+    if (2 * (s->used + 1) > s->cap) seen_grow(s);
+    size_t i = seen_slot(t, s->cap);
     for (;;) {
         if (s->slot[i] == 0) { s->slot[i] = t; s->used++; return true; }
         if (s->slot[i] == t) return false;
@@ -674,14 +714,8 @@ count_rec(LIMDD e, seen_t *s)
 uint64_t
 limdd_countnodes(LIMDD e)
 {
-    /* Sized from the table so the probe sequence never fills; the walk visits
-     * at most that many distinct nodes. */
     seen_t s;
-    s.cap = 1;
-    while (s.cap < 4 * (limdd_node_table_count() + 8)) s.cap <<= 1;
-    s.slot = calloc(s.cap, sizeof(LIMDD_TARG));
-    if (s.slot == NULL) return 0;
-    s.used = 0;
+    if (!seen_init(&s)) return 0;
 
     count_rec(e, &s);
     const uint64_t n = s.used;
@@ -780,11 +814,7 @@ void
 limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
 {
     seen_t s;
-    s.cap = 1;
-    while (s.cap < 4 * (limdd_node_table_count() + 8)) s.cap <<= 1;
-    s.slot = calloc(s.cap, sizeof(LIMDD_TARG));
-    if (s.slot == NULL) return;
-    s.used = 0;
+    if (!seen_init(&s)) return;
 
     lim_stats_t st;
     memset(&st, 0, sizeof st);
