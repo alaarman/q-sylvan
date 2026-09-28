@@ -10,13 +10,25 @@
 */
 
 /**
-\brief These constructs prevent the compiler from optimizing (reordering) reads
-    and writes to memory location. Strong order execution has to be guaranteed
-    by the CPU for this to work. It seems like x86 is going to for the
-    foreseeable future.
+\brief An acquire load and a release store.
+
+    These were volatile accesses, which stop the compiler from reordering but
+    not the CPU, and the comment here said so: "Strong order execution has to
+    be guaranteed by the CPU for this to work." x86 gives that; ARM, Apple
+    Silicon included, does not. The weight tables publish an entry by writing
+    its words and then its first word last, over a LOCK, and a reader waits
+    for the LOCK to go and then compares. Without ordering, a reader on ARM
+    could see the first word before the others, or, for qisq2, before the GMP
+    limbs the words point at, compare against stale memory, find "not equal"
+    and insert the same value a second time. Two indices for one number make
+    a canonical form depend on the schedule: with four workers the exact
+    LIMDD and BQD tests gave one state two edges, now and then, and the value
+    was right each time. Release on the last write and acquire on the read
+    order everything written before it, on every architecture; on x86 they
+    compile to the same plain moves as before.
 */
-#define atomic_read(v)      (*(volatile typeof(*v) *)(v))
-#define atomic_write(v,a)   (*(volatile typeof(*v) *)(v) = (a))
+#define atomic_read(v)      __atomic_load_n((v), __ATOMIC_ACQUIRE)
+#define atomic_write(v,a)   __atomic_store_n((v), (a), __ATOMIC_RELEASE)
 
 #define cas(a, b, c)        __sync_bool_compare_and_swap(a,b,c)
 #define cas_ret(a, b, c)    __sync_val_compare_and_swap(a,b,c)
