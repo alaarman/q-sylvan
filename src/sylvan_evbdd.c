@@ -629,10 +629,14 @@ TASK_IMPL_2(EVBDD, evbdd_plus, EVBDD, a, EVBDD, b)
      * a + b. The order is by target, so both operand orders divide by the
      * same weight.
      *
-     * Exact weights only. On floats the division and the product that undoes
-     * it each round, which moves which weights merge: on the benchmark
-     * circuits that gave up to 3.6x the nodes, so there the key stays the two
-     * edges, ordered, as before.
+     * Exact weights only. On floats which sums are reused rather than
+     * recomputed changes which weights merge, so float results move with any
+     * change to the cache (the old key alone, at cache sizes 2^16 to 2^20,
+     * went from 339k to 797k nodes on one circuit). Measured over those four
+     * sizes on seven circuits, this key made float runs 1.23x slower with
+     * 1.09x the nodes, and keying on the ratio in a float table of its own,
+     * with the operand weights kept in the entry, 1.36x and 1.14x. So floats
+     * keep the two edges, ordered, as before.
      */
     const bool modulo_weight = (sylvan_get_edge_weight_type() == WGT_QISQ2);
     EVBDD_WGT w_out = EVBDD_ONE;
