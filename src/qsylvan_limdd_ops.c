@@ -32,9 +32,9 @@ limdd_scale(LIMDD e, EVBDD_WGT w)
     if (w == EVBDD_ONE) return e;
 
     const LIMDD_LIM l = limdd_label(e);
-    return limdd_bundle(limdd_lim_make(limdd_lim_pauli(l),
-                                       wgt_mul(limdd_lim_weight(l), w)),
-                        limdd_target(e));
+    const EVBDD_WGT p = wgt_mul(limdd_lim_weight(l), w);
+    if (p == EVBDD_ZERO) return limdd_zero_edge();     /* a float underflow; see lim_times_edge */
+    return limdd_bundle(limdd_lim_make(limdd_lim_pauli(l), p), limdd_target(e));
 }
 
 /** `l` times the edge `e`, i.e. the same target under a composed map. */
@@ -43,7 +43,12 @@ lim_times_edge(LIMDD_LIM l, LIMDD e)
 {
     if (limdd_lim_is_identity(l)) return e;
     if (limdd_edge_is_zero(e) || limdd_lim_is_zero(l)) return limdd_zero_edge();
-    return limdd_bundle(limdd_lim_mul(l, limdd_label(e)), limdd_target(e));
+    /* On float weights a product of two small scalars can merge with zero,
+     * and a zero label on a live target is not the zero edge: every test for
+     * zero misses it, and the coset search asserts on it. */
+    const LIMDD_LIM m = limdd_lim_mul(l, limdd_label(e));
+    if (limdd_lim_is_zero(m)) return limdd_zero_edge();
+    return limdd_bundle(m, limdd_target(e));
 }
 
 void
@@ -98,29 +103,51 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
     }
 }
 
+/*
+ * A gate jumps over levels an edge skips by moving the label's entries there
+ * out of the recursion: they act on qubits the gate does not touch, so they
+ * commute with it and can wait outside, and leaving them in would hand
+ * makeedge children whose labels act above their own level. lim_split_gate,
+ * below, does this for every qubit the gate does not act on, and the scalar.
+ */
+
 /**
- * Split `e`'s label at `level`: the part acting on levels below it comes back
- * in `*hoisted` with scalar 1, and the returned edge keeps the rest, scalar
- * included. The two parts have disjoint support, so neither the split nor
- * putting them back together picks up a phase.
+ * `e` with every part of its label a gate cannot tell apart moved out:
+ * the scalar, and the Pauli entries on every qubit not in `keep`. What stays
+ * on the edge is the Pauli on the `keep` qubits with scalar one; `*outer` is
+ * the rest, and outer . result is the gate applied to e.
  *
- * This is how a gate jumps over levels an edge skips. Levels below `level`
- * are not touched by the gate, so whatever the label does there commutes
- * with it and can wait outside the recursion. Leaving it in would hand
- * makeedge children whose labels act above their own level.
+ * A gate on qubits Q commutes with a Pauli on qubits outside Q, and with a
+ * scalar, so U(c P_Q P_rest |v>) = c P_rest U(P_Q |v>). The two parts act
+ * on disjoint qubits, so splitting the word needs no phase. The cache then
+ * sees one entry per node and Pauli on Q, at most 4^|Q|, where it saw one per
+ * edge.
+ *
+ * The scalar comes out on exact weights only. On floats taking it out and
+ * putting it back changes the order of the multiplications, so the rounding,
+ * so which weights merge: the eager LIMDD of a 25-gate circuit then differed
+ * from the deferred one rebuilt (test_limdd_ops, complex weights), where the
+ * Paulis alone moved changed nothing.
  */
 static inline LIMDD
-lim_split_above(LIMDD e, uint32_t level, LIMDD_LIM *hoisted)
+lim_split_gate(LIMDD e, uint64_t keep, LIMDD_LIM *outer)
 {
     const LIMDD_LIM l = limdd_label(e);
-    limdd_pauli_t p = limdd_lim_pauli(l);
-    const limdd_pauli_t above = limdd_pauli_split_below(&p, level);
-    if (limdd_pauli_is_identity(above)) {
-        *hoisted = LIMDD_LIM_IDENTITY;
+    limdd_pauli_t rest = limdd_lim_pauli(l);
+    limdd_pauli_t kept = limdd_pauli_identity();
+    for (uint64_t m = keep; m != 0; m &= m - 1) {
+        const size_t q = (size_t)__builtin_ctzll(m);
+        limdd_pauli_set(&kept, q, limdd_pauli_get(rest, q));
+        limdd_pauli_set(&rest, q, LIMDD_PAULI_I);
+    }
+    const EVBDD_WGT w = limdd_lim_weight(l);
+    const bool out_scalar = (sylvan_get_edge_weight_type() == WGT_QISQ2);
+    if (limdd_pauli_is_identity(rest) && (w == EVBDD_ONE || !out_scalar)) {
+        *outer = LIMDD_LIM_IDENTITY;
         return e;
     }
-    *hoisted = limdd_lim_make(above, EVBDD_ONE);
-    return limdd_bundle(limdd_lim_make(p, limdd_lim_weight(l)), limdd_target(e));
+    *outer = limdd_lim_make(rest, out_scalar ? w : EVBDD_ONE);
+    return limdd_bundle(limdd_lim_make(kept, out_scalar ? EVBDD_ONE : w), limdd_target(e));
 }
 
 /* --- addition ------------------------------------------------------------ */
@@ -430,17 +457,12 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
     assert(var < nqubits);
 
     /*
-     * The label is NOT divided out here, unlike in limdd_plus. Addition is
-     * linear, so A|u> + A|v> = A(|u> + |v>) and the label can be taken outside
-     * and put back. A gate cannot: U(A|v>) is not A(U|v>), because a gate and
-     * a Pauli on the same qubit do not commute -- H then X is not X then H.
-     * Pulling the label out and reapplying it afterwards silently applies the
-     * gate to the wrong state.
-     *
-     * Nothing is lost by leaving it in: limdd_cofactors already pushes the
-     * label through the node as it descends, so the recursion sees the right
-     * state at every level. The cost is a colder cache, since it is keyed on
-     * the whole edge rather than just the node.
+     * The label is not divided out whole, as limdd_plus does: U(A|v>) is not
+     * A(U|v>), since a gate and a Pauli on the same qubit do not commute (H
+     * then X is not X then H). But the scalar and the Pauli on every other
+     * qubit do commute with it, so those come out, and the cache is keyed on
+     * the node and the Pauli at the target alone; lim_split_gate. This used
+     * to hoist only the part above `var` and key on the rest of the edge.
      *
      * The gate and its target are small, so they ride in the operation id --
      * inside this op's own 2^40 block, which keeps it clear of its
@@ -450,16 +472,12 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
     assert(gateid < (1u << 20) && target < LIMDD_MAX_QUBITS);
     const uint64_t opid = CACHE_LIMDD_GATE | ((uint64_t)gateid << 20) | target;
 
+    LIMDD_LIM outer;
+    const LIMDD inner = lim_split_gate(e, UINT64_C(1) << target, &outer);
+    if (inner != e) return lim_times_edge(outer, CALL(limdd_gate, inner, gateid, target, nqubits));
+
     LIMDD res;
     if (cache_get3(opid, 0, e, 0, &res)) return res;
-
-    LIMDD_LIM hoisted;
-    const LIMDD inner = lim_split_above(e, var, &hoisted);
-    if (inner != e) {
-        res = lim_times_edge(hoisted, CALL(limdd_gate, inner, gateid, target, nqubits));
-        cache_put3(opid, 0, e, 0, res);
-        return res;
-    }
 
     LIMDD lo, hi;
     limdd_cofactors(e, var, &lo, &hi);
@@ -534,20 +552,18 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     const uint32_t var = lev < top ? lev : top;
     assert(var < nqubits);
 
-    /* The label stays on, for the same reason as in limdd_gate. */
+    /* As in limdd_gate, with the controls among the qubits the label keeps:
+     * an X on a control changes which branch the gate acts on. */
     assert(gateid < (1u << 20) && target < LIMDD_MAX_QUBITS);
     const uint64_t opid = CACHE_LIMDD_CGATE | ((uint64_t)gateid << 20) | target;
 
+    LIMDD_LIM outer;
+    const LIMDD inner = lim_split_gate(e, controls | (UINT64_C(1) << target), &outer);
+    if (inner != e)
+        return lim_times_edge(outer, CALL(limdd_cgate, inner, gateid, controls, target, nqubits));
+
     LIMDD res;
     if (cache_get3(opid, 0, e, controls, &res)) return res;
-
-    LIMDD_LIM hoisted;
-    const LIMDD inner = lim_split_above(e, var, &hoisted);
-    if (inner != e) {
-        res = lim_times_edge(hoisted, CALL(limdd_cgate, inner, gateid, controls, target, nqubits));
-        cache_put3(opid, 0, e, controls, res);
-        return res;
-    }
 
     LIMDD lo, hi;
     limdd_cofactors(e, var, &lo, &hi);

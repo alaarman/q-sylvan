@@ -153,7 +153,7 @@ LIMDD limdd_local_matvec(LIMDD e, const EVBDD_WGT *M, const uint32_t *qubits,
  */
 TASK_DECL_4(LIMDD, limdd_gate, LIMDD, uint32_t, uint32_t, uint32_t);
 #define limdd_gate(e, gateid, target, nqubits) \
-    RUN(limdd_gate, e, gateid, target, nqubits)
+    limdd_reduce_root(RUN(limdd_gate, e, gateid, target, nqubits), 0)
 
 /**
  * `e` with `gateid` applied to `target`, conditioned on every qubit whose bit
@@ -168,7 +168,7 @@ TASK_DECL_4(LIMDD, limdd_gate, LIMDD, uint32_t, uint32_t, uint32_t);
  */
 TASK_DECL_5(LIMDD, limdd_cgate, LIMDD, uint32_t, uint64_t, uint32_t, uint32_t);
 #define limdd_cgate(e, gateid, control_mask, target, nqubits) \
-    RUN(limdd_cgate, e, gateid, control_mask, target, nqubits)
+    limdd_reduce_root(RUN(limdd_cgate, e, gateid, control_mask, target, nqubits), 0)
 
 /**
  * A controlled gate with the control on either side of the target.
