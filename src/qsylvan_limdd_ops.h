@@ -98,7 +98,51 @@ LIMDD limdd_scale(LIMDD e, EVBDD_WGT w);
  * Must be called from a Lace worker; use RUN from outside one.
  */
 TASK_DECL_3(LIMDD, limdd_plus, LIMDD, LIMDD, uint32_t);
-#define limdd_plus(a, b, var) RUN(limdd_plus, a, b, var)
+#define limdd_plus(a, b, var) limdd_reduce_root(RUN(limdd_plus, a, b, var), var)
+
+/**
+ * `e` read at `var`, its label reduced to the least of its coset, when the
+ * canonical form is on (limdd_get_high_determinism); `e` itself otherwise.
+ * Edges out of makeedge are reduced already. The sum divides its first
+ * operand's label out and multiplies it back on, which leaves the root label
+ * unreduced: inside the recursion makeedge reduces it again, but a caller got
+ * two edges for one state now and then (an H by limdd_local_matvec against
+ * limdd_gate, 5 of 80 on random Clifford+T states). So limdd_plus called
+ * from outside a task, and every operation added below, reduce the root.
+ */
+LIMDD limdd_reduce_root(LIMDD e, uint32_t var);
+
+/*
+ * The low-level operations every diagram here has, with one meaning
+ * (qsylvan_evdd_ops.h for the EVDD, qsylvan_bqd_gates.h for the BQD):
+ * pointwise product, sum (limdd_plus), scale and negate, restriction
+ * f|_{x_q = b} as a function that does not depend on x_q, projection
+ * f . [x_q = b], and a dense local matrix on a set of qubits. `var` is the
+ * level the edges are read at, 0 for a state.
+ */
+
+/** The pointwise product of two edges, both at level `var`. */
+TASK_DECL_3(LIMDD, limdd_times, LIMDD, LIMDD, uint32_t);
+#define limdd_times(a, b, var) RUN(limdd_times, a, b, var)
+
+/** -e */
+LIMDD limdd_negate(LIMDD e);
+
+/** e|_{x_q = b}, e read at level `var` <= q. */
+TASK_DECL_4(LIMDD, limdd_restrict, LIMDD, uint32_t, int, uint32_t);
+#define limdd_restrict(e, q, b, var) RUN(limdd_restrict, e, q, b, var)
+
+/** e . [x_q = b], e read at level `var` <= q. */
+TASK_DECL_4(LIMDD, limdd_project, LIMDD, uint32_t, int, uint32_t);
+#define limdd_project(e, q, b, var) RUN(limdd_project, e, q, b, var)
+
+/**
+ * The dense 2^k x 2^k matrix M (row-major; bit k-1-i of an index is
+ * qubits[i], so gates[] order for k = 1) applied to the qubits of a state:
+ * sum_r [x_Q = r] . sum_c M[r][c] . e|_{x_Q = c}. From a Lace worker.
+ */
+LIMDD limdd_local_matvec(LIMDD e, const EVBDD_WGT *M, const uint32_t *qubits,
+                         uint32_t k, uint32_t nqubits);
 
 /**
  * `e` with the 2x2 gate `gateid` applied to qubit `target`.

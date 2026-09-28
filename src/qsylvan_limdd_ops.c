@@ -21,6 +21,7 @@
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_ops.h"
+#include "qsylvan_limdd_canon.h"
 #include "qsylvan_limdd_gc.h"
 #include "qsylvan_gates.h"
 
@@ -194,6 +195,177 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
     cache_put3(CACHE_LIMDD_PLUS, var, na, nb, res);
 
     return lim_times_edge(A, res);
+}
+
+/* --- the low-level operations ------------------------------------------- */
+
+TASK_IMPL_3(LIMDD, limdd_times, LIMDD, a, LIMDD, b, uint32_t, var)
+{
+    sylvan_gc_test();
+    if (limdd_edge_is_zero(a) || limdd_edge_is_zero(b)) return limdd_zero_edge();
+
+    const uint32_t nqubits = (uint32_t)limdd_lims_nqubits();
+    if (var == nqubits) {
+        assert(limdd_target(a) == LIMDD_TERMINAL && limdd_target(b) == LIMDD_TERMINAL);
+        const EVBDD_WGT w = wgt_mul(limdd_lim_weight(limdd_label(a)),
+                                    limdd_lim_weight(limdd_label(b)));
+        if (w == EVBDD_ZERO) return limdd_zero_edge();
+        return limdd_bundle(limdd_lim_make(limdd_pauli_identity(), w), LIMDD_TERMINAL);
+    }
+
+    /*
+     * The product commutes, so one order. Unlike the sum, the labels cannot
+     * be divided out: a Pauli's translation acts on each factor separately,
+     * (P u)(Q v) is not a label times u v, so the memo is on the two edges
+     * as they are, and on the level for the reason limdd_plus gives.
+     */
+    if (a > b) { const LIMDD t = a; a = b; b = t; }
+    LIMDD res;
+    if (cache_get3(CACHE_LIMDD_TIMES, var, a, b, &res)) return res;
+
+    LIMDD a0, a1, b0, b1;
+    limdd_cofactors(a, var, &a0, &a1);
+    limdd_cofactors(b, var, &b0, &b1);
+    limdd_refs_push(a0); limdd_refs_push(a1);
+    limdd_refs_push(b0); limdd_refs_push(b1);
+    limdd_refs_spawn(SPAWN(limdd_times, a1, b1, var + 1));
+    const LIMDD lo = CALL(limdd_times, a0, b0, var + 1);
+    limdd_refs_push(lo);
+    const LIMDD hi = limdd_refs_sync(SYNC(limdd_times));
+    limdd_refs_push(hi);
+    res = limdd_makeedge(var, lo, hi);
+    limdd_refs_pop(6);
+    cache_put3(CACHE_LIMDD_TIMES, var, a, b, res);
+    return res;
+}
+
+LIMDD
+limdd_reduce_root(LIMDD e, uint32_t var)
+{
+    if (limdd_edge_is_zero(e) || !limdd_get_high_determinism()) return e;
+    return limdd_edge_canonical(var, e);
+}
+
+LIMDD
+limdd_negate(LIMDD e)
+{
+    return limdd_reduce_root(limdd_scale(e, EVBDD_MIN_ONE), 0);
+}
+
+/*
+ * Restriction and projection take the cofactors at every level down to q,
+ * since a label may act on x_q with a Z even where the edge skips q, and
+ * rebuild above q with makeedge; at q the restriction puts the chosen
+ * cofactor on both sides, and the projection puts zero on the other.
+ */
+static inline uint64_t
+qb_key(uint32_t q, int b)
+{
+    return ((uint64_t)q << 1) | (uint64_t)(b & 1);
+}
+
+TASK_IMPL_4(LIMDD, limdd_restrict, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
+{
+    sylvan_gc_test();
+    if (limdd_edge_is_zero(e)) return e;
+    assert(var <= q);
+    LIMDD res;
+    if (cache_get3(CACHE_LIMDD_RESTRICT, var, e, qb_key(q, b), &res)) return res;
+
+    LIMDD e0, e1;
+    limdd_cofactors(e, var, &e0, &e1);
+    limdd_refs_push(e0); limdd_refs_push(e1);
+    if (var == q) {
+        /*
+         * Reduced first: makeedge passes an edge with two equal children
+         * through as it is, which is right for an edge out of makeedge and
+         * not for a cofactor, whose label is the parent's pushed down with
+         * no search for its class. Unreduced, the same state came back
+         * under two labels, 11 times in 1080 (test_lowlevel_ops). Not done
+         * in makeedge itself: on float weights reducing an edge that is
+         * reduced already is not the identity, and it widened the LIMDD
+         * of a 12-qubit Clifford+4T state past 2^t (test_limdd_structure).
+         */
+        const LIMDD g = limdd_reduce_root(b ? e1 : e0, var + 1);
+        res = limdd_makeedge(var, g, g);
+        limdd_refs_pop(2);
+    } else {
+        limdd_refs_spawn(SPAWN(limdd_restrict, e1, q, b, var + 1));
+        const LIMDD lo = limdd_refs_push(CALL(limdd_restrict, e0, q, b, var + 1));
+        const LIMDD hi = limdd_refs_push(limdd_refs_sync(SYNC(limdd_restrict)));
+        res = limdd_makeedge(var, lo, hi);
+        limdd_refs_pop(4);
+    }
+    cache_put3(CACHE_LIMDD_RESTRICT, var, e, qb_key(q, b), res);
+    return res;
+}
+
+TASK_IMPL_4(LIMDD, limdd_project, LIMDD, e, uint32_t, q, int, b, uint32_t, var)
+{
+    sylvan_gc_test();
+    if (limdd_edge_is_zero(e)) return e;
+    assert(var <= q);
+    LIMDD res;
+    if (cache_get3(CACHE_LIMDD_PROJECT, var, e, qb_key(q, b), &res)) return res;
+
+    LIMDD e0, e1;
+    limdd_cofactors(e, var, &e0, &e1);
+    limdd_refs_push(e0); limdd_refs_push(e1);
+    if (var == q) {
+        res = b ? limdd_makeedge(var, limdd_zero_edge(), e1)
+                : limdd_makeedge(var, e0, limdd_zero_edge());
+        limdd_refs_pop(2);
+    } else {
+        limdd_refs_spawn(SPAWN(limdd_project, e1, q, b, var + 1));
+        const LIMDD lo = limdd_refs_push(CALL(limdd_project, e0, q, b, var + 1));
+        const LIMDD hi = limdd_refs_push(limdd_refs_sync(SYNC(limdd_project)));
+        res = limdd_makeedge(var, lo, hi);
+        limdd_refs_pop(4);
+    }
+    cache_put3(CACHE_LIMDD_PROJECT, var, e, qb_key(q, b), res);
+    return res;
+}
+
+LIMDD
+limdd_local_matvec(LIMDD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k,
+                   uint32_t nqubits)
+{
+    (void)nqubits;
+    const uint32_t dim = 1u << k;
+    LIMDD *vc = malloc(dim * sizeof(LIMDD));
+    if (vc == NULL) { fprintf(stderr, "sylvan: out of memory in limdd_local_matvec\n"); exit(1); }
+
+    /* every intermediate on the reference stack: each operation may join a
+     * collection */
+    for (uint32_t c = 0; c < dim; c++) {
+        LIMDD r = e;
+        for (uint32_t i = 0; i < k; i++)
+            r = limdd_restrict(r, qubits[i], (int)((c >> (k - 1 - i)) & 1), 0);
+        vc[c] = limdd_refs_push(r);
+    }
+    LIMDD out = limdd_refs_push(limdd_zero_edge());
+    for (uint32_t r = 0; r < dim; r++) {
+        LIMDD w = limdd_zero_edge();
+        for (uint32_t c = 0; c < dim; c++) {
+            const EVBDD_WGT m = M[(size_t)r * dim + c];
+            if (m == EVBDD_ZERO) continue;
+            limdd_refs_push(w);
+            w = limdd_plus(w, limdd_scale(vc[c], m), 0);
+            limdd_refs_pop(1);
+        }
+        for (uint32_t i = 0; i < k; i++) {
+            limdd_refs_push(w);
+            w = limdd_project(w, qubits[i], (int)((r >> (k - 1 - i)) & 1), 0);
+            limdd_refs_pop(1);
+        }
+        limdd_refs_push(w);
+        const LIMDD next = limdd_plus(out, w, 0);
+        limdd_refs_pop(2);
+        out = limdd_refs_push(next);
+    }
+    limdd_refs_pop(1 + (long)dim);
+    free(vc);
+    return out;
 }
 
 /* --- applying a gate ----------------------------------------------------- */

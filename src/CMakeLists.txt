@@ -65,6 +65,7 @@ target_sources(qsylvan
     qsylvan_bqd.c
     qsylvan_bqd_ops.c
     qsylvan_bqd_gates.c
+    qsylvan_evdd_ops.c
   PUBLIC
     FILE_SET HEADERS
     BASE_DIRS
@@ -106,6 +107,7 @@ target_sources(qsylvan
       qsylvan_bqd.h
       qsylvan_bqd_ops.h
       qsylvan_bqd_gates.h
+      qsylvan_evdd_ops.h
       qsylvan_limdd_stab.h
       qsylvan_limdd_canon.h
       qsylvan_limdd_gc.h

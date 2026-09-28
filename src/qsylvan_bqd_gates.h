@@ -91,6 +91,32 @@ TASK_DECL_3(BQD, bqd_compose, uint32_t, BQD, BQD);
 TASK_DECL_2(BQD, bqd_cofactor, BQD, int);
 #define bqd_cofactor(e, b) RUN(bqd_cofactor, e, b)
 
+/** c . e, and -e. */
+BQD bqd_scale(BQD e, EVBDD_WGT c);
+BQD bqd_negate(BQD e);
+
+/**
+ * e|_{x_q = b}, the cofactor as a function of the same variables that does
+ * not depend on x_q, and e . [x_q = b], the other half set to zero. As
+ * evbdd_restrict and evbdd_project, and limdd_restrict and limdd_project.
+ */
+TASK_DECL_3(BQD, bqd_restrict, BQD, uint32_t, int);
+#define bqd_restrict(e, q, b) RUN(bqd_restrict, e, q, b)
+TASK_DECL_3(BQD, bqd_project, BQD, uint32_t, int);
+#define bqd_project(e, q, b) RUN(bqd_project, e, q, b)
+
+/**
+ * The dense 2^k x 2^k matrix M applied to the qubits of e: row-major, bit
+ * k-1-i of an index is qubits[i], so gates[] order for k = 1. It is
+ * sum_r [x_Q = r] . sum_c M[r][c] . e|_{x_Q = c}, from the operations above,
+ * memoised on nodes. For a single qubit it computes what bqd_gate does, by a
+ * longer route: bqd_gate combines the two cofactors at the qubit's level and
+ * leaves the levels below alone, where this builds each restriction and
+ * projection over the whole width first.
+ */
+BQD bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k,
+                     uint32_t nqubits);
+
 /* --- gates, called as the LIMDD's ----------------------------------------- */
 
 /**

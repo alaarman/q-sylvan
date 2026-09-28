@@ -213,6 +213,118 @@ TASK_IMPL_2(BQD, bqd_cofactor, BQD, e, int, b)
     return scale(scalar_of(e), c);
 }
 
+BQD
+bqd_scale(BQD e, EVBDD_WGT c)
+{
+    return scale(c, e);
+}
+
+BQD
+bqd_negate(BQD e)
+{
+    return scale(EVBDD_MIN_ONE, e);
+}
+
+/*
+ * Restriction and projection, both linear, so memoised on the node. Above q
+ * the two cofactors are treated and composed again; at q the restriction
+ * composes the chosen cofactor with itself, and the projection composes it
+ * with zero. A BQD never skips a level, so q is always met.
+ */
+TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
+{
+    if (limdd_edge_is_zero(e)) return e;
+    const LIMDD_TARG t = limdd_target(e);
+    assert(t != LIMDD_TERMINAL && "the qubit is below the diagram");
+    const uint32_t var = limdd_node_var(t);
+    assert(var <= q);
+    const uint64_t key = ((uint64_t)q << 1) | (uint64_t)(b & 1);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_RESTRICT, t, key, 0, &hit)) return scale(scalar_of(e), (BQD)hit);
+
+    const BQD f0 = limdd_node_low(t);
+    const BQD f1 = CALL(bqd_high_cofactor, t);
+    BQD r;
+    if (var == q) {
+        const BQD g = b ? f1 : f0;
+        r = CALL(bqd_compose, var, g, g);
+    } else {
+        limdd_refs_spawn(SPAWN(bqd_restrict, f1, q, b));
+        const BQD lo = limdd_refs_push(CALL(bqd_restrict, f0, q, b));
+        const BQD hi = limdd_refs_sync(SYNC(bqd_restrict));
+        limdd_refs_pop(1);
+        r = CALL(bqd_compose, var, lo, hi);
+    }
+    cache_put3(CACHE_BQD_RESTRICT, t, key, 0, (uint64_t)r);
+    return scale(scalar_of(e), r);
+}
+
+TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
+{
+    if (limdd_edge_is_zero(e)) return e;
+    const LIMDD_TARG t = limdd_target(e);
+    assert(t != LIMDD_TERMINAL && "the qubit is below the diagram");
+    const uint32_t var = limdd_node_var(t);
+    assert(var <= q);
+    const uint64_t key = ((uint64_t)q << 1) | (uint64_t)(b & 1);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_PROJECT, t, key, 0, &hit)) return scale(scalar_of(e), (BQD)hit);
+
+    const BQD f0 = limdd_node_low(t);
+    BQD r;
+    if (var == q) {
+        r = b ? CALL(bqd_compose, var, limdd_zero_edge(), CALL(bqd_high_cofactor, t))
+              : CALL(bqd_compose, var, f0, limdd_zero_edge());
+    } else {
+        const BQD f1 = CALL(bqd_high_cofactor, t);
+        limdd_refs_spawn(SPAWN(bqd_project, f1, q, b));
+        const BQD lo = limdd_refs_push(CALL(bqd_project, f0, q, b));
+        const BQD hi = limdd_refs_sync(SYNC(bqd_project));
+        limdd_refs_pop(1);
+        r = CALL(bqd_compose, var, lo, hi);
+    }
+    cache_put3(CACHE_BQD_PROJECT, t, key, 0, (uint64_t)r);
+    return scale(scalar_of(e), r);
+}
+
+BQD
+bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k, uint32_t n)
+{
+    (void)n;
+    require_scalar_family("bqd_local_matvec");
+    const uint32_t dim = 1u << k;
+    BQD *vc = malloc(dim * sizeof(BQD));
+    if (vc == NULL) { fprintf(stderr, "sylvan: out of memory in bqd_local_matvec\n"); exit(1); }
+    for (uint32_t c = 0; c < dim; c++) {
+        BQD r = e;
+        for (uint32_t i = 0; i < k; i++) r = bqd_restrict(r, qubits[i], (int)((c >> (k - 1 - i)) & 1));
+        vc[c] = limdd_refs_push(r);
+    }
+    BQD out = limdd_refs_push(limdd_zero_edge());
+    for (uint32_t r = 0; r < dim; r++) {
+        BQD w = limdd_zero_edge();
+        for (uint32_t c = 0; c < dim; c++) {
+            const EVBDD_WGT m = M[(size_t)r * dim + c];
+            if (m == EVBDD_ZERO) continue;
+            limdd_refs_push(w);
+            w = bqd_add(w, scale(m, vc[c]));
+            limdd_refs_pop(1);
+        }
+        for (uint32_t i = 0; i < k; i++) {
+            limdd_refs_push(w);
+            w = bqd_project(w, qubits[i], (int)((r >> (k - 1 - i)) & 1));
+            limdd_refs_pop(1);
+        }
+        limdd_refs_push(w);
+        const BQD next = bqd_add(out, w);
+        limdd_refs_pop(2);
+        out = limdd_refs_push(next);
+    }
+    limdd_refs_pop(1 + (long)dim);
+    free(vc);
+    return out;
+}
+
 /* --- states --------------------------------------------------------------- */
 
 BQD

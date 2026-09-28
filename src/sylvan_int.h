@@ -149,6 +149,16 @@ static const uint64_t CACHE_BQD_XQUOT                = (99LL<<40);
 static const uint64_t CACHE_BQD_COF1                 = (114LL<<40);
 static const uint64_t CACHE_BQD_GATE                 = (115LL<<40);
 static const uint64_t CACHE_BQD_FULL                 = (116LL<<40);
+static const uint64_t CACHE_BQD_RESTRICT             = (117LL<<40);
+static const uint64_t CACHE_BQD_PROJECT              = (118LL<<40);
+/* the pointwise operations and restrictions of qsylvan_evdd_ops.h and of
+ * qsylvan_limdd_ops.h, with the same meaning on every diagram */
+static const uint64_t CACHE_EVBDD_TIMES              = (119LL<<40);
+static const uint64_t CACHE_EVBDD_RESTRICT           = (120LL<<40);
+static const uint64_t CACHE_EVBDD_PROJECT            = (121LL<<40);
+static const uint64_t CACHE_LIMDD_TIMES              = (122LL<<40);
+static const uint64_t CACHE_LIMDD_RESTRICT           = (123LL<<40);
+static const uint64_t CACHE_LIMDD_PROJECT            = (124LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);
