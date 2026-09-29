@@ -397,6 +397,13 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
         limdd_refs_init();
     }
 
+    /* The operation cache may hold an earlier session's entries, keyed on the
+     * indices these new tables hand out again (qsylvan_limdd_gc.c). */
+    {
+        extern void limdd_gc_new_session(void);
+        limdd_gc_new_session();
+    }
+
     zero_edge = limdd_bundle(LIMDD_LIM_ZERO, LIMDD_TERMINAL);
     one_edge  = limdd_bundle(LIMDD_LIM_IDENTITY, LIMDD_TERMINAL);
 }

@@ -129,6 +129,9 @@ size_t limdd_lims_nqubits(void);
 /** Number of distinct Pauli words interned so far. Needs a running Lace. */
 size_t limdd_pauli_table_count(void);
 
+/** Capacity of the Pauli table, for deciding when to collect. */
+size_t limdd_pauli_table_size(void);
+
 /** Number of distinct LIMs interned so far. Needs a running Lace. */
 size_t limdd_lim_table_count(void);
 
@@ -152,6 +155,12 @@ LIMDD_LIM limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w);
 
 /** The Pauli word of `lim`. For LIMDD_LIM_ZERO this is the identity. */
 limdd_pauli_t limdd_lim_pauli(LIMDD_LIM lim);
+
+/**
+ * The reference of the Pauli word of `lim`, as limdd_pauli_intern returned it:
+ * one read of the LIM's bucket, where limdd_lim_pauli also reads the word.
+ */
+LIMDD_PAULI_REF limdd_lim_pauli_ref(LIMDD_LIM lim);
 
 /** The scalar of `lim`. */
 EVBDD_WGT limdd_lim_weight(LIMDD_LIM lim);

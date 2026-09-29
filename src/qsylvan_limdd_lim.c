@@ -168,6 +168,12 @@ limdd_pauli_table_count(void)
 }
 
 size_t
+limdd_pauli_table_size(void)
+{
+    return pauli_table == NULL ? 0 : llmsset_get_size(pauli_table);
+}
+
+size_t
 limdd_lim_table_size(void)
 {
     return lim_table == NULL ? 0 : llmsset_get_size(lim_table);
@@ -221,6 +227,14 @@ limdd_lim_pauli(LIMDD_LIM lim)
     assert(lim_table != NULL);
     const uint64_t *bucket = (const uint64_t *)llmsset_index_to_ptr(lim_table, lim);
     return limdd_pauli_deref(bucket[0]);
+}
+
+LIMDD_PAULI_REF
+limdd_lim_pauli_ref(LIMDD_LIM lim)
+{
+    assert(lim_table != NULL);
+    const uint64_t *bucket = (const uint64_t *)llmsset_index_to_ptr(lim_table, lim);
+    return bucket[0];
 }
 
 EVBDD_WGT

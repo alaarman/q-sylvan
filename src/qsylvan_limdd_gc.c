@@ -28,10 +28,33 @@
  * one freed almost nothing, running another immediately is a loop that gets
  * slower each time round rather than a garbage collector.
  */
-static _Atomic(uint64_t) limdd_gc_floor_lim  = 0;
-static _Atomic(uint64_t) limdd_gc_floor_node = 0;
-static _Atomic(uint64_t) limdd_gc_floor_stab = 0;
-static _Atomic(uint64_t) limdd_gc_floor_wgt  = 0;
+static _Atomic(uint64_t) limdd_gc_floor_lim   = 0;
+static _Atomic(uint64_t) limdd_gc_floor_pauli = 0;
+static _Atomic(uint64_t) limdd_gc_floor_node  = 0;
+static _Atomic(uint64_t) limdd_gc_floor_stab  = 0;
+static _Atomic(uint64_t) limdd_gc_floor_wgt   = 0;
+
+/*
+ * A new session: limdd_nodes_init has just made new tables, which hand out
+ * the indices of the last session's again. The operation cache still holds
+ * that session's entries, keyed on its indices, and a lookup in the new one
+ * would return them -- in the BQD's translation and Pauli families, whose
+ * keys are a label's Pauli word and a node, a wrong state and not a miss
+ * (two families share their cache ids, and one family run twice meets its
+ * own). So it is cleared here, for every arm, as a collection clears it. The
+ * floors are what the last collection left in tables that no longer exist,
+ * and a floor above a smaller new table would stop collection for good.
+ */
+void
+limdd_gc_new_session(void)
+{
+    cache_clear();
+    limdd_gc_floor_lim   = 0;
+    limdd_gc_floor_pauli = 0;
+    limdd_gc_floor_node  = 0;
+    limdd_gc_floor_stab  = 0;
+    limdd_gc_floor_wgt   = 0;
+}
 
 #include "sylvan_refs.h"
 
@@ -367,10 +390,11 @@ VOID_TASK_0(limdd_gc_go)
     /* Remember what is left, so a collection that freed nothing is not
      * immediately repeated. The weight table has also just doubled if it was
      * collected, so its floor is measured against the new size. */
-    limdd_gc_floor_lim  = limdd_lim_table_count();
-    limdd_gc_floor_node = limdd_node_table_count();
-    limdd_gc_floor_stab = limdd_stab_table_count();
-    limdd_gc_floor_wgt  = wgt_table_entries_estimate();
+    limdd_gc_floor_lim   = limdd_lim_table_count();
+    limdd_gc_floor_pauli = limdd_pauli_table_count();
+    limdd_gc_floor_node  = limdd_node_table_count();
+    limdd_gc_floor_stab  = limdd_stab_table_count();
+    limdd_gc_floor_wgt   = wgt_table_entries_estimate();
 }
 
 static _Atomic(int) limdd_gc_in_progress = 0;
@@ -382,17 +406,26 @@ VOID_TASK_IMPL_0(limdd_gc)
      *
      * Without the compare-exchange two workers that both notice a full table
      * would each open a frame, and the second would collect a heap the first
-     * had already rebuilt. The loser waits for the frame to appear and then
-     * yields, which is how it ends up helping rather than spinning -- the
-     * same shape as sylvan_gc in sylvan_common.c.
+     * had already rebuilt. The loser yields into the frame, which is how it
+     * ends up helping rather than spinning.
+     *
+     * It waits on the flag and not on the frame, unlike sylvan_gc in
+     * sylvan_common.c. A loser whose compare-exchange fails after the
+     * winner's frame has ended, but before the winner has reset the flag --
+     * one that took part in that frame from a steal loop and then asks for a
+     * collection of its own -- would otherwise wait for a frame that never
+     * comes. It also yields into any other frame that opens meanwhile, since
+     * a worker that spins without yielding holds up every NEWFRAME and
+     * TOGETHER.
      */
     int zero = 0;
     if (atomic_compare_exchange_strong(&limdd_gc_in_progress, &zero, 1)) {
         NEWFRAME(limdd_gc_go);
         limdd_gc_in_progress = 0;
     } else {
-        while (atomic_load_explicit(&lace_newframe.t, memory_order_relaxed) == 0) {}
-        lace_yield(__lace_worker, __lace_dq_head);
+        while (atomic_load_explicit(&limdd_gc_in_progress, memory_order_acquire) != 0) {
+            YIELD_NEWFRAME();
+        }
     }
 }
 
@@ -433,9 +466,9 @@ limdd_gc_wanted(void)
 {
     /*
      * The weight table keeps a plain counter, so it is asked every time. The
-     * other three walk an occupancy bitmap to count, which cost 17% of a run
+     * other four walk an occupancy bitmap to count, which cost 17% of a run
      * on a 20-qubit Clifford+T circuit when asked every gate -- more than the
-     * coset search -- so they are asked every 16th time. The eighth of
+     * coset search -- so they are asked every 16th time. The quarter of
      * headroom in table_wants_gc is what absorbs those 16 gates.
      */
     if (table_wants_gc(wgt_table_entries_estimate(),
@@ -445,9 +478,25 @@ limdd_gc_wanted(void)
     static _Atomic(uint64_t) calls = 0;
     if ((atomic_fetch_add(&calls, 1) & 15u) != 0) return false;
 
-    return table_wants_gc(limdd_lim_table_count(), limdd_lim_table_size(),
-                          limdd_gc_floor_lim)
-        || table_wants_gc(limdd_node_table_count(), limdd_node_table_size(),
+    const uint64_t lims = limdd_lim_table_count();
+    if (table_wants_gc(lims, limdd_lim_table_size(), limdd_gc_floor_lim)) return true;
+
+    /*
+     * The Pauli words too. A LIMDD and the BQD's scalar family intern few of
+     * them, but in the BQD's Pauli family every label product can make a new
+     * word, at about a third of the rate of new LIMs and far above that of
+     * new nodes, and a Pauli table that fills unasked stops the run with the
+     * other tables nearly empty. Every word the table holds is the word of a
+     * LIM, since only limdd_lim_make interns one, so the table can be three
+     * quarters full only when there are as many LIMs, and until then its
+     * count, another walk of a bitmap, is not taken.
+     */
+    const uint64_t pauli_size = limdd_pauli_table_size();
+    if (lims > pauli_size - (pauli_size >> 2) &&
+        table_wants_gc(limdd_pauli_table_count(), pauli_size, limdd_gc_floor_pauli))
+        return true;
+
+    return table_wants_gc(limdd_node_table_count(), limdd_node_table_size(),
                           limdd_gc_floor_node)
         || table_wants_gc(limdd_stab_table_count(), limdd_stab_table_size(),
                           limdd_gc_floor_stab);

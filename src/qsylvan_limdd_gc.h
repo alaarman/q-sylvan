@@ -122,6 +122,13 @@ bool limdd_gc_wanted(void);
 void  limdd_refs_init(void);
 /** Free the stacks limdd_refs_init made; called by limdd_nodes_quit. */
 void  limdd_refs_quit(void);
+
+/**
+ * Forget what an earlier session left: clear the operation cache, whose
+ * entries are keyed on indices the new tables hand out again, and the floors
+ * of the last collection. Called by limdd_nodes_init.
+ */
+void  limdd_gc_new_session(void);
 LIMDD limdd_refs_push(LIMDD e);
 void  limdd_refs_pop(long amount);
 void  limdd_refs_pushptr(const LIMDD *ptr);

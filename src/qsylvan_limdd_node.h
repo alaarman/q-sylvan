@@ -154,7 +154,8 @@ typedef uint64_t LIMDD_TARG;
  * Create the LIMDD node table, and the LIM, Pauli and stabiliser tables under it.
  *
  * The edge weight table must already exist and must hold complex weights.
- * Must be called from a Lace worker.
+ * Clears the operation cache, whose entries an earlier session keyed on the
+ * indices these tables hand out again. Must be called from a Lace worker.
  */
 void limdd_nodes_init(size_t nqubits, size_t node_tablesize,
                       size_t pauli_tablesize, size_t lim_tablesize,
