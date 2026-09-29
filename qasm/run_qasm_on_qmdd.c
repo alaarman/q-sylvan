@@ -69,6 +69,9 @@ static FILE *trace_out = NULL;
 typedef enum { DD_QMDD, DD_LIMDD, DD_LIMDD_HEUR, DD_BQD } dd_kind_t;
 static dd_kind_t dd_kind = DD_QMDD;
 static const char *dd_kind_name = "qmdd";
+static bqd_family_t bqd_family_opt = BQD_FAMILY_SCALAR;   /* --bqd-family */
+static const char *bqd_family_opt_name = "scalar";
+static bool bqd_family_set = false;
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
 static char* json_outputfile = NULL;
@@ -97,7 +100,7 @@ static struct argp_option options[] =
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
     {"state-vector", 'v', 0, 0, "Also output the complete state vector", 0},
     {"node-tab-size", 1000, "<size>", 0, "log2 of max node table size (max 40)", 0},
-    {"lim-tab-size", 1012, "<size>", 0, "LIMDD only: log2 of the LIM table size. Default is four times the node table. A LIMDD mints far more labels than it keeps, so this is what fills first on wide circuits; it has no QMDD counterpart, so raising it does not change how a QMDD is resourced.", 0},
+    {"lim-tab-size", 1012, "<size>", 0, "With -d limdd, limdd-heur or bqd: log2 of the LIM table size. Default is four times the node table, and sixteen times with --bqd-family pauli. A LIMDD mints far more labels than it keeps, and so does a BQD with x or pauli labels, so this is what fills first on wide circuits; it has no QMDD counterpart, so raising it does not change how a QMDD is resourced. With --bqd-family x or pauli the Pauli-word table gets the same size, since there every label product can make a new word.", 0},
     {"wgt-tab-size", 1001, "<size>", 0, "log2 of max edge weigth table size (max 30 (23 if node table >2^30))", 0},
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
@@ -106,7 +109,8 @@ static struct argp_option options[] =
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
-    {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram with scalar labels, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It needs -e qisq2 once a gate can cancel amplitudes. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
+    {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram, with scalar labels unless --bqd-family picks others, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It is meant for -e qisq2: on float weights it runs every gate but warns, since after a gate that can cancel amplitudes a rounding residue can move an amplitude by orders of magnitude. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
+    {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound. Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. On a 16-qubit Clifford+T circuit both take longer than the scalar family with two fifths of its nodes or fewer, and on a 20-qubit Clifford circuit x takes as long with a fifth of them; pauli is the faster one there. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float both run with the scalar family's warning and are more fragile: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -215,12 +219,21 @@ parse_opt(int key, char *arg, struct argp_state *state)
         else if (strcmp(arg, "bqd") == 0)         dd_kind = DD_BQD;
         else argp_error(state, "unknown dd type '%s'", arg);
         break;
+    case 1014:
+        bqd_family_opt_name = arg;
+        bqd_family_set = true;
+        if (strcmp(arg, "scalar") == 0)      bqd_family_opt = BQD_FAMILY_SCALAR;
+        else if (strcmp(arg, "x") == 0)      bqd_family_opt = BQD_FAMILY_X;
+        else if (strcmp(arg, "pauli") == 0)  bqd_family_opt = BQD_FAMILY_PAULI;
+        else argp_error(state, "unknown bqd family '%s'", arg);
+        break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1) argp_usage(state);
         qasm_inputfile = arg;
         break;
     case ARGP_KEY_END:
         if (state->arg_num < 1) argp_usage(state);
+        if (bqd_family_set && dd_kind != DD_BQD) argp_error(state, "--bqd-family needs -d bqd");
         break;
     default:
         return ARGP_ERR_UNKNOWN;
@@ -256,6 +269,15 @@ typedef struct stats_s {
 stats_t stats;
 
 
+/* JSON has no NaN or infinity, which a float BQD can reach once a ratio is
+ * taken over a rounding residue: those print as null. */
+static void
+fprint_json_double(FILE *stream, const char *fmt, double v)
+{
+    if (isfinite(v)) fprintf(stream, fmt, v);
+    else fprintf(stream, "null");
+}
+
 void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
 {
     fprintf(stream, "{\n");
@@ -271,8 +293,9 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
                 ? qmdd_get_amplitude(stats.final_state, x, circuit->qreg_size)
                 : weight_as_complex(final_vector[k]);
             fprintf(stream, "    [\n");
-            fprintf(stream, "      %.16lf,\n", c.r);
-            fprintf(stream, "      %.16lf\n", c.i);
+            fprintf(stream, "      "); fprint_json_double(stream, "%.16lf", c.r);
+            fprintf(stream, ",\n      "); fprint_json_double(stream, "%.16lf", c.i);
+            fprintf(stream, "\n");
             if (k == (1<<(circuit->qreg_size))-1)
                 fprintf(stream, "    ]\n");
             else
@@ -293,10 +316,10 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"max_qisq_size\": %" PRIu64 ",\n", stats.max_qisq_size);
     fprintf(stream, "    \"limdd_collections\": %" PRIu64 ",\n", stats.limdd_collections);
     fprintf(stream, "    \"n_qubits\": %d,\n", circuit->qreg_size);
-    fprintf(stream, "    \"norm\": %.5e,\n", stats.norm);
-    fprintf(stream, "    \"unnormed_measurement_prob\": %.5e,\n", stats.unnormed_prob);
-    fprintf(stream, "    \"normed_measurement_prob\": %.5e,\n", stats.normed_prob);
-    fprintf(stream, "    \"first_qubit_measurement_prob\": %.5e,\n", stats.first_qubit_prob);
+    fprintf(stream, "    \"norm\": "); fprint_json_double(stream, "%.5e", stats.norm); fprintf(stream, ",\n");
+    fprintf(stream, "    \"unnormed_measurement_prob\": "); fprint_json_double(stream, "%.5e", stats.unnormed_prob); fprintf(stream, ",\n");
+    fprintf(stream, "    \"normed_measurement_prob\": "); fprint_json_double(stream, "%.5e", stats.normed_prob); fprintf(stream, ",\n");
+    fprintf(stream, "    \"first_qubit_measurement_prob\": "); fprint_json_double(stream, "%.5e", stats.first_qubit_prob); fprintf(stream, ",\n");
     fprintf(stream, "    \"reorder\": %d,\n", reorder_qubits);
     fprintf(stream, "    \"seed\": %d,\n", rseed);
     fprintf(stream, "    \"shots\": %" PRIu64 ",\n", stats.shots);
@@ -305,6 +328,7 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"wgt_inv_caching\": %d,\n", wgt_inv_caching);
     fprintf(stream, "    \"dd\": \"%s\",\n", dd_kind_name);
     fprintf(stream, "    \"canon\": \"%s\",\n", canon_name);
+    fprintf(stream, "    \"bqd_family\": \"%s\",\n", dd_kind == DD_BQD ? bqd_family_opt_name : "n/a");
     fprintf(stream, "    \"merging_rule\": \"%s\",\n",
             rel_tolerance >= 0 ? "hybrid" : "absolute");
     fprintf(stream, "    \"rel_tol\": %.5e,\n", rel_tolerance);
@@ -745,8 +769,10 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
 }
 
 /**
- * The BQD arm: the binary quotient diagram with scalar labels, on the same
- * Clifford+T gate set and through the same dispatch as the LIMDD arm.
+ * The BQD arm: the binary quotient diagram, with the labels --bqd-family
+ * picks, on the same Clifford+T gate set and through the same dispatch as
+ * the LIMDD arm. What follows is about the scalar family; the other two come
+ * after it.
  *
  * The paper proves two operations on it (tab:ops), the product on full
  * support (prop:prodscalar) and one monomial of a diagonal gate (prop:diag),
@@ -758,33 +784,32 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
  * every qubit and then diagonal gates, therefore stays on the proved path
  * after its first layer.
  *
- * Exact weights are what the arm is for. On floats the quotient rule is not
- * reliable once a gate can cancel: a residue where the value should be 0
- * turns a copy point into a ratio point and an amplitude of size 1 into 0,
- * and no tolerance avoids that (test_bqd_gates.c has the measurements). So
- * on floats only the gates that cannot cancel are taken: the diagonal ones,
- * and a Hadamard on a qubit no gate has touched, which is the IQP layer.
+ * Exact weights are what the arm is for. Float weights are taken all the
+ * same, in every family and for every gate, with a warning: what they do is
+ * worth measuring, and it is not what they do to an EVDD. A residue where a
+ * value should be 0 turns a copy point into a ratio point, and a value that
+ * merges into 0 turns a ratio point into a copy point, so a node that stored
+ * 1 / 1e-14 decodes to 1e14 where it decoded to 1. One merge within the
+ * tolerance can then move an amplitude by orders of magnitude, where in an
+ * EVDD it loses one that was small already, and no tolerance avoids that
+ * (test_bqd_gates.c has the measurements). Only the gates that cannot cancel
+ * are safe on floats: the diagonal ones, and a Hadamard on a qubit no gate
+ * has touched, which is the IQP layer.
+ *
+ * The translation and Pauli families, the X-BQD and the Pauli-BQD, take the
+ * same gates through the same entry points (qsylvan_bqd_xp.h): the diagonal
+ * ones by the O(n) walk while the state has full support, the scalar
+ * family's in the translation family and one with label products in the
+ * Pauli family, and every other gate by the recursion on labelled edges.
+ * They start from the same |0...0>. On floats they have two more ways to go
+ * wrong. Their canonical form places every translation at the least point of
+ * a support, a comparison with zero that a residue decides wrongly, and in
+ * the Pauli family it takes the sign of a pivot from an argument in [0, pi),
+ * which a Clifford+T value on the real axis has at the edge: a rounding error
+ * of either sign in its imaginary part flips the node and moves a Z onto the
+ * incoming edge. That still denotes the same function, so it costs sharing
+ * and not accuracy. The same warning covers them.
  */
-static bool
-is_phase_gate(const char *name)
-{
-    static const char *const phase[] = { "id", "z", "s", "sdg", "t", "tdg", "cz",
-                                         "cs", "csdg", "ccz", NULL };
-    for (int i = 0; phase[i] != NULL; i++) if (strcmp(name, phase[i]) == 0) return true;
-    return false;
-}
-
-static bool
-bqd_float_takes(const quantum_op_t *op, uint64_t *touched)
-{
-    uint64_t qs = UINT64_C(1) << op->targets[0];
-    if (op->targets[1] >= 0) qs |= UINT64_C(1) << op->targets[1];
-    for (int c = 0; c < 3; c++) if (op->ctrls[c] >= 0) qs |= UINT64_C(1) << op->ctrls[c];
-    const bool ok = is_phase_gate(op->name)
-                 || (strcmp(op->name, "h") == 0 && (*touched & qs) == 0);
-    *touched |= qs;
-    return ok;
-}
 
 TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
 {
@@ -793,8 +818,12 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
         fprintf(stderr, "bqd: %u qubits, but a vector index is one 64-bit word\n", n);
         return 1;
     }
-    const bool exact = (sylvan_get_edge_weight_type() == WGT_QISQ2);
-    uint64_t touched = 0;
+    if (sylvan_get_edge_weight_type() != WGT_QISQ2) {
+        fprintf(stderr, "bqd: warning: float weights. The quotient rule divides by values "
+                        "a rounding residue can stand in for, and a value that merges into "
+                        "0 turns a ratio into a copy, so after a gate that can cancel the "
+                        "state can be far off; -e qisq2 is exact\n");
+    }
 
     const double t_start = wctime();
     BQD state = bqd_basis_state(0, n);
@@ -806,13 +835,6 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
     for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
         if (op->type == op_measurement) break;   /* nothing to take from it */
         if (op->type != op_gate) continue;
-        if (!exact && !bqd_float_takes(op, &touched)) {
-            fprintf(stderr, "bqd: '%s' can cancel amplitudes, and on float weights "
-                            "the quotient rule is not reliable then; use -e qisq2\n",
-                    op->name);
-            limdd_unprotect(&state);
-            return 1;
-        }
         if (!dd_apply_gate(&BQD_GATES, &state, op, n)) { limdd_unprotect(&state); return 1; }
 
         if (count_nodes) {
@@ -1014,15 +1036,34 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          * LIMDD_LIM_MAX the index does not fit in an edge however much room
          * the table has.
          */
-        size_t lim_t = lim_tab_size_log2 ? (1ULL << lim_tab_size_log2) : (lt << 2);
+        /*
+         * The BQD's Pauli family mints about eleven LIMs per node it mints,
+         * and up to 70,000 in one gate on a 16-qubit Clifford+T circuit whose
+         * state has a few hundred nodes, so its LIM table fills first by far.
+         * It gets sixteen times the node table, and by default a node table a
+         * quarter of the others', which it does not come near filling, so that
+         * its LIM table is the size the others' is.
+         */
+        const bool bqd_pauli = dd_kind == DD_BQD && bqd_family_opt == BQD_FAMILY_PAULI;
+        if (bqd_pauli && !node_tab_size_set && lt > (1LL<<21)) lt = 1LL<<21;
+        size_t lim_t = lim_tab_size_log2 ? (1ULL << lim_tab_size_log2) : (lt << (bqd_pauli ? 4 : 2));
         if (lim_t > LIMDD_LIM_MAX) lim_t = LIMDD_LIM_MAX;
+
+        /*
+         * The Pauli words. A LIMDD and the scalar BQD make few, but in the
+         * BQD's translation and Pauli families every label product can make
+         * a new word, in the Pauli family at about a third of the rate of new
+         * LIMs. As large as the LIM table, the Pauli table cannot fill first:
+         * every word it holds is the word of a LIM.
+         */
+        const size_t pauli_t = (dd_kind == DD_BQD && bqd_family_opt != BQD_FAMILY_SCALAR) ? lim_t : lt;
 
         /* The circuit's width, not LIMDD_MAX_QUBITS: the recursions stop when
          * they reach it, so a value larger than the diagram is deep sends
          * them past the terminal. */
         if (dd_kind == DD_BQD) {
             /* The same tables, read under the quotient rule; see qsylvan_bqd.h. */
-            bqd_init(BQD_FAMILY_SCALAR, circuit->qreg_size, lt, lt, lim_t, lt);
+            bqd_init(bqd_family_opt, circuit->qreg_size, lt, pauli_t, lim_t, lt);
             if (CALL(bqd_simulate_circuit, circuit) != 0) {
                 bqd_quit();
                 exit(1);

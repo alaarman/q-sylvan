@@ -3,8 +3,11 @@ The BQD and LIMDD arms of run_qasm_on_qmdd against the EVDD arm.
 
 Neither a BQD nor a LIMDD prints its state the way a QMDD does; -v decodes it,
 and the decoded vector must be the EVDD's, amplitude for amplitude, on the
-Clifford+T gate set the two arms share, Hadamards anywhere. The BQD arm must
-also refuse what it cannot do reliably: float weights once a gate can cancel.
+Clifford+T gate set the two arms share, Hadamards anywhere. The BQD arm runs
+in each of its three label families (--bqd-family): the scalar one, the
+X-BQD and the Pauli-BQD. On float weights it runs every gate with a warning;
+there the gates that cannot cancel, the diagonal ones and a first Hadamard,
+must still give the EVDD's state, and the others must at least run.
 """
 import os
 import random
@@ -72,20 +75,23 @@ def iqp_circuit(n, gates, seed):
     return "\n".join(lines)
 
 
-def run(path, dd, backend, check=True, sizes=SIZES):
+def run(path, dd, backend, check=True, sizes=SIZES, family=None, extra=()):
+    fam = ['--bqd-family', family] if family else []
     out = subprocess.run([SIM_QASM, path, '-d', dd, '-e', backend, '-s', 'low',
-                          '--state-vector', '-m', *sizes],
+                          '--state-vector', '-m', *sizes, *fam, *extra],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if not check:
         return out
     assert out.returncode == 0, out.stderr.decode()
     data = json.loads(out.stdout)
     vec = [complex(*a) for a in data['state_vector']]
+    if family:
+        assert data['statistics']['bqd_family'] == family
     return vec, data['statistics']
 
 
-def agree(path, dd, backend, n):
-    vd, sd = run(path, dd, backend)
+def agree(path, dd, backend, n, family=None):
+    vd, sd = run(path, dd, backend, family=family)
     vq, sq = run(path, 'qmdd', backend)
     assert len(vd) == len(vq) == 2 ** n
     assert max(abs(a - b) for a, b in zip(vd, vq)) < 1e-9, (path, dd)
@@ -103,6 +109,16 @@ def test_clifford_t_exact(dd, tmp_path):
             agree(str(path), dd, 'qisq2', n)
 
 
+@pytest.mark.parametrize("family", ['x', 'pauli'])
+def test_bqd_families_clifford_t_exact(family, tmp_path):
+    """The X-BQD and the Pauli-BQD on the circuits of the scalar arm above."""
+    for n in range(2, 8):
+        for seed in range(3):
+            path = tmp_path / f"ct_{n}_{seed}.qasm"
+            path.write_text(clifford_t_circuit(n, 8 * n, 1000 * n + seed))
+            agree(str(path), 'bqd', 'qisq2', n, family)
+
+
 @pytest.mark.parametrize("backend", ['qisq2', 'float'])
 def test_iqp(backend, tmp_path):
     for n in range(2, 9):
@@ -112,25 +128,62 @@ def test_iqp(backend, tmp_path):
             agree(str(path), 'bqd', backend, n)
 
 
-@pytest.mark.parametrize("kind, n, gates, log_nodes", [
-    ('clifford', 8, 1500, 14),
-    ('iqp', 12, 3000, 12),
+@pytest.mark.parametrize("backend", ['qisq2', 'float'])
+@pytest.mark.parametrize("family", ['x', 'pauli'])
+def test_bqd_families_iqp(family, backend, tmp_path):
+    for n in range(2, 9):
+        for seed in range(3):
+            path = tmp_path / f"iqp_{n}_{seed}.qasm"
+            path.write_text(iqp_circuit(n, 6 * n, 100 * n + seed))
+            agree(str(path), 'bqd', backend, n, family)
+
+
+@pytest.mark.parametrize("workers", [1, 4])
+@pytest.mark.parametrize("kind, n, gates, log_nodes, family", [
+    ('clifford', 8, 1500, 14, None),
+    ('iqp', 12, 3000, 12, None),
+    ('clifford', 8, 1500, 14, 'x'),
+    ('iqp', 12, 3000, 12, 'x'),
+    ('clifford', 8, 3000, 13, 'pauli'),
+    ('iqp', 12, 3000, 12, 'pauli'),
 ])
-def test_bqd_collects_between_gates(kind, n, gates, log_nodes, tmp_path):
+def test_bqd_collects_between_gates(kind, n, gates, log_nodes, family, workers, tmp_path):
     """A node table small enough that the runner collects between gates, on
     diagrams that skip the qubits a state does not depend on: the sweep, the
-    cleared memo and the buckets built on again must leave the EVDD's state.
-    Each table is the smallest the runner takes, or at least twice the
-    smallest in which its circuit finishes, and the collections are counted,
-    so that the case cannot stop collecting unnoticed."""
+    cleared memo and the buckets built on again must leave the EVDD's state,
+    in every family, on one worker and on four. Each table is the smallest the
+    runner takes, or at least twice the smallest in which its circuit
+    finishes, and the collections are counted, so that the case cannot stop
+    collecting unnoticed. The Pauli-BQD keeps so few nodes on the Clifford
+    circuit that it runs twice as many gates to collect; its smallest table
+    is twice the one in which one worker finishes, since four workers each
+    hold a region of 512 buckets and fill a table of 2^12 early."""
     path = tmp_path / f"{kind}_{n}.qasm"
     make = clifford_circuit if kind == 'clifford' else iqp_circuit
     path.write_text(make(n, gates, 7))
     small = ['--node-tab-size', str(log_nodes), '--wgt-tab-size', '18']
-    vd, sd = run(str(path), 'bqd', 'qisq2', sizes=small)
+    vd, sd = run(str(path), 'bqd', 'qisq2', sizes=small, family=family,
+                 extra=['-w', str(workers)])
     vq, sq = run(str(path), 'qmdd', 'qisq2')
     assert sd['limdd_collections'] >= 2, sd['limdd_collections']
     assert len(vd) == len(vq) == 2 ** n
+    assert max(abs(a - b) for a, b in zip(vd, vq)) < 1e-9
+
+
+@pytest.mark.parametrize("log_nodes", [12, 13])
+def test_bqd_pauli_words_do_not_fill_first(log_nodes, tmp_path):
+    """The Pauli-BQD makes a new Pauli word with many of its label products,
+    far more of them than new nodes. With the Pauli-word table the size of
+    the node table, as the runner once gave it, this circuit stopped with
+    that table full while the node and LIM tables were nearly empty, and no
+    collection was asked for. The runner now gives it the LIM table's size,
+    and the collection trigger watches it."""
+    path = tmp_path / "cl_14.qasm"
+    path.write_text(clifford_circuit(14, 350, 7))
+    sizes = ['--node-tab-size', str(log_nodes), '--lim-tab-size', '20', '--wgt-tab-size', '18']
+    vd, sd = run(str(path), 'bqd', 'qisq2', sizes=sizes, family='pauli')
+    vq, sq = run(str(path), 'qmdd', 'qisq2')
+    assert len(vd) == len(vq) == 2 ** 14
     assert max(abs(a - b) for a, b in zip(vd, vq)) < 1e-9
 
 
@@ -145,16 +198,25 @@ def test_first_qubit_when_qubit_zero_is_skipped(tmp_path):
             assert abs(st['first_qubit_measurement_prob'] - 0.5) < 1e-12, (n, dd)
 
 
-@pytest.mark.parametrize("body", [
-    ["h q[0];", "h q[1];", "t q[0];", "h q[1];"],      # a Hadamard on a touched qubit
-    ["h q[0];", "cx q[0],q[1];"],                       # not diagonal
-])
-def test_bqd_float_refuses_cancelling_gates(body, tmp_path):
-    path = tmp_path / "bad.qasm"
-    path.write_text("\n".join(HEADER + ["qreg q[2];"] + body))
-    out = run(str(path), 'bqd', 'float', check=False)
+@pytest.mark.parametrize("family", [None, 'x', 'pauli'])
+def test_bqd_float_runs_with_a_warning(family, tmp_path):
+    """Float weights are taken for every gate in every family, with a warning
+    on stderr, and gates that can cancel must not crash the run."""
+    for n in range(2, 7):
+        for seed in range(3):
+            path = tmp_path / f"ct_{n}_{seed}.qasm"
+            path.write_text(clifford_t_circuit(n, 8 * n, 1000 * n + seed))
+            out = run(str(path), 'bqd', 'float', check=False, family=family)
+            assert out.returncode == 0, (path, out.stderr)
+            assert b'bqd: warning: float weights' in out.stderr
+
+
+def test_bqd_family_needs_bqd(tmp_path):
+    path = tmp_path / "h.qasm"
+    path.write_text("\n".join(HEADER + ["qreg q[1];", "h q[0];"]))
+    out = run(str(path), 'limdd', 'qisq2', check=False, family='x')
     assert out.returncode != 0
-    assert b'bqd:' in out.stderr
+    assert b'bqd-family' in out.stderr
 
 
 def test_rotation_refused_on_exact_weights(tmp_path):
