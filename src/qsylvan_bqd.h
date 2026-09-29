@@ -147,7 +147,10 @@ typedef enum {
  * vector is indexed by a 64-bit word, so `nqubits` may not exceed 63. Must be
  * called from a Lace worker; the edge weight table must already exist and
  * must hold complex weights. Not to be combined with limdd_nodes_init in one
- * session: the two share the tables.
+ * session: the two share the tables. In the translation and Pauli families
+ * pauli_tablesize may not exceed 2^32, since their memo keys hold the index
+ * of a Pauli word in 32 bits. A session starts with an empty operation cache
+ * (limdd_nodes_init), so one session's memo cannot answer for the next.
  */
 void bqd_init(bqd_family_t family, size_t nqubits, size_t node_tablesize,
               size_t pauli_tablesize, size_t lim_tablesize, size_t stab_tablesize);
@@ -180,6 +183,13 @@ void bqd_lim_masks(LIMDD_LIM lim, uint32_t nqubits, EVBDD_WGT *c, uint64_t *s, u
  */
 void bqd_representative(const EVBDD_WGT *g, uint64_t len, EVBDD_WGT *rep,
                         EVBDD_WGT *c0, uint64_t *s, uint64_t *p);
+
+/**
+ * Whether arg(w) lies in [0, pi), for w nonzero: the test of def:prep at a
+ * pivot, which the Pauli family's Compose repeats (qsylvan_bqd_xp.h). Exact
+ * for the algebraic weights, and only as good as the rounding for floats.
+ */
+bool bqd_arg_in_upper(EVBDD_WGT w);
 
 /**
  * The canonical diagram of a vector of length 2^nqubits, with EVBDD_ZERO for

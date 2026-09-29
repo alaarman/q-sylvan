@@ -19,6 +19,7 @@
 
 #include "qsylvan_bqd_ops.h"
 #include "qsylvan_bqd_gates.h"
+#include "qsylvan_bqd_xp.h"
 #include "qsylvan_limdd_gc.h"
 
 static inline EVBDD_WGT
@@ -34,23 +35,28 @@ with_scalar(EVBDD_WGT c, LIMDD_TARG t, uint32_t n)
 }
 
 /*
- * The two hypotheses of prop:prodscalar, checked in every build and not by
- * assert. Outside them the recursion does not fail, it returns a diagram of
- * the wrong function: with a zero cofactor the copy fires and the ratio of
- * the products is no longer the product of the ratios, and a translation or
- * sign label is read as a scalar. The entry points test full support of the
- * whole diagram and take the general product of qsylvan_bqd_gates.h when it
- * fails; the per-node check below is what is left, a guard that fires only
- * if that routing is wrong.
+ * The two hypotheses of prop:prodscalar, scalar labels and full support.
+ * Outside them the recursion does not fail, it returns a diagram of the
+ * wrong function: with a zero cofactor the copy fires and the ratio of the
+ * products is no longer the product of the ratios, and a translation or
+ * sign label is read as a scalar. The translation family has scalar labels
+ * wherever the support is full, since every least point is then 0, and its
+ * diagram is the scalar family's node for node (skip:sec:xp:apply). The
+ * Pauli family has sign labels there, and a product of two pivot values in
+ * [0, pi) need not be in [0, pi), so a node of the product may need the sign
+ * repair, which the walks here do not make. So bqd_product takes the Pauli
+ * family, and both take a diagram without full support, to the general
+ * product of qsylvan_bqd_gates.h. The diagonal gate of the Pauli family has
+ * a walk of its own, bqd_xp_diagonal, the one below with label products,
+ * which makes the repair at the one level where it can be needed. Full
+ * support is tested of the whole diagram once; the per-node check below is
+ * what is left, checked in every build and not by assert, a guard that
+ * fires only if that routing is wrong.
  */
-static void
-require_scalar_family(const char *op)
+static inline bool
+scalar_labels_on_full_support(void)
 {
-    if (bqd_family() != BQD_FAMILY_SCALAR) {
-        fprintf(stderr, "sylvan: %s is proved for scalar labels only (prop:prodscalar), "
-                        "and this session holds a %s\n", op, bqd_family_name(bqd_family()));
-        exit(1);
-    }
+    return bqd_family() != BQD_FAMILY_PAULI;
 }
 
 static void
@@ -165,7 +171,7 @@ TASK_2(BQD, bqd_product_rec, BQD, f, BQD, g)
 
 TASK_IMPL_2(BQD, bqd_product, BQD, f, BQD, g)
 {
-    require_scalar_family("bqd_product");
+    if (!scalar_labels_on_full_support()) return bqd_multiply(f, g);
     if (limdd_edge_is_zero(f) || limdd_edge_is_zero(g)) return limdd_zero_edge();
     /* the hypothesis for the whole recursion, tested once: a zero anywhere
      * below is where the ratio of the products stops being the product */
@@ -209,10 +215,13 @@ monomial_edge(uint64_t A, EVBDD_WGT phase, uint32_t n)
     return h;
 }
 
+/* The monomial has full support, so in the translation family its labels are
+ * scalars and it is the scalar family's; in the Pauli family a factor -1 is a
+ * Z on a label, and Mono makes it with Compose (qsylvan_bqd_xp.h). */
 BQD
 bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t n)
 {
-    require_scalar_family("bqd_monomial");
+    if (!scalar_labels_on_full_support()) return bqd_xp_monomial(A, phase, n);
     return monomial_edge(A, phase, n);
 }
 
@@ -309,12 +318,12 @@ diag_rec(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits)
 BQD
 bqd_apply_diagonal_counted(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits)
 {
-    require_scalar_family("bqd_apply_diagonal");
     if (visits != NULL) *visits = 0;
     if (!bqd_has_full_support(e)) {
         if (limdd_edge_is_zero(e)) return e;
         return bqd_multiply(e, bqd_monomial(A, phase, n));
     }
+    if (!scalar_labels_on_full_support()) return bqd_xp_diagonal(e, A, phase, n, visits);
     return diag_rec(e, A, phase, n, visits);
 }
 

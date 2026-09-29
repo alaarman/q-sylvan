@@ -159,6 +159,17 @@ static const uint64_t CACHE_EVBDD_PROJECT            = (121LL<<40);
 static const uint64_t CACHE_LIMDD_TIMES              = (122LL<<40);
 static const uint64_t CACHE_LIMDD_RESTRICT           = (123LL<<40);
 static const uint64_t CACHE_LIMDD_PROJECT            = (124LL<<40);
+/* the BQD's translation and Pauli families, qsylvan_bqd_xp.h: their keys hold
+ * labelled edges, which the scalar family's never do */
+static const uint64_t CACHE_BQD_XP_MUL               = (125LL<<40);
+static const uint64_t CACHE_BQD_XP_ADD               = (126LL<<40);
+static const uint64_t CACHE_BQD_XP_XPROD             = (127LL<<40);
+static const uint64_t CACHE_BQD_XP_XQUOT             = (128LL<<40);
+static const uint64_t CACHE_BQD_XP_CANON             = (129LL<<40);
+static const uint64_t CACHE_BQD_XP_JOIN              = (130LL<<40);
+static const uint64_t CACHE_BQD_XP_GATE              = (131LL<<40);
+static const uint64_t CACHE_BQD_XP_RESTRICT          = (132LL<<40);
+static const uint64_t CACHE_BQD_XP_PROJECT           = (133LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);

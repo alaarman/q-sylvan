@@ -53,7 +53,15 @@
  * support, and fall back to the product here when it does not, since the walk
  * is only correct on full support.
  *
- * Everything is for the scalar family, and checked; from a Lace worker.
+ * Everything here is for all three label families. In the translation and
+ * Pauli families the entry points dispatch to qsylvan_bqd_xp.h, whose
+ * recursion is the one above on labelled edges, at the top of its arguments
+ * rather than at their nodes, with Canon wherever the scalar family returns
+ * an operand or a cofactor as it is. The diagonal gates are the O(n) walk on
+ * full support in every family: the scalar family's in the translation
+ * family too, whose diagram of a function of full support is the scalar
+ * family's, and one with label products and a sign repair in the Pauli
+ * family (qsylvan_bqd_xp.h). From a Lace worker.
  */
 
 #ifndef QSYLVAN_BQD_GATES_H
@@ -68,7 +76,11 @@ extern "C" {
 
 /* --- states --------------------------------------------------------------- */
 
-/** The basis state |x>, x a vector index (qubit q at bit n-1-q): n nodes. */
+/**
+ * The basis state |x>, x a vector index (qubit q at bit n-1-q): n nodes. In
+ * the translation and Pauli families X^x on the nodes of |0...0>, which every
+ * basis state shares.
+ */
 BQD bqd_basis_state(uint64_t x, uint32_t nqubits);
 
 /** Whether e is nonzero at every point. Memoised on nodes, so O(|e|) at most. */
@@ -76,11 +88,14 @@ bool bqd_has_full_support(BQD e);
 
 /* --- pointwise operations on any support ---------------------------------- */
 
-/** f . g, on any supports. bqd_product is the O(|f||g|) case of full support. */
+/**
+ * f . g, on any supports, in every family. bqd_product is the O(|f||g|) case
+ * of full support in the scalar family.
+ */
 TASK_DECL_2(BQD, bqd_multiply, BQD, BQD);
 #define bqd_multiply(f, g) RUN(bqd_multiply, f, g)
 
-/** f + g. */
+/** f + g, in every family. */
 TASK_DECL_2(BQD, bqd_add, BQD, BQD);
 #define bqd_add(f, g) RUN(bqd_add, f, g)
 
@@ -89,20 +104,23 @@ TASK_DECL_2(BQD, bqd_add, BQD, BQD);
  * f_0 = lo and f_1 = hi (canonical edges read at level var + 1, which may
  * skip levels below it). Where lo == hi the function does not depend on
  * x_var, and the result is lo itself, which skips var (skip:alg:constructors).
+ * In the Pauli family so is lo == -hi, with a Z at var on lo's label
+ * (skip:prop:xcompose).
  */
 TASK_DECL_3(BQD, bqd_compose, uint32_t, BQD, BQD);
 #define bqd_compose(var, lo, hi) RUN(bqd_compose, var, lo, hi)
 
 /**
  * The cofactor x_var = b of the function e denotes read at level `var`, as an
- * edge read at var + 1. An edge that skips var, whose node is below it or is
- * the terminal, denotes a function that does not depend on x_var, and is its
- * own cofactor on both sides.
+ * edge read at var + 1, canonical. An edge that skips var, whose node is below
+ * it or is the terminal, denotes a function that does not depend on x_var,
+ * and is its own cofactor on both sides; in the Pauli family unless its label
+ * has a Z at var, and the two cofactors are then opposite.
  */
 TASK_DECL_3(BQD, bqd_cofactor, BQD, uint32_t, int);
 #define bqd_cofactor(e, var, b) RUN(bqd_cofactor, e, var, b)
 
-/** c . e, and -e. */
+/** c . e, and -e, in every family. */
 BQD bqd_scale(BQD e, EVBDD_WGT c);
 BQD bqd_negate(BQD e);
 

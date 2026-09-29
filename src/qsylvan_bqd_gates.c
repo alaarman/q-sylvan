@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include "qsylvan_bqd_gates.h"
+#include "qsylvan_bqd_xp.h"
 #include "qsylvan_gates.h"
 #include "qsylvan_limdd_gc.h"
 
@@ -49,16 +50,6 @@ scale(EVBDD_WGT c, BQD e)
     if (c == EVBDD_ZERO || limdd_edge_is_zero(e)) return limdd_zero_edge();
     if (c == EVBDD_ONE) return e;
     return edge(wgt_mul(c, scalar_of(e)), limdd_target(e));
-}
-
-static void
-require_scalar_family(const char *op)
-{
-    if (bqd_family() != BQD_FAMILY_SCALAR) {
-        fprintf(stderr, "sylvan: %s is for the scalar family, and this session "
-                        "holds a %s\n", op, bqd_family_name(bqd_family()));
-        exit(1);
-    }
 }
 
 /* --- pointwise operations -------------------------------------------------- */
@@ -97,6 +88,10 @@ op_scalar(int op, EVBDD_WGT a, EVBDD_WGT b)
 
 TASK_DECL_3(BQD, bqd_apply_op, int, BQD, BQD);
 TASK_DECL_1(BQD, bqd_high_cofactor, LIMDD_TARG);
+TASK_DECL_3(BQD, bqd_compose_scalar, uint32_t, BQD, BQD);
+TASK_DECL_3(BQD, bqd_cofactor_scalar, BQD, uint32_t, int);
+TASK_DECL_3(BQD, bqd_restrict_scalar, BQD, uint32_t, int);
+TASK_DECL_3(BQD, bqd_project_scalar, BQD, uint32_t, int);
 
 /**
  * The function with cofactors (a, b), at level var, in canonical form.
@@ -112,7 +107,7 @@ TASK_DECL_1(BQD, bqd_high_cofactor, LIMDD_TARG);
  * and not after, because where a is zero the quotient copies b and does not
  * divide it.
  */
-TASK_IMPL_3(BQD, bqd_compose, uint32_t, var, BQD, a, BQD, b)
+TASK_IMPL_3(BQD, bqd_compose_scalar, uint32_t, var, BQD, a, BQD, b)
 {
     if (a == b) return a;
     if (limdd_edge_is_zero(a)) {
@@ -189,10 +184,10 @@ TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
 
     const uint32_t lf = limdd_level(tf), lg = limdd_level(tg);
     const uint32_t var = lf < lg ? lf : lg;
-    const BQD f0 = CALL(bqd_cofactor, F, var, 0);
-    const BQD g0 = CALL(bqd_cofactor, G, var, 0);
-    const BQD f1 = CALL(bqd_cofactor, F, var, 1);
-    const BQD g1 = CALL(bqd_cofactor, G, var, 1);
+    const BQD f0 = CALL(bqd_cofactor_scalar, F, var, 0);
+    const BQD g0 = CALL(bqd_cofactor_scalar, G, var, 0);
+    const BQD f1 = CALL(bqd_cofactor_scalar, F, var, 1);
+    const BQD g1 = CALL(bqd_cofactor_scalar, G, var, 1);
 
     /* the two cofactors of the result are independent */
     limdd_refs_spawn(SPAWN(bqd_apply_op, op, f0, g0));
@@ -200,24 +195,35 @@ TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
     const BQD lo = limdd_refs_sync(SYNC(bqd_apply_op));
     limdd_refs_pop(1);
 
-    const BQD r = CALL(bqd_compose, var, lo, hi);
+    const BQD r = CALL(bqd_compose_scalar, var, lo, hi);
     cache_put3(op_cache_id(op), tf, tg, k, (uint64_t)r);
     return scale(outer, r);
 }
 
+/*
+ * The entry points below are where the translation and Pauli families part:
+ * their labels are not scalars, so they go to qsylvan_bqd_xp.h. The scalar
+ * recursion calls the scalar tasks directly and never tests the family.
+ */
 TASK_IMPL_2(BQD, bqd_multiply, BQD, f, BQD, g)
 {
-    require_scalar_family("bqd_multiply");
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_apply_op, BQD_OP_MUL, f, g);
     return CALL(bqd_apply_op, OP_MUL, f, g);
 }
 
 TASK_IMPL_2(BQD, bqd_add, BQD, f, BQD, g)
 {
-    require_scalar_family("bqd_add");
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_apply_op, BQD_OP_ADD, f, g);
     return CALL(bqd_apply_op, OP_ADD, f, g);
 }
 
-TASK_IMPL_3(BQD, bqd_cofactor, BQD, e, uint32_t, var, int, b)
+TASK_IMPL_3(BQD, bqd_compose, uint32_t, var, BQD, a, BQD, b)
+{
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_compose, var, a, b);
+    return CALL(bqd_compose_scalar, var, a, b);
+}
+
+TASK_IMPL_3(BQD, bqd_cofactor_scalar, BQD, e, uint32_t, var, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
@@ -229,16 +235,28 @@ TASK_IMPL_3(BQD, bqd_cofactor, BQD, e, uint32_t, var, int, b)
     return scale(scalar_of(e), c);
 }
 
+/* In the other two families the cofactor is a label product, which Canon
+ * makes the canonical edge (skip:lem:xcof, skip:prop:xcanon). */
+TASK_IMPL_3(BQD, bqd_cofactor, BQD, e, uint32_t, var, int, b)
+{
+    if (bqd_family() == BQD_FAMILY_SCALAR) return CALL(bqd_cofactor_scalar, e, var, b);
+    const BQD c = limdd_refs_push(CALL(bqd_xp_cofactor, e, var, b));
+    const BQD r = CALL(bqd_xp_canon, c);
+    limdd_refs_pop(1);
+    return r;
+}
+
 BQD
 bqd_scale(BQD e, EVBDD_WGT c)
 {
+    if (bqd_family() != BQD_FAMILY_SCALAR) return bqd_xp_scale(e, c);
     return scale(c, e);
 }
 
 BQD
 bqd_negate(BQD e)
 {
-    return scale(EVBDD_MIN_ONE, e);
+    return bqd_scale(e, EVBDD_MIN_ONE);
 }
 
 /*
@@ -252,7 +270,7 @@ bqd_negate(BQD e)
  * node at q with the edge on one side and zero on the other. Both are
  * answered before the lookup, in O(1).
  */
-TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
+TASK_IMPL_3(BQD, bqd_restrict_scalar, BQD, e, uint32_t, q, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
@@ -268,23 +286,23 @@ TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
         r = b ? CALL(bqd_high_cofactor, t) : f0;
     } else {
         const BQD f1 = CALL(bqd_high_cofactor, t);
-        limdd_refs_spawn(SPAWN(bqd_restrict, f1, q, b));
-        const BQD lo = limdd_refs_push(CALL(bqd_restrict, f0, q, b));
-        const BQD hi = limdd_refs_sync(SYNC(bqd_restrict));
+        limdd_refs_spawn(SPAWN(bqd_restrict_scalar, f1, q, b));
+        const BQD lo = limdd_refs_push(CALL(bqd_restrict_scalar, f0, q, b));
+        const BQD hi = limdd_refs_sync(SYNC(bqd_restrict_scalar));
         limdd_refs_pop(1);
-        r = CALL(bqd_compose, var, lo, hi);
+        r = CALL(bqd_compose_scalar, var, lo, hi);
     }
     cache_put3(CACHE_BQD_RESTRICT, t, key, 0, (uint64_t)r);
     return scale(scalar_of(e), r);
 }
 
-TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
+TASK_IMPL_3(BQD, bqd_project_scalar, BQD, e, uint32_t, q, int, b)
 {
     if (limdd_edge_is_zero(e)) return e;
     const LIMDD_TARG t = limdd_target(e);
     const uint32_t var = limdd_level(t);
-    if (var > q) return b ? CALL(bqd_compose, q, limdd_zero_edge(), e)
-                          : CALL(bqd_compose, q, e, limdd_zero_edge());
+    if (var > q) return b ? CALL(bqd_compose_scalar, q, limdd_zero_edge(), e)
+                          : CALL(bqd_compose_scalar, q, e, limdd_zero_edge());
     const uint64_t key = ((uint64_t)q << 1) | (uint64_t)(b & 1);
     uint64_t hit;
     if (cache_get3(CACHE_BQD_PROJECT, t, key, 0, &hit)) return scale(scalar_of(e), (BQD)hit);
@@ -292,25 +310,38 @@ TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
     const BQD f0 = limdd_node_low(t);
     BQD r;
     if (var == q) {
-        r = b ? CALL(bqd_compose, var, limdd_zero_edge(), CALL(bqd_high_cofactor, t))
-              : CALL(bqd_compose, var, f0, limdd_zero_edge());
+        r = b ? CALL(bqd_compose_scalar, var, limdd_zero_edge(), CALL(bqd_high_cofactor, t))
+              : CALL(bqd_compose_scalar, var, f0, limdd_zero_edge());
     } else {
         const BQD f1 = CALL(bqd_high_cofactor, t);
-        limdd_refs_spawn(SPAWN(bqd_project, f1, q, b));
-        const BQD lo = limdd_refs_push(CALL(bqd_project, f0, q, b));
-        const BQD hi = limdd_refs_sync(SYNC(bqd_project));
+        limdd_refs_spawn(SPAWN(bqd_project_scalar, f1, q, b));
+        const BQD lo = limdd_refs_push(CALL(bqd_project_scalar, f0, q, b));
+        const BQD hi = limdd_refs_sync(SYNC(bqd_project_scalar));
         limdd_refs_pop(1);
-        r = CALL(bqd_compose, var, lo, hi);
+        r = CALL(bqd_compose_scalar, var, lo, hi);
     }
     cache_put3(CACHE_BQD_PROJECT, t, key, 0, (uint64_t)r);
     return scale(scalar_of(e), r);
+}
+
+/* In the other two families a cofactor is a labelled edge, so the chosen one
+ * goes through Canon where the scalar family returns it (skip:alg:xrestrict). */
+TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
+{
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_restrict, e, q, b);
+    return CALL(bqd_restrict_scalar, e, q, b);
+}
+
+TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
+{
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_project, e, q, b);
+    return CALL(bqd_project_scalar, e, q, b);
 }
 
 BQD
 bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k, uint32_t n)
 {
     (void)n;
-    require_scalar_family("bqd_local_matvec");
     const uint32_t dim = 1u << k;
     BQD *vc = malloc(dim * sizeof(BQD));
     if (vc == NULL) { fprintf(stderr, "sylvan: out of memory in bqd_local_matvec\n"); exit(1); }
@@ -326,7 +357,7 @@ bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k, 
             const EVBDD_WGT m = M[(size_t)r * dim + c];
             if (m == EVBDD_ZERO) continue;
             limdd_refs_push(w);
-            w = bqd_add(w, scale(m, vc[c]));
+            w = bqd_add(w, bqd_scale(vc[c], m));
             limdd_refs_pop(1);
         }
         for (uint32_t i = 0; i < k; i++) {
@@ -346,9 +377,11 @@ bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k, 
 
 /* --- states --------------------------------------------------------------- */
 
+/* In the other two families every basis state is one chain under a label. */
 BQD
 bqd_basis_state(uint64_t x, uint32_t n)
 {
+    if (bqd_family() != BQD_FAMILY_SCALAR) return bqd_xp_basis_state(x, n);
     LIMDD_TARG t = LIMDD_TERMINAL;
     for (uint32_t v = n; v-- > 0; ) {
         const bool one = (x >> (n - 1 - v)) & 1;
@@ -423,9 +456,9 @@ TASK_4(BQD, bqd_cgate_rec, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, q)
         const BQD u = unit(t);
         if (p < q) {
             const BQD hi = CALL(bqd_cgate_rec, u, gid, cmask & ~(UINT64_C(1) << p), q);
-            r = CALL(bqd_compose, p, u, hi);
+            r = CALL(bqd_compose_scalar, p, u, hi);
         } else {
-            r = CALL(bqd_compose, q, scale(wgt_add(u00, u01), u), scale(wgt_add(u10, u11), u));
+            r = CALL(bqd_compose_scalar, q, scale(wgt_add(u00, u01), u), scale(wgt_add(u10, u11), u));
         }
     } else {
         const BQD f0 = limdd_node_low(t);
@@ -443,7 +476,7 @@ TASK_4(BQD, bqd_cgate_rec, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, q)
             lo = CALL(bqd_apply_op, OP_ADD, scale(u00, f0), scale(u01, f1));
             hi = CALL(bqd_apply_op, OP_ADD, scale(u10, f0), scale(u11, f1));
         }
-        r = CALL(bqd_compose, var, lo, hi);
+        r = CALL(bqd_compose_scalar, var, lo, hi);
     }
     cache_put3(CACHE_BQD_GATE, t, gid, key, (uint64_t)r);
     return scale(scalar_of(e), r);
@@ -471,23 +504,28 @@ monomial_phase(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n)
     return bqd_apply_diagonal(e, A, phase, n);
 }
 
+/*
+ * The two entry points serve every family. The monomial goes through
+ * bqd_apply_diagonal, which picks the product for the family, and any other
+ * gate through the family's recursion: bqd_cgate_rec here, and Gate of
+ * qsylvan_bqd_xp.h, on the top of a labelled edge, in the other two.
+ */
 TASK_IMPL_4(BQD, bqd_gate, BQD, e, uint32_t, gid, uint32_t, target, uint32_t, n)
 {
-    require_scalar_family("bqd_gate");
     if (is_phase(gid)) {
         /* diag(u00, u11) = u00 . diag(1, u11/u00), a scalar and a monomial */
         const EVBDD_WGT u00 = gates[gid][0];
         const EVBDD_WGT p = wgt_div(gates[gid][3], u00);
         const BQD d = (p == EVBDD_ONE) ? e : monomial_phase(e, vbit(target, n), p, n);
-        return scale(u00, d);
+        return bqd_scale(d, u00);
     }
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_cgate_rec, e, gid, 0, target);
     return CALL(bqd_cgate_rec, e, gid, 0, target);
 }
 
 TASK_IMPL_5(BQD, bqd_cgate, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, target,
             uint32_t, n)
 {
-    require_scalar_family("bqd_cgate");
     if (cmask == 0) return CALL(bqd_gate, e, gid, target, n);
     if (is_phase(gid) && gates[gid][0] == EVBDD_ONE) {
         /* phase u11 where every control and the target are 1: one monomial */
@@ -500,6 +538,7 @@ TASK_IMPL_5(BQD, bqd_cgate, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, ta
                         "for a gate that is not a monomial phase\n");
         exit(1);
     }
+    if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_cgate_rec, e, gid, cmask, target);
     return CALL(bqd_cgate_rec, e, gid, cmask, target);
 }
 

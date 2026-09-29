@@ -12,11 +12,14 @@
  *                 Pauli root edge a Z at a skipped level exactly where the
  *                 vector changes sign across it (skip:lem:normal (b)); and
  *                 every node the one bqd_from_vector builds for its own
- *                 function. In the scalar family also Cof and Compose
- *                 (skip:alg:apply, skip:alg:constructors): at every node the
- *                 two cofactors are canonical and compose back to the node,
- *                 and at every level an edge skips the edge is both of its
- *                 cofactors and composes with itself to itself
+ *                 function; no label with a Z and an X at one qubit. In
+ *                 every family also Cof and Compose (skip:alg:apply,
+ *                 skip:alg:constructors, skip:alg:xcompose): at every node
+ *                 the two cofactors are canonical and compose back to the
+ *                 node, and at every level an edge skips the edge is both of
+ *                 its cofactors and composes with itself to itself, or in
+ *                 the Pauli family, where its label has a Z there, the two
+ *                 are opposite and compose back to the edge
  *   build         decode(build(f)) = f, by bqd_to_vector and by a decoder
  *                 written here from skip:def:skip, and bqd_eval agrees at
  *                 every index: on every vector over {0, 1, -1, i} on 1 to 3
@@ -26,19 +29,50 @@
  *                 families; |+>^n is the terminal under one label, and in
  *                 the Pauli family so is a character; a character has one
  *                 node per qubit it reads in the other two, and a basis
- *                 state n nodes in all three
- *   operations    scalar family: every operation of qsylvan_bqd_gates.h and
+ *                 state n nodes in all three, bqd_basis_state's, which in the
+ *                 other two is X^x on the chain of |0...0>
+ *   operations    every family: every operation of qsylvan_bqd_gates.h and
  *                 qsylvan_bqd_ops.h returns the edge bqd_from_vector builds
  *                 for the dense result, and a diagram that passes the
  *                 structure checks. OP_XQUOT is not public and is checked
  *                 inside bqd_compose, and OP_XPROD inside the high side of
  *                 bqd_cofactor. The states ignore random qubits, so targets,
  *                 controls and restricted qubits fall on skipped levels as
- *                 often as not, and each such case is counted and must occur
+ *                 often as not, and each such case is counted and must occur;
+ *                 in the translation and Pauli families they are translated
+ *                 and signed at random, and Gate, Restrict and Project also
+ *                 get random labelled edges on their nodes, as their
+ *                 recursions hand themselves
+ *   operations    translation and Pauli families: the pointwise product,
+ *   (X, Pauli)    sum, xprod and xquot, scale, negate, the cofactor at every
+ *                 level down to an edge's top, Compose, and Canon of labelled
+ *                 edges (skip:sec:xp), each result the edge bqd_from_vector
+ *                 builds for the dense result and a diagram that passes the
+ *                 structure checks: exhaustively on every vector over
+ *                 {0, 1, -1, i} on 1 to 3 qubits for the one-operand ones and
+ *                 Compose, on every pair on 1 and 2 qubits and a random
+ *                 partner on 3 for the pointwise ones, and at random on 4 to
+ *                 8 qubits; the operands canonical, and random labelled edges
+ *                 on their nodes, as the recursion hands Apply and Canon;
+ *                 every case of skip:prop:xcompose counted and met
+ *   gates         translation and Pauli families: every gate of the table
+ *   (X, Pauli)    and the dynamic one on every qubit, every set of controls
+ *                 above every target, every phase with controls anywhere,
+ *                 cgate_either with X and Z and swap and the local matvec on
+ *                 every pair, restriction and projection on every qubit, the
+ *                 monomial on every set with every phase, the product with
+ *                 every partner and the full-support test, on every vector
+ *                 over {0, 1, -1, i} on 1 and 2 qubits, and a random draw of
+ *                 them on one vector in eight on 3; skipped targets and
+ *                 controls, a root that skips, a zero low cofactor and a
+ *                 cancellation each counted and met
  *   skip:prop:diag  the diagonal walk visits at most n - ctz(A) nodes, the
  *                 path the proposition names, counted here from the diagram,
- *                 and stops where the state skips a qubit of A
- *   collections   scalar family, limdd_gc between operations in small
+ *                 and stops where the state skips a qubit of A; in every
+ *                 family, the Pauli family's walk (skip:alg:xdiag) with its
+ *                 sign repair and its skip at the last qubit of A met, and a
+ *                 monomial there may have fewer nodes than qubits
+ *   collections   every family, limdd_gc between operations in small
  *                 tables, so that swept buckets are soon built on again:
  *                 gate sequences on 2 to 8 qubits in a table two wider, the
  *                 state the edge bqd_from_vector builds after every gate; and
@@ -47,17 +81,29 @@
  *                 against the same operation on its edge read on 8 qubits,
  *                 which no memo key may tell apart, and after every
  *                 collection every kept edge decoded and built again, and
- *                 every node met after it checked from scratch
+ *                 every node met after it checked from scratch; and in the
+ *                 translation and Pauli families, from any basis state and on
+ *                 translated and signed states, and the same kept results
+ *                 under the operations of skip:sec:xp, on labelled operands
+ *                 too
+ *   sessions      two BQD sessions in one Sylvan package, of two families
+ *                 or of one, the same gates in each and every state checked:
+ *                 no memo entry outlives bqd_quit; every worker asking for a
+ *                 collection at once, a different number of times each,
+ *                 under an alarm; and a Pauli table smaller than the LIM
+ *                 table, which only the trigger keeps from filling
  *
  * Exact weights, in Q(w_8, sqrt2), throughout. Every check runs on the number
  * of workers in BQD_SKIP_WORKERS (default 4), BQD_SKIP_REPEAT times (default
  * 1), each run in a fresh session on the same draws; BQD_SKIP_FAMILY (0, 1
- * or 2) runs one family alone, and 0 the collections too.
+ * or 2) runs one family alone, with its collections, and 3 the sessions
+ * alone.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <sylvan.h>
 #include <sylvan_int.h>
@@ -65,6 +111,7 @@
 #include "qsylvan_bqd.h"
 #include "qsylvan_bqd_ops.h"
 #include "qsylvan_bqd_gates.h"
+#include "qsylvan_bqd_xp.h"
 #include "qsylvan_limdd_gc.h"
 #include "qsylvan_limdd_inspect.h"
 #include "qsylvan_simulator.h"
@@ -72,6 +119,24 @@
 
 #define NQ 8
 #define MAXV (1u << NQ)
+
+/*
+ * Under a sanitizer every check runs some twenty times slower, and this test
+ * came near ctest's timeout on a loaded machine. There the draws on three
+ * qubits, the gate sequences and the collection pools are thinned by THIN;
+ * every kind of check still runs, and every case it counts is still met.
+ */
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define THIN 4
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
+    __has_feature(memory_sanitizer)
+#define THIN 4
+#endif
+#endif
+#ifndef THIN
+#define THIN 1
+#endif
 
 static int failures = 0;
 static EVBDD_WGT pw[8];                     /* w_8^e */
@@ -147,6 +212,19 @@ static inline unsigned
 level_of(LIMDD_TARG p, unsigned n)
 {
     return p == LIMDD_TERMINAL ? n : limdd_node_var(p);
+}
+
+/**
+ * The top of an edge read on n qubits (skip:sec:xp:edges): the level of its
+ * node, or in the Pauli family a Z above it, where the function starts to
+ * depend on its variables; n for zero and for a constant.
+ */
+static inline unsigned
+top_of(BQD e, unsigned n)
+{
+    if (limdd_edge_is_zero(e)) return n;
+    const unsigned t = bqd_xp_top(e);
+    return t < n ? t : n;
 }
 
 static void
@@ -272,6 +350,7 @@ typedef struct {
     unsigned sign;          /* a Z at a skipped level of a root the vector does not show */
     unsigned not_canon;     /* a node that is not bqd_from_vector's for its function */
     unsigned cof;           /* Cof or Compose disagrees at a node or a skipped level */
+    unsigned zx;            /* a Z and an X at one qubit of a label */
     unsigned z_skipped;     /* met: a Z at a level the edge skips */
     unsigned translated;    /* met: an edge with a translation */
     unsigned skipping;      /* met: an edge that skips a level */
@@ -294,19 +373,31 @@ check_edge(BQD e, unsigned r, unsigned n)
     const uint64_t skipped = scope & ~((UINT64_C(1) << (n - v)) - 1);
     if ((s | t) & ~scope) sf.scope++;
     if (t & skipped) sf.x_skipped++;
+    /* the translation is a least point of a support, and a 1 of it is at
+     * neither a pivot nor a level the support ignores, so no Z shares it */
+    if (s & t) sf.zx++;
     if (s & skipped) sf.z_skipped++;
     if (t != 0) sf.translated++;
     if (v <= r) return;
     sf.skipping++;
-    if (bqd_family() != BQD_FAMILY_SCALAR) return;
     /* an edge that skips m denotes a function that does not depend on x_m:
      * it is both of its cofactors there, and Compose of it with itself is
-     * itself (skip:lem:virtual, Compose's first line) */
+     * itself (skip:lem:virtual, Compose's first line). In the Pauli family a
+     * Z at m makes the two cofactors opposite, and Compose of those puts the
+     * Z back (skip:lem:normal (b), skip:prop:xcompose (ii)). The levels are
+     * taken from the top down, each read on the low cofactor of the one
+     * above, which has shed the Z bits above it. */
+    BQD cur = e;
     for (unsigned m = r; m < v; m++) {
-        if (bqd_cofactor(e, m, 0) != e || bqd_cofactor(e, m, 1) != e || bqd_compose(m, e, e) != e) {
+        bqd_lim_masks(limdd_label(cur), n, &c, &s, &t);
+        const BQD c0 = bqd_cofactor(cur, m, 0), c1 = bqd_cofactor(cur, m, 1);
+        const bool ok = (s & ibit(m, n)) ? c0 != cur && c1 == bqd_negate(c0)
+                                         : c0 == cur && c1 == cur;
+        if (!ok || bqd_compose(m, c0, c1) != cur) {
             sf.cof++;
             break;
         }
+        cur = c0;
     }
 }
 
@@ -329,16 +420,15 @@ check_node(LIMDD_TARG p, unsigned n)
     if (memcmp(g, g + h, h * sizeof(EVBDD_WGT)) == 0) sf.redundant++;
     if (bqd_from_vector(g, n) != unit(p)) sf.not_canon++;
 
-    if (bqd_family() == BQD_FAMILY_SCALAR) {
-        /* its cofactors are the canonical edges of the two halves, extended,
-         * and composing them gives the node back */
-        EVBDD_WGT *g0 = malloc(len * sizeof(EVBDD_WGT)), *g1 = malloc(len * sizeof(EVBDD_WGT));
-        for (uint64_t x = 0; x < len; x++) { g0[x] = g[x & ~h]; g1[x] = g[x | h]; }
-        const BQD c0 = bqd_cofactor(unit(p), v, 0), c1 = bqd_cofactor(unit(p), v, 1);
-        if (c0 != bqd_from_vector(g0, n) || c1 != bqd_from_vector(g1, n)
-            || bqd_compose(v, c0, c1) != unit(p)) sf.cof++;
-        free(g0); free(g1);
-    }
+    /* its cofactors are the canonical edges of the two halves, extended, and
+     * composing them gives the node back: a node stores a representative, so
+     * its own edge carries the identity in every family */
+    EVBDD_WGT *g0 = malloc(len * sizeof(EVBDD_WGT)), *g1 = malloc(len * sizeof(EVBDD_WGT));
+    for (uint64_t x = 0; x < len; x++) { g0[x] = g[x & ~h]; g1[x] = g[x | h]; }
+    const BQD c0 = bqd_cofactor(unit(p), v, 0), c1 = bqd_cofactor(unit(p), v, 1);
+    if (c0 != bqd_from_vector(g0, n) || c1 != bqd_from_vector(g1, n)
+        || bqd_compose(v, c0, c1) != unit(p)) sf.cof++;
+    free(g0); free(g1);
     free(g);
 
     if (!limdd_edge_is_zero(low)) check_node(limdd_target(low), n);
@@ -386,6 +476,7 @@ structure_report(const char *section)
         { "a Z on a root at a skipped level the vector does not show (skip:lem:normal (b))", sf.sign },
         { "a node that is not the one bqd_from_vector builds for its function", sf.not_canon },
         { "Cof or Compose disagrees at a node or a skipped level", sf.cof },
+        { "a label with a Z and an X at one qubit", sf.zx },
     };
     unsigned bad = 0;
     char buf[160];
@@ -711,7 +802,11 @@ check_shapes(unsigned max_n)
             limdd_level_counts(b, counts, n);
             bool ok = true;
             for (unsigned q = 0; q < n; q++) ok = ok && counts[q] == 1;
-            if (fam == BQD_FAMILY_SCALAR) ok = ok && b == bqd_basis_state(y, n);
+            ok = ok && b == bqd_basis_state(y, n);
+            /* in the translation and Pauli families every basis state is X^x
+             * on the one chain of |0...0> */
+            if (fam != BQD_FAMILY_SCALAR)
+                ok = ok && limdd_target(b) == limdd_target(bqd_basis_state(0, n));
             if (!ok) bad_basis++;
         }
     }
@@ -719,7 +814,9 @@ check_shapes(unsigned max_n)
     report(fam == BQD_FAMILY_PAULI ? "a character is the terminal under c Z^s"
                                    : "a character has a node at each qubit it reads",
            bad_char, th);
-    report("a basis state has a node at every level", bad_basis, tb);
+    report(fam == BQD_FAMILY_SCALAR ? "a basis state: a node per level, bqd_basis_state"
+                                    : "a basis state: X^x on the chain of |0...0>",
+           bad_basis, tb);
     free(f);
 }
 
@@ -847,7 +944,8 @@ static const char *tally_name[T_COUNT] = {
 
 enum {
     C_ROOT, C_TERMINAL, C_LEVELS, C_COMPOSE, C_COF, C_RESTRICT, C_GATE, C_GATE_FREE, C_CONTROL,
-    C_TARGET, C_BELOW, C_EITHER, C_MATVEC, C_PROD_LEVELS, C_PROD_SKIP, C_PROD_CANCEL, C_COUNT
+    C_TARGET, C_BELOW, C_EITHER, C_MATVEC, C_PROD_LEVELS, C_PROD_SKIP, C_PROD_CANCEL,
+    C_ZERO_LOW, C_CANCEL, C_COUNT
 };
 static const char *cover_name[C_COUNT] = {
     "states whose root edge skips", "states with an edge that skips to the terminal",
@@ -859,11 +957,72 @@ static const char *cover_name[C_COUNT] = {
     "local matvecs on a skipped qubit", "full-support products at different root levels",
     "full-support products that skip a level",
     "full-support products that drop a qubit both read",
+    "gates on a qubit whose low cofactor is zero", "gates that cancel an amplitude",
 };
+
+static LIMDD_LIM rand_label(unsigned n, bool alg);
+static BQD relabel(BQD e, LIMDD_LIM lim, unsigned n, EVBDD_WGT *out);
+
+/**
+ * What a gate on qubit q took f to h through: a zero low cofactor, the
+ * support x_q = 1 alone, and a cancellation, a zero of h where neither
+ * cofactor of f is zero.
+ */
+static void
+gate_cases(const EVBDD_WGT *f, const EVBDD_WGT *h, unsigned n, unsigned q, unsigned *zero_low,
+           unsigned *cancels)
+{
+    const uint64_t qb = ibit(q, n);
+    bool low_zero = true, nonzero = false, cancel = false;
+    for (uint64_t x = 0; x < (UINT64_C(1) << n); x++) {
+        if (x & qb) continue;
+        if (f[x] != EVBDD_ZERO) low_zero = false;
+        if (f[x | qb] != EVBDD_ZERO) nonzero = true;
+        if (f[x] != EVBDD_ZERO && f[x | qb] != EVBDD_ZERO
+            && (h[x] == EVBDD_ZERO || h[x | qb] == EVBDD_ZERO)) cancel = true;
+    }
+    if (low_zero && nonzero) (*zero_low)++;
+    if (cancel) (*cancels)++;
+}
+
+/**
+ * Gate, Restrict and Project of qsylvan_bqd_xp.h on `draws` random labelled
+ * edges on F's node, which is what their recursions hand themselves: a
+ * cofactor is a label product, canonical or not, and each of the three
+ * passes such an edge through Canon wherever the scalar family returns an
+ * operand or a cofactor as it is. The gate has random controls above a
+ * random target, or none, and is any of the table's or the dynamic one.
+ * Tallied in t[0], t[1] and t[2].
+ */
+static void
+xp_labelled_gates(BQD F, unsigned n, int draws, tally_t *t)
+{
+    static const uint32_t gs[] = { GATEID_H, GATEID_X, GATEID_Y, GATEID_Z, GATEID_S,
+                                   GATEID_T, GATEID_sqrtX, GATEID_dynamic };
+    const size_t vb = (UINT64_C(1) << n) * sizeof(EVBDD_WGT);
+    EVBDD_WGT *lf = malloc(vb), *h = malloc(vb);
+    for (int k = 0; k < draws; k++) {
+        const BQD L = relabel(F, rand_label(n, false), n, lf);
+        const uint32_t q = (uint32_t)rnd_below(n);
+        const uint64_t cm = rnd_below(UINT64_C(1) << q);
+        const uint32_t gid = gs[rnd_below(sizeof(gs) / sizeof(gs[0]))];
+        memcpy(h, lf, vb);
+        dense_gate(h, n, gates[gid], cm, q);
+        tally(&t[0], bqd_xp_cgate_rec(L, gid, cm, q), h, n);
+        const uint32_t r = (uint32_t)rnd_below(n);
+        const int b = (int)rnd_below(2);
+        dense_restrict(lf, n, r, b, h);
+        tally(&t[1], bqd_xp_restrict(L, r, b), h, n);
+        dense_project(lf, n, r, b, h);
+        tally(&t[2], bqd_xp_project(L, r, b), h, n);
+    }
+    free(lf); free(h);
+}
 
 static void
 check_operations(void)
 {
+    const bqd_family_t fam = bqd_family();
     static const uint32_t table[] = { GATEID_H, GATEID_X, GATEID_Y, GATEID_Z, GATEID_S,
                                       GATEID_T, GATEID_Tdag, GATEID_sqrtX, GATEID_sqrtY,
                                       GATEID_proj0, GATEID_proj1 };
@@ -872,16 +1031,19 @@ check_operations(void)
     static const uint32_t ph[] = { GATEID_Z, GATEID_S, GATEID_T, GATEID_Sdag };
     const size_t vb = MAXV * sizeof(EVBDD_WGT);
     EVBDD_WGT *f = malloc(vb), *g = malloc(vb), *h = malloc(vb), *g0 = malloc(vb), *g1 = malloc(vb);
-    tally_t t[T_COUNT];
+    tally_t t[T_COUNT], lab[3];
     unsigned cov[C_COUNT];
     memset(t, 0, sizeof(t));
+    memset(lab, 0, sizeof(lab));
     memset(cov, 0, sizeof(cov));
     structure_begin();
 
     for (unsigned n = 1; n <= 7; n++) for (int rep = 0; rep < 12; rep++) {
         const uint64_t len = UINT64_C(1) << n;
         rand_state(n, (unsigned)rnd_below(S_KINDS), f);
+        if (fam != BQD_FAMILY_SCALAR && rnd_below(2)) twist(n, f);
         rand_state(n, (unsigned)rnd_below(S_KINDS), g);
+        if (fam != BQD_FAMILY_SCALAR && rnd_below(2)) twist(n, g);
         const BQD F = bqd_from_vector(f, n), G = bqd_from_vector(g, n);
         check_diagram(F, f, n);
         check_diagram(G, g, n);
@@ -932,10 +1094,9 @@ check_operations(void)
             for (uint64_t x = 0; x < len; x++) h[x] = (x & ibit(var, n)) ? g1[x] : g0[x];
             const BQD e0 = bqd_from_vector(g0, n), e1 = bqd_from_vector(g1, n);
             if (e0 == e1) cov[C_COMPOSE]++;
-            /* both read at var + 1, so a node at var or above is a build that
+            /* both read at var + 1, so a top at var or above is a build that
              * kept a level it should have skipped, and compose may not have it */
-            if ((!limdd_edge_is_zero(e0) && level_of(limdd_target(e0), n) <= var)
-                || (!limdd_edge_is_zero(e1) && level_of(limdd_target(e1), n) <= var)) {
+            if (top_of(e0, n) <= var || top_of(e1, n) <= var) {
                 t[T_COMPOSE].tot++;
                 t[T_COMPOSE].bad++;
                 continue;
@@ -943,8 +1104,8 @@ check_operations(void)
             tally(&t[T_COMPOSE], bqd_compose(var, e0, e1), h, n);
         }
 
-        /* the cofactors of F at every level down to its node */
-        const unsigned lF = level_of(limdd_target(F), n);
+        /* the cofactors of F at every level down to its top */
+        const unsigned lF = top_of(F, n);
         for (unsigned var = 0; var <= lF && var < n; var++) for (int b = 0; b < 2; b++) {
             if (var < lF && !limdd_edge_is_zero(F)) cov[C_COF]++;
             dense_restrict(f, n, var, b, h);
@@ -964,6 +1125,7 @@ check_operations(void)
             if (!((dF >> q) & 1)) cov[C_GATE_FREE]++;
             memcpy(h, f, len * sizeof(EVBDD_WGT));
             dense_gate(h, n, gates[table[gi]], 0, q);
+            gate_cases(f, h, n, q, &cov[C_ZERO_LOW], &cov[C_CANCEL]);
             tally(&t[T_GATE], bqd_gate(F, table[gi], q, n), h, n);
         }
 
@@ -978,6 +1140,7 @@ check_operations(void)
             if ((skF >> q) & 1) cov[C_MATVEC]++;
             tally(&t[T_MATVEC1], bqd_local_matvec(F, U, &q, 1, n), h, n);
         }
+        if (fam != BQD_FAMILY_SCALAR) xp_labelled_gates(F, n, 8, lab);
 
         if (n >= 2) {
             for (int k = 0; k < 3; k++) {
@@ -1052,6 +1215,11 @@ check_operations(void)
     }
 
     for (int i = 0; i < T_COUNT; i++) report(tally_name[i], t[i].bad, t[i].tot);
+    if (fam != BQD_FAMILY_SCALAR) {
+        report("Gate, labelled operands (bqd_xp_cgate_rec)", lab[0].bad, lab[0].tot);
+        report("Restrict, labelled operands (bqd_xp_restrict)", lab[1].bad, lab[1].tot);
+        report("Project, labelled operands (bqd_xp_project)", lab[2].bad, lab[2].tot);
+    }
     for (int i = 0; i < C_COUNT; i++) covered(cover_name[i], cov[i]);
     structure_report("operations");
     free(f); free(g); free(h); free(g0); free(g1);
@@ -1085,21 +1253,39 @@ diag_path(BQD e, uint64_t A, unsigned n, bool *stopped)
     return visits;
 }
 
+/** The Z mask of e's label, over the qubits of the vector-index mask A. */
+static uint64_t
+z_on(BQD e, uint64_t A, unsigned n)
+{
+    EVBDD_WGT c;
+    uint64_t z, x;
+    if (limdd_edge_is_zero(e)) return 0;
+    bqd_lim_masks(limdd_label(e), n, &c, &z, &x);
+    return z & A;
+}
+
 static void
 check_diagonal(void)
 {
+    /* the walk serves every family: the scalar one's, which the translation
+     * family's diagram of full support is node for node, and the Pauli
+     * family's with label products, where a monomial may have fewer nodes */
+    const bqd_family_t fam = bqd_family();
+    const bool pauli = fam == BQD_FAMILY_PAULI;
     const size_t vb = MAXV * sizeof(EVBDD_WGT);
     EVBDD_WGT *f = malloc(vb), *h = malloc(vb);
     size_t counts[NQ];
     tally_t walk = { 0, 0 }, undo = { 0, 0 }, prod = { 0, 0 }, mono = { 0, 0 }, fallback = { 0, 0 };
     unsigned badvisits = 0, badshape = 0, badones = 0;
     unsigned at_bound = 0, stops = 0, outside = 0, root_skip = 0, to_term = 0, undone = 0;
+    unsigned fewer = 0, signed_a = 0;
     structure_begin();
 
     for (unsigned n = 1; n <= NQ; n++) for (int rep = 0; rep < 40; rep++) {
         const uint64_t len = UINT64_C(1) << n;
         const uint64_t D = rand_qubits(n);
         phase_on(n, D, f);
+        if (fam != BQD_FAMILY_SCALAR && rnd_below(2)) twist(n, f);
         const unsigned arity = 1 + (unsigned)rnd_below(n < 3 ? n : 3);
         uint64_t Aq = 0;
         while (__builtin_popcountll(Aq) < (int)arity) Aq |= UINT64_C(1) << rnd_below(n);
@@ -1107,12 +1293,20 @@ check_diagonal(void)
         const EVBDD_WGT phase = pw[1 + rnd_below(7)];
         if (Aq & ~D) outside++;
 
-        /* the monomial is one node at each qubit of A, and none elsewhere */
+        /* the monomial is one node at each qubit of A, and none elsewhere; in
+         * the Pauli family at most one, and none at the last qubit of A for a
+         * phase of -1, which is a Z there (skip:alg:xrestrict) */
         for (uint64_t x = 0; x < len; x++) h[x] = ((x & A) == A) ? phase : EVBDD_ONE;
         const BQD gate = bqd_monomial(A, phase, n);
         tally(&mono, gate, h, n);
         limdd_level_counts(gate, counts, n);
-        for (unsigned q = 0; q < n; q++) if (counts[q] != ((Aq >> q) & 1)) { badshape++; break; }
+        unsigned nodes = 0;
+        for (unsigned q = 0; q < n; q++) {
+            const size_t in_A = (Aq >> q) & 1;
+            nodes += (unsigned)counts[q];
+            if (pauli ? counts[q] > in_A : counts[q] != in_A) { badshape++; break; }
+        }
+        if (nodes < (unsigned)__builtin_popcountll(Aq)) fewer++;
         if (bqd_monomial(A, EVBDD_ONE, n) != limdd_one_edge()) badones++;
         for (unsigned v = 0; v <= n; v++) if (bqd_ones(v, n) != LIMDD_TERMINAL) { badones++; break; }
 
@@ -1128,6 +1322,9 @@ check_diagonal(void)
         tally(&walk, got, h, n);
         prod.tot++;
         if (bqd_product(psi, gate) != got) prod.bad++;
+        /* a Z at a qubit of A that the state had not: the sign repair, or a
+         * level of A skipped with a sign */
+        if (z_on(got, A, n) & ~z_on(psi, A, n)) signed_a++;
 
         /* at most one node per level down to the last qubit of A, and
          * exactly the nodes of the path, which stops where psi skips a qubit
@@ -1150,28 +1347,559 @@ check_diagonal(void)
 
         /* a state with a zero takes the general product, and walks nothing */
         rand_on(n, rand_qubits(n), 0.3, true, f);
+        if (fam != BQD_FAMILY_SCALAR && rnd_below(2)) twist(n, f);
         for (uint64_t x = 0; x < len; x++) h[x] = ((x & A) == A) ? wgt_mul(f[x], phase) : f[x];
         const BQD z = bqd_from_vector(f, n);
         tally(&fallback, bqd_apply_diagonal_counted(z, A, phase, n, &visits), h, n);
         if (!bqd_has_full_support(z) && visits != 0) fallback.bad++;
     }
 
+    /* every vector over {1, -1, i, w_8} on 1 and 2 qubits, and one in 64 on
+     * 3, under every monomial with every phase but 1: the walk against the
+     * edge bqd_from_vector builds, and its visits against the path */
+    tally_t every = { 0, 0 };
+    const EVBDD_WGT fv[4] = { EVBDD_ONE, EVBDD_MIN_ONE, pw[2], pw[1] };
+    for (unsigned n = 1; n <= 3; n++) {
+        const uint64_t len = UINT64_C(1) << n, count = UINT64_C(1) << (2 * len);
+        for (uint64_t idx = 0; idx < count; idx++) {
+            if (n == 3 && rnd_below(64 * THIN) != 0) continue;
+            for (uint64_t x = 0; x < len; x++) f[x] = fv[(idx >> (2 * x)) & 3];
+            const BQD psi = bqd_from_vector(f, n);
+            for (uint64_t Aq = 1; Aq < len; Aq++) for (int k = 1; k < 8; k++) {
+                const uint64_t A = imask(Aq, n);
+                for (uint64_t x = 0; x < len; x++) h[x] = ((x & A) == A) ? wgt_mul(f[x], pw[k]) : f[x];
+                uint32_t visits;
+                bool stopped;
+                const BQD got = bqd_apply_diagonal_counted(psi, A, pw[k], n, &visits);
+                tally(&every, got, h, n);
+                if (visits != diag_path(psi, Aq, n, &stopped)) every.bad++;
+                if (z_on(got, A, n) & ~z_on(psi, A, n)) signed_a++;
+            }
+        }
+    }
+
     report("bqd_apply_diagonal_counted, full support", walk.bad, walk.tot);
+    report("bqd_apply_diagonal_counted, every monomial on n <= 3", every.bad, every.tot);
     report("bqd_apply_diagonal_counted, the gate undoing a phase", undo.bad, undo.tot);
     report("the same edge as bqd_product with the monomial", prod.bad, prod.tot);
     report("bqd_apply_diagonal_counted, with zeros", fallback.bad, fallback.tot);
     report("bqd_monomial", mono.bad, mono.tot);
-    report("the monomial is one node at each qubit of A", badshape, mono.tot);
+    report(pauli ? "the monomial is at most one node at each qubit of A"
+                 : "the monomial is one node at each qubit of A", badshape, mono.tot);
     report("bqd_monomial of phase 1 and bqd_ones are the terminal", badones, mono.tot);
     report("visits: the path of skip:prop:diag, <= n - ctz(A)", badvisits, walk.tot + undo.tot);
     covered("walks that stop at a qubit of A the state skips", stops);
     covered("walks at the bound n - ctz(A)", at_bound);
+    if (pauli) {
+        covered("monomials with fewer nodes than qubits", fewer);
+        covered("walks that put a Z on a qubit of A (repair or signed skip)", signed_a);
+    }
     covered("monomials on a qubit the state ignores", outside);
     covered("gates that make the state ignore a qubit it read", undone);
     covered("walks on a state whose root edge skips", root_skip);
     covered("walks on a state with an edge that skips to the terminal", to_term);
     structure_report("diagonal");
     free(f); free(h);
+}
+
+/* --- operations, translation and Pauli families ---------------------------- */
+
+/*
+ * The operations of qsylvan_bqd_xp.h, through the entry points where there is
+ * one: every result the edge bqd_from_vector builds for the dense result, and
+ * a diagram that passes the structure checks. Apply and Canon are handed
+ * labelled edges by the recursion, which need not be canonical or even
+ * normal, so they get those here too: a random label of the family on the
+ * node of a canonical edge.
+ */
+
+/**
+ * A random label of the session's family on n qubits, vector-index masks,
+ * whose scalar is a power of w_8, or a third of the time a random algebraic
+ * number when `alg`.
+ */
+static LIMDD_LIM
+rand_label(unsigned n, bool alg)
+{
+    const uint64_t len = UINT64_C(1) << n;
+    const EVBDD_WGT c = (alg && rnd_below(3) == 0) ? rand_alg() : pw[rnd_below(8)];
+    const uint64_t s = (bqd_family() == BQD_FAMILY_PAULI) ? rnd_below(len) : 0;
+    return bqd_lim_make(c, s, rnd_below(len), n);
+}
+
+/** The labelled edge lim on the node of e, and in out the function it denotes. */
+static BQD
+relabel(BQD e, LIMDD_LIM lim, unsigned n, EVBDD_WGT *out)
+{
+    const uint64_t len = UINT64_C(1) << n;
+    if (limdd_edge_is_zero(e)) { zero_fill(out, len); return e; }
+    EVBDD_WGT *u = malloc(len * sizeof(EVBDD_WGT));
+    ext_dense(limdd_target(e), 0, n, u);
+    apply_label(lim, n, u, len, out);
+    free(u);
+    return limdd_bundle(lim, limdd_target(e));
+}
+
+static void
+dense_pointwise(int op, const EVBDD_WGT *f, const EVBDD_WGT *g, unsigned n, EVBDD_WGT *h)
+{
+    for (uint64_t x = 0; x < (UINT64_C(1) << n); x++) {
+        const EVBDD_WGT a = f[x], b = g[x];
+        switch (op) {
+        case BQD_OP_MUL:   h[x] = wgt_mul(a, b); break;
+        case BQD_OP_ADD:   h[x] = wgt_add(a, b); break;
+        case BQD_OP_XPROD: h[x] = (a == EVBDD_ZERO) ? b : wgt_mul(a, b); break;
+        default:           h[x] = (b == EVBDD_ZERO) ? a : wgt_div(a, b); break;
+        }
+    }
+}
+
+/** op by its entry point: bqd_multiply, bqd_add, and Apply for the two of the quotient rule. */
+static BQD
+pointwise(int op, BQD f, BQD g)
+{
+    switch (op) {
+    case BQD_OP_MUL: return bqd_multiply(f, g);
+    case BQD_OP_ADD: return bqd_add(f, g);
+    default:         return bqd_xp_apply_op(op, f, g);
+    }
+}
+
+enum {
+    X_MUL, X_ADD, X_XPROD, X_XQUOT, X_LMUL, X_LADD, X_LXPROD, X_LXQUOT, X_CANCEL, X_SCALE,
+    X_NEGATE, X_COF, X_COMPOSE, X_CANON, X_COUNT
+};
+static const char *xtally_name[X_COUNT] = {
+    "bqd_multiply", "bqd_add", "xprod (bqd_xp_apply_op)", "xquot (bqd_xp_apply_op)",
+    "bqd_multiply, labelled operands", "bqd_add, labelled operands",
+    "xprod, labelled operands", "xquot, labelled operands", "bqd_add with cancellation",
+    "bqd_scale", "bqd_negate", "bqd_cofactor, every level down to the top", "bqd_compose",
+    "bqd_xp_canon of a labelled edge",
+};
+
+enum {
+    XC_EQUAL, XC_OPPOSITE, XC_ZERO_LOW, XC_ZERO_HIGH, XC_GENERAL, XC_REPAIR, XC_SHIFT,
+    XC_NONCANON, XC_ZTOP, XC_COF_SKIP, XC_COUNT
+};
+static const char *xcover_name[XC_COUNT] = {
+    "compose (i): equal cofactors", "compose (ii): opposite cofactors",
+    "compose (iii): a zero low cofactor", "compose (iv): a zero high cofactor",
+    "compose (v): the general case", "compose (v) with the sign repair",
+    "compose (v) with a translation on the high edge", "labelled edges that are not canonical",
+    "labelled operands with a Z above their node", "cofactors at a level the edge skips",
+};
+
+/**
+ * Which case of skip:prop:xcompose made r from e0 and e1 at var, read off
+ * the result: (ii) keeps a's node, and (v) makes a node at var whose root
+ * label has a Z at var where the sign was repaired.
+ */
+static void
+compose_case(BQD e0, BQD e1, BQD r, unsigned var, unsigned n, unsigned *cov)
+{
+    if (e0 == e1) { cov[XC_EQUAL]++; return; }
+    if (limdd_edge_is_zero(e0)) { cov[XC_ZERO_LOW]++; return; }
+    if (limdd_edge_is_zero(e1)) { cov[XC_ZERO_HIGH]++; return; }
+    if (limdd_target(r) == limdd_target(e0)) { cov[XC_OPPOSITE]++; return; }
+    if (limdd_target(r) == LIMDD_TERMINAL || limdd_node_var(limdd_target(r)) != var) return;
+    cov[XC_GENERAL]++;
+    EVBDD_WGT c; uint64_t s, t;
+    bqd_lim_masks(limdd_label(r), n, &c, &s, &t);
+    if (s & ibit(var, n)) cov[XC_REPAIR]++;
+    bqd_lim_masks(limdd_label(limdd_node_high(limdd_target(r))), n, &c, &s, &t);
+    if (t != 0) cov[XC_SHIFT]++;
+}
+
+/**
+ * The operations on one operand F, the diagram of f: scale, negate, the
+ * cofactors at every level down to F's top, and Canon of labelled edges on
+ * F's node, every label of the family with the scalars 1, -1 and w when
+ * `all`, and `labels` random ones otherwise. Random algebraic scalars when
+ * `alg`, and powers of w_8 otherwise, which keep the values of the
+ * exhaustive runs few enough that their nodes repeat.
+ */
+static void
+xp_unary(BQD F, const EVBDD_WGT *f, unsigned n, bool all, int labels, bool alg, tally_t *t,
+         unsigned *cov)
+{
+    const uint64_t len = UINT64_C(1) << n;
+    EVBDD_WGT *h = malloc(len * sizeof(EVBDD_WGT));
+    const EVBDD_WGT c = alg ? rand_entry() : rnd_below(8) ? pw[rnd_below(8)] : EVBDD_ZERO;
+    for (uint64_t x = 0; x < len; x++) h[x] = wgt_mul(c, f[x]);
+    tally(&t[X_SCALE], bqd_scale(F, c), h, n);
+    for (uint64_t x = 0; x < len; x++) h[x] = wgt_neg(f[x]);
+    tally(&t[X_NEGATE], bqd_negate(F), h, n);
+
+    /* read at var + 1 and so at 0 as well, a cofactor is the restriction */
+    const unsigned top = bqd_xp_top(F);
+    for (unsigned var = 0; var <= top && var < n; var++) for (int b = 0; b < 2; b++) {
+        if (var < top && !limdd_edge_is_zero(F)) cov[XC_COF_SKIP]++;
+        dense_restrict(f, n, var, b, h);
+        tally(&t[X_COF], bqd_cofactor(F, var, b), h, n);
+    }
+
+    const bool pauli = bqd_family() == BQD_FAMILY_PAULI;
+    const EVBDD_WGT cs[3] = { EVBDD_ONE, EVBDD_MIN_ONE, pw[1] };
+    const uint64_t count = all ? 3 * len * (pauli ? len : 1) : (uint64_t)labels;
+    for (uint64_t k = 0; k < count; k++) {
+        const LIMDD_LIM lim = !all ? rand_label(n, alg)
+                            : bqd_lim_make(cs[k % 3], pauli ? (k / 3) / len : 0, (k / 3) % len, n);
+        const BQD L = relabel(F, lim, n, h);
+        const BQD r = bqd_xp_canon(L);
+        if (r != L) cov[XC_NONCANON]++;
+        tally(&t[X_CANON], r, h, n);
+    }
+    free(h);
+}
+
+/**
+ * The four pointwise operations on F and G, and when `labelled` on random
+ * labelled edges on their nodes, with algebraic scalars when `alg`.
+ */
+static void
+xp_binary(BQD F, const EVBDD_WGT *f, BQD G, const EVBDD_WGT *g, unsigned n, bool labelled,
+          bool alg, tally_t *t, unsigned *cov)
+{
+    const size_t vb = (UINT64_C(1) << n) * sizeof(EVBDD_WGT);
+    EVBDD_WGT *h = malloc(vb), *lf = malloc(vb), *lg = malloc(vb);
+    for (int op = BQD_OP_MUL; op <= BQD_OP_XQUOT; op++) {
+        dense_pointwise(op, f, g, n, h);
+        tally(&t[X_MUL + op], pointwise(op, F, G), h, n);
+    }
+    if (!labelled) { free(h); free(lf); free(lg); return; }
+    const BQD LF = relabel(F, rand_label(n, alg), n, lf), LG = relabel(G, rand_label(n, alg), n, lg);
+    if (!limdd_edge_is_zero(LF) && bqd_xp_top(LF) < limdd_level(limdd_target(LF))) cov[XC_ZTOP]++;
+    for (int op = BQD_OP_MUL; op <= BQD_OP_XQUOT; op++) {
+        dense_pointwise(op, lf, lg, n, h);
+        tally(&t[X_LMUL + op], pointwise(op, LF, LG), h, n);
+    }
+    free(h); free(lf); free(lg);
+}
+
+/**
+ * Compose at a random var of two functions of the qubits below it: equal,
+ * a multiple, opposite, one zero, the other zero, a translate with a sign
+ * pattern, or unrelated.
+ */
+static void
+xp_compose(unsigned n, tally_t *t, unsigned *cov)
+{
+    const uint64_t len = UINT64_C(1) << n;
+    const size_t vb = len * sizeof(EVBDD_WGT);
+    EVBDD_WGT *g0 = malloc(vb), *g1 = malloc(vb), *h = malloc(vb);
+    const unsigned var = (unsigned)rnd_below(n);
+    const uint64_t below = ((UINT64_C(1) << n) - 1) & ~((UINT64_C(2) << var) - 1);
+    rand_on(n, rand_qubits(n) & below, 0.3 * (double)rnd_below(2), rnd_below(2), g0);
+    rand_on(n, rand_qubits(n) & below, 0.3 * (double)rnd_below(2), rnd_below(2), g1);
+    const EVBDD_WGT m = rand_value(0.0, true);
+    const uint64_t im = imask(below, n);
+    const uint64_t s = (bqd_family() == BQD_FAMILY_PAULI) ? rnd_below(len) & im : 0;
+    const uint64_t tr = rnd_below(len) & im;
+    const unsigned rel = (unsigned)rnd_below(7);
+    for (uint64_t x = 0; x < len; x++) {
+        switch (rel) {
+        case 0: g1[x] = g0[x]; break;
+        case 1: g1[x] = wgt_mul(m, g0[x]); break;
+        case 2: g1[x] = wgt_neg(g0[x]); break;
+        case 3: g1[x] = EVBDD_ZERO; break;
+        case 4: g0[x] = EVBDD_ZERO; break;
+        case 5: g1[x] = parity(s & x) ? wgt_neg(g0[x ^ tr]) : g0[x ^ tr]; break;
+        default: break;
+        }
+    }
+    for (uint64_t x = 0; x < len; x++) h[x] = (x & ibit(var, n)) ? g1[x] : g0[x];
+    const BQD e0 = bqd_from_vector(g0, n), e1 = bqd_from_vector(g1, n);
+    if ((!limdd_edge_is_zero(e0) && bqd_xp_top(e0) <= var)
+        || (!limdd_edge_is_zero(e1) && bqd_xp_top(e1) <= var)) {
+        /* a build that depends on a level it should not */
+        t[X_COMPOSE].tot++;
+        t[X_COMPOSE].bad++;
+    } else {
+        const BQD r = bqd_compose(var, e0, e1);
+        compose_case(e0, e1, r, var, n, cov);
+        tally(&t[X_COMPOSE], r, h, n);
+    }
+    free(g0); free(g1); free(h);
+}
+
+static void
+check_xp_operations(void)
+{
+    const bool pauli = bqd_family() == BQD_FAMILY_PAULI;
+    const EVBDD_WGT vals[4] = { EVBDD_ZERO, EVBDD_ONE, EVBDD_MIN_ONE, pw[2] };
+    const size_t vb = MAXV * sizeof(EVBDD_WGT);
+    EVBDD_WGT *f = malloc(vb), *g = malloc(vb), *h = malloc(vb), *g0 = malloc(vb), *g1 = malloc(vb);
+    tally_t t[X_COUNT];
+    unsigned cov[XC_COUNT];
+    memset(t, 0, sizeof(t));
+    memset(cov, 0, sizeof(cov));
+    structure_begin();
+
+    /* every vector over {0, 1, -1, i} on 1 to 3 qubits: the one-operand
+     * operations on each; the pointwise ones on every pair on 1 and 2 qubits
+     * and on a random partner on 3, and on labelled edges on the nodes of
+     * every pair on 1 qubit, one pair in 16 on 2 and one in 4 on 3; and
+     * Compose at var 0 of its two halves, which are then every pair of
+     * functions on one qubit fewer */
+    for (unsigned n = 1; n <= 3; n++) {
+        const uint64_t len = UINT64_C(1) << n, half = len >> 1, count = UINT64_C(1) << (2 * len);
+        for (uint64_t idx = 0; idx < count; idx++) {
+            if (n == 3 && THIN > 1 && rnd_below(THIN) != 0) continue;
+            for (uint64_t x = 0; x < len; x++) f[x] = vals[(idx >> (2 * x)) & 3];
+            const BQD F = bqd_from_vector(f, n);
+            xp_unary(F, f, n, n <= 2, 2, false, t, cov);
+            for (uint64_t jdx = 0; jdx < count; jdx++) {
+                const uint64_t j = (n <= 2) ? jdx : rnd_below(count);
+                for (uint64_t x = 0; x < len; x++) g[x] = vals[(j >> (2 * x)) & 3];
+                const bool lab = n == 1 || rnd_below(n == 2 ? 16 : 4) == 0;
+                xp_binary(F, f, bqd_from_vector(g, n), g, n, lab, false, t, cov);
+                if (n > 2) break;
+            }
+            for (uint64_t x = 0; x < len; x++) {
+                g0[x] = f[x & (half - 1)];
+                g1[x] = f[half | (x & (half - 1))];
+            }
+            const BQD e0 = bqd_from_vector(g0, n), e1 = bqd_from_vector(g1, n);
+            const BQD r = bqd_compose(0, e0, e1);
+            compose_case(e0, e1, r, 0, n, cov);
+            tally(&t[X_COMPOSE], r, f, n);
+        }
+    }
+
+    /* random states on 4 to 8 qubits, translated and signed at random */
+    for (unsigned n = 4; n <= NQ; n++) for (int rep = 0; rep < 16; rep++) {
+        const uint64_t len = UINT64_C(1) << n;
+        rand_state(n, (unsigned)rnd_below(S_KINDS), f);
+        if (rnd_below(2)) twist(n, f);
+        rand_state(n, (unsigned)rnd_below(S_KINDS), g);
+        if (rnd_below(2)) twist(n, g);
+        const BQD F = bqd_from_vector(f, n), G = bqd_from_vector(g, n);
+        check_diagram(F, f, n);
+        check_diagram(G, g, n);
+        xp_unary(F, f, n, false, 4, true, t, cov);
+        xp_binary(F, f, G, g, n, true, true, t, cov);
+        for (uint64_t x = 0; x < len; x++) g1[x] = rnd_below(3) ? wgt_neg(f[x]) : g[x];
+        for (uint64_t x = 0; x < len; x++) h[x] = wgt_add(f[x], g1[x]);
+        tally(&t[X_CANCEL], bqd_add(F, bqd_from_vector(g1, n)), h, n);
+        for (int k = 0; k < 4; k++) xp_compose(n, t, cov);
+    }
+
+    for (int i = 0; i < X_COUNT; i++) report(xtally_name[i], t[i].bad, t[i].tot);
+    for (int i = 0; i < XC_COUNT; i++) {
+        if (!pauli && (i == XC_OPPOSITE || i == XC_REPAIR || i == XC_ZTOP)) continue;
+        covered(xcover_name[i], cov[i]);
+    }
+    structure_report("operations");
+    free(f); free(g); free(h); free(g0); free(g1);
+}
+
+/*
+ * The operations of qsylvan_bqd_gates.h and qsylvan_bqd_ops.h in the
+ * translation and Pauli families, where every one of them is the recursion
+ * of qsylvan_bqd_xp.h on labelled edges: on every vector over {0, 1, -1, i}
+ * on 1 and 2 qubits every gate, restriction, projection, local matvec,
+ * controlled gate, swap, monomial and product there is, and on one vector in
+ * eight on 3 qubits, at random, a random draw of them. check_operations and
+ * check_diagonal run on larger random states in these families as well.
+ */
+enum {
+    XE_GATE, XE_DYN, XE_RESTRICT, XE_PROJECT, XE_MATVEC1, XE_CGATE, XE_CPHASE, XE_EITHER,
+    XE_SWAP, XE_MATVEC2, XE_DIAG, XE_PRODUCT, XE_FULL, XE_LGATE, XE_LRESTRICT, XE_LPROJECT,
+    XE_COUNT
+};
+static const char *xe_name[XE_COUNT] = {
+    "bqd_gate, table gates", "bqd_gate, random exact 2x2", "bqd_restrict", "bqd_project",
+    "bqd_local_matvec on one qubit", "bqd_cgate, controls above the target",
+    "bqd_cgate, phase with controls anywhere", "bqd_cgate_either, X and Z", "bqd_swap",
+    "bqd_local_matvec on two qubits", "bqd_apply_diagonal", "bqd_product", "bqd_has_full_support",
+    "Gate, labelled operands (bqd_xp_cgate_rec)", "Restrict, labelled operands (bqd_xp_restrict)",
+    "Project, labelled operands (bqd_xp_project)",
+};
+
+enum {
+    XEC_ROOT, XEC_TARGET, XEC_CONTROL, XEC_ZERO_LOW, XEC_CANCEL, XEC_BELOW, XEC_SKIP, XEC_COUNT
+};
+static const char *xec_name[XEC_COUNT] = {
+    "states whose root edge skips", "gates on a skipped target",
+    "controlled gates with a skipped control", "gates on a qubit whose low cofactor is zero",
+    "gates that cancel an amplitude", "controls below the target (either, phase)",
+    "results that skip a level",
+};
+
+/** Draw one of `count` things, or with `all` take them all: the range [*lo, *hi). */
+static void
+one_or_all(bool all, uint64_t count, uint64_t *lo, uint64_t *hi)
+{
+    *lo = all ? 0 : rnd_below(count);
+    *hi = all ? count : *lo + 1;
+}
+
+/** tally, and count a result that skips a level. */
+static void
+xe_tally(tally_t *t, BQD got, const EVBDD_WGT *h, unsigned n, unsigned *cov)
+{
+    bool to_terminal;
+    if (skipped_qubits(got, n, &to_terminal) != 0) cov[XEC_SKIP]++;
+    tally(t, got, h, n);
+}
+
+/**
+ * The operations on F, the diagram of f on n qubits, and when `all` every
+ * gate on every qubit and every set of controls, and one random draw of each
+ * kind otherwise. The dynamic gate is whatever set_dynamic put there.
+ */
+static void
+xp_gates_on(BQD F, const EVBDD_WGT *f, unsigned n, bool all, tally_t *t, unsigned *cov)
+{
+    static const uint32_t table[] = { GATEID_H, GATEID_X, GATEID_Y, GATEID_Z, GATEID_S,
+                                      GATEID_T, GATEID_Tdag, GATEID_sqrtX, GATEID_sqrtY,
+                                      GATEID_proj0, GATEID_proj1 };
+    static const uint32_t ctl[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H, GATEID_S,
+                                    GATEID_T, GATEID_sqrtX, GATEID_dynamic };
+    static const uint32_t ph[] = { GATEID_Z, GATEID_S, GATEID_T, GATEID_Sdag };
+    const uint64_t len = UINT64_C(1) << n;
+    EVBDD_WGT *h = malloc(len * sizeof(EVBDD_WGT));
+    bool to_terminal;
+    const uint64_t skF = skipped_qubits(F, n, &to_terminal);
+    if (!limdd_edge_is_zero(F) && level_of(limdd_target(F), n) > 0) cov[XEC_ROOT]++;
+    uint64_t lo, hi, glo, ghi;
+
+    one_or_all(all, n, &lo, &hi);
+    for (uint32_t q = (uint32_t)lo; q < hi; q++) {
+        one_or_all(all, sizeof(table) / sizeof(table[0]), &glo, &ghi);
+        for (uint64_t gi = glo; gi < ghi; gi++) {
+            memcpy(h, f, len * sizeof(EVBDD_WGT));
+            dense_gate(h, n, gates[table[gi]], 0, q);
+            if ((skF >> q) & 1) cov[XEC_TARGET]++;
+            gate_cases(f, h, n, q, &cov[XEC_ZERO_LOW], &cov[XEC_CANCEL]);
+            xe_tally(&t[XE_GATE], bqd_gate(F, table[gi], q, n), h, n, cov);
+        }
+        memcpy(h, f, len * sizeof(EVBDD_WGT));
+        dense_gate(h, n, gates[GATEID_dynamic], 0, q);
+        gate_cases(f, h, n, q, &cov[XEC_ZERO_LOW], &cov[XEC_CANCEL]);
+        xe_tally(&t[XE_DYN], bqd_gate(F, GATEID_dynamic, q, n), h, n, cov);
+        xe_tally(&t[XE_MATVEC1], bqd_local_matvec(F, gates[GATEID_dynamic], &q, 1, n), h, n, cov);
+        for (int b = 0; b < 2; b++) {
+            dense_restrict(f, n, q, b, h);
+            xe_tally(&t[XE_RESTRICT], bqd_restrict(F, q, b), h, n, cov);
+            dense_project(f, n, q, b, h);
+            xe_tally(&t[XE_PROJECT], bqd_project(F, q, b), h, n, cov);
+        }
+    }
+
+    if (n >= 2) {
+        /* controls above the target: every nonempty set of them, or one */
+        one_or_all(all, n - 1, &lo, &hi);
+        for (uint32_t q = (uint32_t)lo + 1; q < hi + 1; q++) {
+            uint64_t clo, chi;
+            one_or_all(all, (UINT64_C(1) << q) - 1, &clo, &chi);
+            for (uint64_t cm = clo + 1; cm < chi + 1; cm++) {
+                one_or_all(all, sizeof(ctl) / sizeof(ctl[0]), &glo, &ghi);
+                for (uint64_t gi = glo; gi < ghi; gi++) {
+                    if (cm & skF) cov[XEC_CONTROL]++;
+                    if ((skF >> q) & 1) cov[XEC_TARGET]++;
+                    memcpy(h, f, len * sizeof(EVBDD_WGT));
+                    dense_gate(h, n, gates[ctl[gi]], cm, q);
+                    xe_tally(&t[XE_CGATE], bqd_cgate(F, ctl[gi], cm, q, n), h, n, cov);
+                }
+            }
+        }
+        /* a phase, its controls anywhere but the target: every set, or one */
+        one_or_all(all, n, &lo, &hi);
+        for (uint32_t q = (uint32_t)lo; q < hi; q++) {
+            const uint64_t others = ((UINT64_C(1) << n) - 1) & ~(UINT64_C(1) << q);
+            uint64_t mlo, mhi;
+            one_or_all(all, UINT64_C(1) << n, &mlo, &mhi);
+            for (uint64_t m = mlo; m < mhi; m++) {
+                const uint64_t pm = all ? m & others : others & (m | (UINT64_C(1) << rnd_below(n)));
+                if (pm == 0 || (all && (m & ~others))) continue;
+                if (pm >> (q + 1)) cov[XEC_BELOW]++;
+                one_or_all(all, 4, &glo, &ghi);
+                for (uint64_t gi = glo; gi < ghi; gi++) {
+                    memcpy(h, f, len * sizeof(EVBDD_WGT));
+                    dense_gate(h, n, gates[ph[gi]], pm, q);
+                    xe_tally(&t[XE_CPHASE], bqd_cgate(F, ph[gi], pm, q, n), h, n, cov);
+                }
+            }
+        }
+        /* one control on either side, a swap, and a matvec, on every pair or one */
+        one_or_all(all, (uint64_t)n * n, &lo, &hi);
+        for (uint64_t ab = lo; ab < hi; ab++) {
+            const unsigned a = (unsigned)(ab / n), b = (unsigned)(ab % n);
+            if (a == b) continue;
+            if (a > b) cov[XEC_BELOW]++;
+            for (int k = 0; k < 2; k++) {
+                const uint32_t eg = k ? GATEID_Z : GATEID_X;
+                memcpy(h, f, len * sizeof(EVBDD_WGT));
+                dense_gate(h, n, gates[eg], UINT64_C(1) << a, b);
+                bool ok;
+                const BQD r = bqd_cgate_either(F, eg, a, b, n, &ok);
+                xe_tally(&t[XE_EITHER], r, h, n, cov);
+                if (!ok) t[XE_EITHER].bad++;
+            }
+            memcpy(h, f, len * sizeof(EVBDD_WGT));
+            dense_swap(h, n, a, b);
+            xe_tally(&t[XE_SWAP], bqd_swap(F, a, b, n), h, n, cov);
+            const uint32_t qs[2] = { a, b };
+            EVBDD_WGT M[16];
+            for (int i = 0; i < 16; i++) M[i] = rand_entry();
+            dense_matvec(f, n, M, qs, 2, h);
+            xe_tally(&t[XE_MATVEC2], bqd_local_matvec(F, M, qs, 2, n), h, n, cov);
+        }
+    }
+
+    /* the monomials on every set of qubits with every phase but 1, or one */
+    one_or_all(all, ((UINT64_C(1) << n) - 1) * 7, &lo, &hi);
+    for (uint64_t k = lo; k < hi; k++) {
+        const uint64_t A = imask(1 + k / 7, n);
+        const EVBDD_WGT phase = pw[1 + k % 7];
+        for (uint64_t x = 0; x < len; x++) h[x] = ((x & A) == A) ? wgt_mul(f[x], phase) : f[x];
+        xe_tally(&t[XE_DIAG], bqd_apply_diagonal(F, A, phase, n), h, n, cov);
+    }
+
+    bool full = true;
+    for (uint64_t x = 0; x < len; x++) if (f[x] == EVBDD_ZERO) full = false;
+    t[XE_FULL].tot++;
+    if (bqd_has_full_support(F) != full) t[XE_FULL].bad++;
+    free(h);
+}
+
+static void
+check_xp_exhaustive(void)
+{
+    const EVBDD_WGT vals[4] = { EVBDD_ZERO, EVBDD_ONE, EVBDD_MIN_ONE, pw[2] };
+    EVBDD_WGT f[8], g[8], h[8];
+    tally_t t[XE_COUNT];
+    unsigned cov[XEC_COUNT];
+    memset(t, 0, sizeof(t));
+    memset(cov, 0, sizeof(cov));
+    structure_begin();
+
+    for (unsigned n = 1; n <= 3; n++) {
+        const uint64_t len = UINT64_C(1) << n, count = UINT64_C(1) << (2 * len);
+        EVBDD_WGT U[4];
+        for (int i = 0; i < 4; i++) U[i] = rand_entry();
+        set_dynamic(U);
+        for (uint64_t idx = 0; idx < count; idx++) {
+            if (n == 3 && rnd_below(8 * THIN) != 0) continue;     /* one vector in 8 on 3 qubits */
+            for (uint64_t x = 0; x < len; x++) f[x] = vals[(idx >> (2 * x)) & 3];
+            const BQD F = bqd_from_vector(f, n);
+            xp_gates_on(F, f, n, n <= 2, t, cov);
+            xp_labelled_gates(F, n, 2, &t[XE_LGATE]);
+            /* the product with every partner on 1 and 2 qubits, a random one on 3 */
+            for (uint64_t jdx = 0; jdx < count; jdx++) {
+                const uint64_t j = (n <= 2) ? jdx : rnd_below(count);
+                for (uint64_t x = 0; x < len; x++) g[x] = vals[(j >> (2 * x)) & 3];
+                for (uint64_t x = 0; x < len; x++) h[x] = wgt_mul(f[x], g[x]);
+                xe_tally(&t[XE_PRODUCT], bqd_product(F, bqd_from_vector(g, n)), h, n, cov);
+                if (n > 2) break;
+            }
+        }
+    }
+
+    for (int i = 0; i < XE_COUNT; i++) report(xe_name[i], t[i].bad, t[i].tot);
+    for (int i = 0; i < XEC_COUNT; i++) covered(xec_name[i], cov[i]);
+    structure_report("n <= 3, gates and the rest");
 }
 
 /* --- collections, scalar family ------------------------------------------ */
@@ -1209,14 +1937,17 @@ VOID_TASK_0(check_gc_circuits)
     BQD state = limdd_zero_edge();
     limdd_protect(&state);
 
-    for (int run = 0; run < 40; run++) {
+    for (int run = 0; run < 40 / THIN; run++) {
         const unsigned n = 2 + (unsigned)rnd_below(NQ - 1);
         const uint64_t len = UINT64_C(1) << n;
         EVBDD_WGT U[4];
         for (int i = 0; i < 4; i++) U[i] = rand_entry();
         set_dynamic(U);
-        for (uint64_t x = 0; x < len; x++) f[x] = x ? EVBDD_ZERO : EVBDD_ONE;
-        state = bqd_basis_state(0, n);
+        /* from |0...0>, and in the translation and Pauli families from any
+         * basis state, which is a translate of it */
+        const uint64_t x0 = bqd_family() != BQD_FAMILY_SCALAR ? rnd_below(len) : 0;
+        for (uint64_t x = 0; x < len; x++) f[x] = (x == x0) ? EVBDD_ONE : EVBDD_ZERO;
+        state = bqd_basis_state(x0, n);
         for (int k = 0; k < 40; k++) {
             const unsigned q = (unsigned)rnd_below(n);
             unsigned c = (unsigned)rnd_below(n - 1); if (c >= q) c++;
@@ -1391,6 +2122,7 @@ static void
 pool_fresh(pool_t *p, unsigned i)
 {
     rand_state(p->n, (unsigned)rnd_below(S_KINDS), p->v[i]);
+    if (bqd_family() != BQD_FAMILY_SCALAR && rnd_below(2)) twist(p->n, p->v[i]);
     p->e[i] = bqd_from_vector(p->v[i], p->n);
 }
 
@@ -1417,7 +2149,7 @@ VOID_TASK_0(check_gc_pool)
     }
 
     unsigned next = 1 + (unsigned)rnd_below(4);
-    for (int it = 0; it < 250; it++) {
+    for (int it = 0; it < 250 / THIN; it++) {
         pool_t *p = &pools[rnd_below(3) == 0];
         const unsigned n = p->n;
         const unsigned a = (unsigned)rnd_below(POOL), b = (unsigned)rnd_below(POOL);
@@ -1488,6 +2220,314 @@ TASK_0(int, run_collections)
     return failures != before;
 }
 
+/* --- collections, translation and Pauli families ---------------------------- */
+
+enum {
+    XG_MUL, XG_ADD, XG_XPROD, XG_XQUOT, XG_SCALE, XG_NEGATE, XG_COF, XG_FLIP, XG_SIGN,
+    XG_CANON, XG_KINDS
+};
+
+/**
+ * A fresh state of a kind whose values are in Z[w_8, 1/2], a phase, circuit
+ * or basis state or one with values w_8^k and zeros, translated and signed
+ * at random in the families that have those.
+ */
+static void
+pool_fresh_xp(pool_t *p, unsigned i)
+{
+    static const unsigned kinds[] = { S_PHASE, S_CIRCUIT, S_BASIS_PLUS };
+    if (rnd_below(4) == 0) rand_on(p->n, rand_qubits(p->n), 0.3, false, p->v[i]);
+    else rand_state(p->n, kinds[rnd_below(3)], p->v[i]);
+    twist(p->n, p->v[i]);
+    p->e[i] = bqd_from_vector(p->v[i], p->n);
+}
+
+/**
+ * As check_gc_pool, with the operations of the two families: the four
+ * pointwise ones on kept results or on random labelled edges on their
+ * nodes, scale and negate, a cofactor, an X and a Z at a level down to the
+ * top made from the two cofactors by Compose, and Canon of a labelled edge.
+ * Each result must be the edge bqd_from_vector builds, and every kept one
+ * must be it still after each collection. The states are those of
+ * pool_fresh_xp, scalars are powers of w_8, and a quotient is not kept:
+ * kept products and quotients of algebraic numbers grow without bound in
+ * exact arithmetic, and the test would time the rationals.
+ */
+VOID_TASK_0(check_gc_xp_pool)
+{
+    pool_t *pools = malloc(2 * sizeof(pool_t));
+    EVBDD_WGT *h = malloc(MAXV * sizeof(EVBDD_WGT)), *g = malloc(MAXV * sizeof(EVBDD_WGT));
+    EVBDD_WGT *la = malloc(MAXV * sizeof(EVBDD_WGT)), *lb = malloc(MAXV * sizeof(EVBDD_WGT));
+    tally_t t = { 0, 0 }, kept = { 0, 0 };
+    unsigned labelled = 0, freed = 0;
+    pools[0].n = NQ;
+    pools[1].n = NQ - 2;
+    for (int k = 0; k < 2; k++) for (unsigned i = 0; i < POOL; i++) {
+        pool_fresh_xp(&pools[k], i);
+        limdd_protect(&pools[k].e[i]);
+    }
+
+    unsigned next = 1 + (unsigned)rnd_below(4);
+    for (int it = 0; it < 400 / THIN; it++) {
+        pool_t *p = &pools[rnd_below(3) == 0];
+        const unsigned n = p->n;
+        const uint64_t len = UINT64_C(1) << n;
+        const unsigned a = (unsigned)rnd_below(POOL), b = (unsigned)rnd_below(POOL);
+        BQD A = p->e[a], B = p->e[b];
+        const unsigned top = bqd_xp_top(A);
+        const unsigned v = (unsigned)rnd_below((top < n ? top : n - 1) + 1);
+        bool keep = true;
+        BQD r;
+        switch (rnd_below(XG_KINDS)) {
+        case XG_MUL: case XG_ADD: case XG_XPROD: case XG_XQUOT: {
+            const int op = (int)rnd_below(4);
+            keep = op != BQD_OP_XQUOT;
+            memcpy(la, p->v[a], len * sizeof(EVBDD_WGT));
+            memcpy(lb, p->v[b], len * sizeof(EVBDD_WGT));
+            if (rnd_below(2)) {
+                A = relabel(A, rand_label(n, false), n, la);
+                B = relabel(B, rand_label(n, false), n, lb);
+                labelled++;
+            }
+            dense_pointwise(op, la, lb, n, h);
+            r = pointwise(op, A, B);
+            break;
+        }
+        case XG_SCALE: {
+            const EVBDD_WGT c = pw[rnd_below(8)];
+            for (uint64_t x = 0; x < len; x++) h[x] = wgt_mul(c, p->v[a][x]);
+            r = bqd_scale(A, c);
+            break;
+        }
+        case XG_NEGATE:
+            for (uint64_t x = 0; x < len; x++) h[x] = wgt_neg(p->v[a][x]);
+            r = bqd_negate(A);
+            break;
+        case XG_COF: {
+            const int bb = (int)rnd_below(2);
+            dense_restrict(p->v[a], n, v, bb, h);
+            r = bqd_cofactor(A, v, bb);
+            break;
+        }
+        case XG_FLIP: case XG_SIGN: {
+            const bool flip = rnd_below(2);
+            memcpy(h, p->v[a], len * sizeof(EVBDD_WGT));
+            dense_gate(h, n, gates[flip ? GATEID_X : GATEID_Z], 0, v);
+            const BQD c0 = bqd_cofactor(A, v, 0), c1 = bqd_cofactor(A, v, 1);
+            r = flip ? bqd_compose(v, c1, c0) : bqd_compose(v, c0, bqd_negate(c1));
+            break;
+        }
+        default:
+            r = bqd_xp_canon(relabel(A, rand_label(n, false), n, h));
+            break;
+        }
+        tally(&t, r, h, n);
+        if (keep) {
+            const unsigned d = (unsigned)rnd_below(POOL);
+            p->e[d] = r;
+            memcpy(p->v[d], h, len * sizeof(EVBDD_WGT));
+        }
+        /* products and cofactors thin a pool out, so now and then a fresh state */
+        if (rnd_below(8) == 0) pool_fresh_xp(p, (unsigned)rnd_below(POOL));
+
+        if (--next > 0) continue;
+        next = 1 + (unsigned)rnd_below(4);
+        const size_t before = limdd_node_table_count();
+        CALL(limdd_gc);
+        collections++;
+        if (limdd_node_table_count() < before) freed++;
+        set_clear(checked);
+        for (int k = 0; k < 2; k++) for (unsigned i = 0; i < POOL; i++) {
+            const pool_t *kp = &pools[k];
+            kept.tot++;
+            bqd_to_vector(kp->e[i], kp->n, g);
+            if (!same_vector(g, kp->v[i], kp->n) || kp->e[i] != bqd_from_vector(kp->v[i], kp->n))
+                kept.bad++;
+        }
+    }
+
+    for (int k = 0; k < 2; k++) for (unsigned i = 0; i < POOL; i++) limdd_unprotect(&pools[k].e[i]);
+    report("operations on kept results, collected every 1 to 4", t.bad, t.tot);
+    report("kept results after a collection, decoded and rebuilt", kept.bad, kept.tot);
+    covered("operations on random labelled edges", labelled);
+    covered("collections that freed nodes", freed);
+    free(pools); free(h); free(g); free(la); free(lb);
+}
+
+TASK_1(int, run_collections_xp, int, fam)
+{
+    bqd_init((bqd_family_t)fam, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
+    exact_constants();
+    rng_state = UINT64_C(0x5EED6C000000) + (uint64_t)fam;
+
+    const int before = failures;
+    collections = 0;
+    structure_begin();
+    CALL(check_gc_xp_pool);
+    CALL(check_gc_circuits);
+    CALL(check_gc_pool);
+    covered("collections", collections);
+    structure_report("collections");
+    bqd_quit();
+    return failures != before;
+}
+
+/* --- sessions and contention --------------------------------------------- */
+
+/*
+ * Two BQD sessions, bqd_init to bqd_quit, in one Sylvan package, each running
+ * the same gates from |0...0> on 3 qubits and checked after every gate. The
+ * second session's tables hand out the first one's indices again, so a memo
+ * entry that outlived bqd_quit would answer for a different state; and the
+ * translation and Pauli families share their cache ids, so an entry of one
+ * would answer the other, whose Compose differs.
+ */
+static unsigned
+session_gates(bqd_family_t fam)
+{
+    enum { SN = 3, SLEN = 1 << SN };
+    static const uint32_t one[] = { GATEID_H, GATEID_X, GATEID_S, GATEID_T, GATEID_Y, GATEID_Z };
+    bqd_init(fam, SN, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
+    exact_constants();
+    rng_state = UINT64_C(0x5E55105);
+    EVBDD_WGT v[SLEN], w[SLEN];
+    for (unsigned x = 0; x < SLEN; x++) v[x] = x ? EVBDD_ZERO : EVBDD_ONE;
+    BQD s = bqd_basis_state(0, SN);
+    unsigned bad = 0;
+    for (int i = 0; i < 60; i++) {
+        const unsigned a = (unsigned)rnd_below(SN);
+        if (rnd_below(3) == 0 && a + 1 < SN) {
+            s = bqd_cgate(s, GATEID_X, UINT64_C(1) << a, a + 1, SN);
+            dense_gate(v, SN, gates[GATEID_X], UINT64_C(1) << a, a + 1);
+        } else {
+            const uint32_t g = one[rnd_below(6)];
+            s = bqd_gate(s, g, a, SN);
+            dense_gate(v, SN, gates[g], 0, a);
+        }
+        bqd_to_vector(s, SN, w);
+        if (!same_vector(v, w, SN) || s != bqd_from_vector(v, SN)) bad++;
+    }
+    bqd_quit();
+    return bad;
+}
+
+TASK_0(int, run_sessions)
+{
+    static const int pairs[][2] = {
+        { BQD_FAMILY_X, BQD_FAMILY_PAULI }, { BQD_FAMILY_PAULI, BQD_FAMILY_X },
+        { BQD_FAMILY_X, BQD_FAMILY_X }, { BQD_FAMILY_PAULI, BQD_FAMILY_PAULI },
+        { BQD_FAMILY_SCALAR, BQD_FAMILY_SCALAR }, { BQD_FAMILY_SCALAR, BQD_FAMILY_PAULI },
+    };
+    const int before = failures;
+    for (size_t k = 0; k < sizeof(pairs) / sizeof(pairs[0]); k++) {
+        const unsigned first = session_gates((bqd_family_t)pairs[k][0]);
+        const unsigned second = session_gates((bqd_family_t)pairs[k][1]);
+        char what[96];
+        snprintf(what, sizeof(what), "%s, then %s: gates wrong",
+                 bqd_family_name((bqd_family_t)pairs[k][0]),
+                 bqd_family_name((bqd_family_t)pairs[k][1]));
+        report(what, first + second, 120);
+    }
+    return failures != before;
+}
+
+/*
+ * Every worker asks for collections at once, each a different number of
+ * times, so that some ask again right after a frame another one opened, and
+ * go on asking after the others are done. A loser once waited for the
+ * winner's frame rather than for the winner: one that asked after that frame
+ * had ended, but before the winner had lowered its flag, waited for a frame
+ * that no one would open. The alarm turns such a hang into a failure.
+ */
+VOID_TASK_0(ask_for_collections)
+{
+    const unsigned rounds = 4 + 4 * (unsigned)LACE_WORKER_ID;
+    for (unsigned i = 0; i < rounds; i++) CALL(limdd_gc);
+}
+
+TASK_0(int, run_contention)
+{
+    enum { CN = 6, CLEN = 1 << CN };
+    bqd_init(BQD_FAMILY_PAULI, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
+    exact_constants();
+    rng_state = UINT64_C(0xC0117E57);
+    EVBDD_WGT f[CLEN], g[CLEN];
+    rand_state(CN, S_CIRCUIT, f);
+    BQD psi = bqd_from_vector(f, CN);
+    limdd_protect(&psi);
+
+    const int before = failures;
+    const unsigned rounds = 40;
+    alarm(300);
+    for (unsigned r = 0; r < rounds; r++) TOGETHER(ask_for_collections);
+    alarm(0);
+    bqd_to_vector(psi, CN, g);
+    report("a state kept across collections every worker asked for",
+           !same_vector(f, g, CN) || psi != bqd_from_vector(f, CN), 1);
+    covered("rounds of collections asked for by every worker at once", rounds);
+
+    limdd_unprotect(&psi);
+    bqd_quit();
+    return failures != before;
+}
+
+/*
+ * The Pauli table among the tables whose filling asks for a collection. The
+ * Pauli family makes a new Pauli word with many of its label products, far
+ * more of them than new nodes, so in a Pauli table no larger than the node
+ * table and a sixty-fourth of the LIM table only the Pauli table fills.
+ * Clifford gates on 16 qubits as the runner applies them, asking
+ * limdd_gc_wanted after each: without the Pauli table in the trigger the run
+ * stops with that table full. The state after the last gate must be the one
+ * the same gates make in large tables, which never collect.
+ */
+TASK_2(BQD, trigger_gates, bool, collect, unsigned*, collected)
+{
+    enum { TN = 16 };
+    static const uint32_t one[] = { GATEID_H, GATEID_H, GATEID_X, GATEID_Y, GATEID_Z,
+                                    GATEID_S, GATEID_Sdag };
+    rng_state = UINT64_C(0x7E57);
+    BQD s = bqd_basis_state(0, TN);
+    limdd_protect(&s);
+    for (int i = 0; i < 1200; i++) {
+        if (rnd() % 2) {
+            s = bqd_gate(s, one[rnd() % 7], (uint32_t)(rnd() % TN), TN);
+        } else {
+            const unsigned a = (unsigned)(rnd() % TN), b0 = (unsigned)(rnd() % TN);
+            const unsigned b = a == b0 ? (a + 1) % TN : b0;
+            if (rnd() % 2) {
+                s = bqd_cgate(s, GATEID_Z, UINT64_C(1) << a, b, TN);
+            } else {
+                const unsigned c = a < b ? a : b, t = a < b ? b : a;
+                s = bqd_cgate(s, GATEID_X, UINT64_C(1) << c, t, TN);
+            }
+        }
+        if (collect && limdd_gc_wanted()) { CALL(limdd_gc); (*collected)++; }
+    }
+    limdd_unprotect(&s);
+    return s;
+}
+
+TASK_0(int, run_pauli_trigger)
+{
+    enum { TN = 16, TLEN = 1 << TN };
+    EVBDD_WGT *a = malloc(TLEN * sizeof(EVBDD_WGT)), *b = malloc(TLEN * sizeof(EVBDD_WGT));
+    unsigned collected = 0;
+    const int before = failures;
+
+    bqd_init(BQD_FAMILY_PAULI, TN, 1LL << 14, 1LL << 14, 1LL << 20, 1LL << 14);
+    bqd_to_vector(CALL(trigger_gates, true, &collected), TN, a);
+    bqd_quit();
+    bqd_init(BQD_FAMILY_PAULI, TN, 1LL << 20, 1LL << 22, 1LL << 22, 1LL << 20);
+    bqd_to_vector(CALL(trigger_gates, false, &collected), TN, b);
+    bqd_quit();
+
+    report("Pauli table in the trigger: the state in small tables", !same_vector(a, b, TN), 1);
+    covered("collections asked for between the gates", collected);
+    free(a); free(b);
+    return failures != before;
+}
+
 /* --- harness -------------------------------------------------------------- */
 
 TASK_1(int, run_family, int, fam)
@@ -1499,10 +2539,12 @@ TASK_1(int, run_family, int, fam)
     const int before = failures;
     check_exhaustive();
     check_random_builds();
-    if (fam == BQD_FAMILY_SCALAR) {
-        check_operations();
-        check_diagonal();
+    if (fam != BQD_FAMILY_SCALAR) {
+        check_xp_operations();
+        check_xp_exhaustive();
     }
+    check_operations();
+    check_diagonal();
     printf("  %zu nodes in the table\n", limdd_node_table_count());
     bqd_quit();
     return failures != before;
@@ -1528,9 +2570,11 @@ session_end(void)
 int
 main(void)
 {
+    /* a line at a time, so that a crash leaves the check it happened in */
+    setvbuf(stdout, NULL, _IOLBF, 0);
     const unsigned workers = getenv("BQD_SKIP_WORKERS") ? (unsigned)atoi(getenv("BQD_SKIP_WORKERS")) : 4;
     const unsigned repeat = getenv("BQD_SKIP_REPEAT") ? (unsigned)atoi(getenv("BQD_SKIP_REPEAT")) : 1;
-    /* one family alone, by its number, when chasing a failure */
+    /* one family alone, by its number, or 3 for the sessions, when chasing a failure */
     const int only = getenv("BQD_SKIP_FAMILY") ? atoi(getenv("BQD_SKIP_FAMILY")) : -1;
     walked = calloc(1, sizeof(nodeset_t));
     checked = calloc(1, sizeof(nodeset_t));
@@ -1546,12 +2590,25 @@ main(void)
             printf("  %s\n", res ? "FAILED" : "ok");
             bad |= res;
         }
-        if (only >= 0 && only != BQD_FAMILY_SCALAR) continue;
-        /* a small memo, which a collection clears, and which overwrites
-         * entries more often in between */
-        printf("== BQD, collections between operations, %u workers ==\n", workers);
-        session_begin(workers, 16);
-        const int res = RUN(run_collections);
+        for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
+            if (only >= 0 && fam != only) continue;
+            /* a small memo, which a collection clears, and which overwrites
+             * entries more often in between */
+            printf("== %s, collections between operations, %u workers ==\n",
+                   bqd_family_name((bqd_family_t)fam), workers);
+            session_begin(workers, 16);
+            const int res = fam == BQD_FAMILY_SCALAR ? RUN(run_collections)
+                                                     : RUN(run_collections_xp, fam);
+            session_end();
+            printf("  %s\n", res ? "FAILED" : "ok");
+            bad |= res;
+        }
+    }
+    if (only < 0 || only == 3) {
+        printf("== two sessions in one Sylvan package, contention and the trigger, %u workers ==\n",
+               workers);
+        session_begin(workers, 20);
+        const int res = RUN(run_sessions) | RUN(run_contention) | RUN(run_pauli_trigger);
         session_end();
         printf("  %s\n", res ? "FAILED" : "ok");
         bad |= res;

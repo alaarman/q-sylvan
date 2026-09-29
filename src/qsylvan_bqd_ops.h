@@ -47,13 +47,21 @@
  * qsylvan_bqd_gates.h, exact and without a bound. A summation query is not
  * anywhere.
  *
- * Both need the scalar family, and exit without it. Both need full support
- * too, since a zero makes the copy fire and the ratio of the products stop
- * being the product of the ratios; outside it they return a wrong diagram
- * rather than failing. So each tests full support of its whole input, a walk
- * memoised on nodes (bqd_has_full_support), and hands a state with a zero to
- * the general product of qsylvan_bqd_gates.h, which is correct on any support
- * and has no bound.
+ * Both need scalar labels and full support: a zero makes the copy fire and
+ * the ratio of the products stop being the product of the ratios, and a
+ * translation or a sign label is not a scalar; outside them they return a
+ * wrong diagram rather than failing. The translation family has scalar
+ * labels wherever the support is full, since every least point is then 0,
+ * and its diagram is the scalar family's node for node, so both serve it
+ * too. The Pauli family has sign labels there, and a product of two pivot
+ * values in [0, pi) need not be in [0, pi), so a node of the product may
+ * need the sign repair. So each tests full support of its whole input, a
+ * walk memoised on nodes (bqd_has_full_support), and hands a state with a
+ * zero to the general product of qsylvan_bqd_gates.h, which is correct on
+ * any support and has no bound; bqd_product hands it every state of the
+ * Pauli family as well, and bqd_apply_diagonal takes a state of full support
+ * in the Pauli family to bqd_xp_diagonal, the same walk with label products
+ * and the sign repair at the last qubit of A (skip:alg:xdiag).
  */
 
 #ifndef QSYLVAN_BQD_OPS_H
@@ -66,10 +74,10 @@ extern "C" {
 #endif
 
 /**
- * The pointwise product f.g of two diagrams of the scalar family, canonical,
- * as a Lace task memoised on node pairs: prop:prodscalar when both have full
- * support, and bqd_multiply otherwise. The support of both is tested once,
- * here, and the recursion below takes it as given.
+ * The pointwise product f.g of two diagrams, canonical, as a Lace task
+ * memoised on node pairs: prop:prodscalar when both have full support in the
+ * scalar or translation family, and bqd_multiply otherwise. The support of
+ * both is tested once, here, and the recursion below takes it as given.
  */
 TASK_DECL_2(BQD, bqd_product, BQD, BQD);
 #define bqd_product(f, g) RUN(bqd_product, f, g)
@@ -85,8 +93,9 @@ LIMDD_TARG bqd_ones(uint32_t var, uint32_t nqubits);
  * The phase state phase^{x_{i_1} ... x_{i_d}} for the monomial on the qubits
  * of `A` (a vector-index mask): one node at each qubit of A and none
  * elsewhere, a path whose low edges are the constant one, and the terminal
- * for a phase of one. The diagram of a diagonal gate, for bqd_product;
- * bqd_apply_diagonal does not need it.
+ * for a phase of one; in the Pauli family a phase of -1 is a Z at the last
+ * qubit of A and no node there. The diagram of a diagonal gate, for
+ * bqd_product; bqd_apply_diagonal does not need it on full support.
  */
 BQD bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
 
@@ -97,9 +106,10 @@ BQD bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
  * whatever |e| is; the walk stops early where e skips a qubit of A
  * (skip:prop:diag). At most one new node per level is made, after the test
  * for full support, which is memoised and so costs only the nodes it has not
- * seen. Without full support it is bqd_multiply with the monomial. The
- * result is the canonical diagram, the same edge as
- * bqd_product(e, bqd_monomial(...)). From a Lace worker.
+ * seen. Without full support it is bqd_multiply with the monomial, and
+ * visits nothing. In the Pauli family the walk is bqd_xp_diagonal, which
+ * visits the same path. The result is the canonical diagram, the same edge
+ * as bqd_product(e, bqd_monomial(...)). From a Lace worker.
  */
 BQD bqd_apply_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
 

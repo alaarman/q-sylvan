@@ -34,6 +34,14 @@ bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
                         "it holds 1 to 63 qubits, not %zu\n", n);
         exit(1);
     }
+    /* the other two families key their memos on a Pauli word's index beside
+     * a node's, in one word (qsylvan_bqd_xp.c) */
+    if (f != BQD_FAMILY_SCALAR && pauli_tablesize > (UINT64_C(1) << 32)) {
+        fprintf(stderr, "sylvan: the %s keys its memos on 32-bit Pauli-word indices, "
+                        "so its Pauli table holds at most 2^32 words, not %zu\n",
+                bqd_family_name(f), pauli_tablesize);
+        exit(1);
+    }
     family  = f;
     nqubits = n;
     limdd_nodes_init(n, node_tablesize, pauli_tablesize, lim_tablesize, stab_tablesize);
@@ -108,6 +116,12 @@ arg_in_upper(EVBDD_WGT w)
     }
     const complex_t z = weight_as_complex(w);
     return z.i > 0.0 || (z.i == 0.0 && z.r > 0.0);
+}
+
+bool
+bqd_arg_in_upper(EVBDD_WGT w)
+{
+    return arg_in_upper(w);
 }
 
 /* --- labels --------------------------------------------------------------- */
