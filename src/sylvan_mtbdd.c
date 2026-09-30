@@ -380,6 +380,14 @@ mtbdd_refs_sync(MTBDD result)
     return result;
 }
 
+void
+mtbdd_refs_depths(size_t depth[3])
+{
+    depth[0] = (size_t)(mtbdd_refs_key->rcur - mtbdd_refs_key->rbegin);
+    depth[1] = (size_t)(mtbdd_refs_key->pcur - mtbdd_refs_key->pbegin);
+    depth[2] = (size_t)(mtbdd_refs_key->scur - mtbdd_refs_key->sbegin);
+}
+
 /**
  * Initialize and quit functions
  */

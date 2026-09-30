@@ -135,6 +135,13 @@ void  limdd_refs_pushptr(const LIMDD *ptr);
 void  limdd_refs_popptr(size_t amount);
 void  limdd_refs_spawn(Task *t);
 LIMDD limdd_refs_sync(LIMDD result);
+/**
+ * The depths of this worker's three stacks, values, pointers and tasks, in
+ * that order, as mtbdd_refs_depths: for a test that an operation leaves them
+ * as it found them. A leaked push only deepens a stack, and a missing one
+ * shows only when a collection lands where it was due.
+ */
+void  limdd_refs_depths(size_t depth[3]);
 
 /**
  * Collect the four LIMDD tables, keeping only what the protected edges reach.

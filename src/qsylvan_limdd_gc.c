@@ -318,6 +318,14 @@ limdd_refs_sync(LIMDD result)
     return result;
 }
 
+void
+limdd_refs_depths(size_t depth[3])
+{
+    depth[0] = (size_t)(limdd_refs_key->rcur - limdd_refs_key->rbegin);
+    depth[1] = (size_t)(limdd_refs_key->pcur - limdd_refs_key->pbegin);
+    depth[2] = (size_t)(limdd_refs_key->scur - limdd_refs_key->sbegin);
+}
+
 VOID_TASK_0(limdd_gc_mark_roots)
 {
     if (!limdd_protected_created) return;

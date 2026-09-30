@@ -1192,6 +1192,12 @@ void mtbdd_refs_spawn(Task *t);
  */
 MTBDD mtbdd_refs_sync(MTBDD mtbdd);
 
+/**
+ * The depths of this worker's three stacks, values, pointers and tasks, in
+ * that order: for a test that an operation leaves them as it found them.
+ */
+void mtbdd_refs_depths(size_t depth[3]);
+
 
 /** Matrix / vector operations - extension of original API of Tom van Dijk **/
 
