@@ -94,7 +94,7 @@ static struct argp_option options[] =
     {"json", 'j', "<filename>", 0, "Write stats to given filename as json", 0},
     {"count-nodes", 'c', 0, 0, "Track maximum number of nodes", 0},
     {"cache-size", 1010, "<size>", 0, "log2 of the operation cache size (default 16)", 0},
-    {"trace", 1013, "<filename>", 0, "Write per-gate telemetry as CSV: after every gate, the running T count, the node count, the LIMDD width and the largest algebraic weight in bits. This is what relates the theorems to a run -- width against 2^t, and coefficient size against the bound of Section 5.", 0},
+    {"trace", 1013, "<filename>", 0, "Write per-gate telemetry as CSV: after every gate, the running T count, the node count, the LIMDD width and the largest algebraic weight in bits, the gate's wall-clock time in seconds, and, with -d bqd, whether the state had full support before the gate (1 or 0), which decides whether a diagonal gate takes the O(n) walk. This is what relates the theorems to a run -- width against 2^t, and coefficient size against the bound of Section 5 -- and shows which gates the time goes to. With -d qmdd the width and the support are left empty. Every row is written as it is made, so a run that is killed keeps the rows of the gates it finished.", 0},
     {"lim-stats", 1009, 0, 0, "For limdd: report the Pauli support of the high-edge LIM per level, to size an inline encoding", 0},
     {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
@@ -647,18 +647,32 @@ dd_apply_gate(const dd_gate_ops_t *dd, LIMDD *state, quantum_op_t *gate, BDDVAR 
  *
  * Width and coefficient size both need a walk of the whole diagram, so this
  * is only done when --trace asks for it: on a circuit with a large diagram it
- * costs more than the gates do.
+ * costs more than the gates do. `seconds` is the gate alone, taken around the
+ * call that applies it, and on the LIMDD arm the rebuild --canon schedules
+ * after it, so neither these walks nor a collection between gates is in it.
+ * `full` is whether the state had full support before the gate, 1 or 0, on
+ * the BQD arm, and -1, an empty field, on the others.
  */
+#define TRACE_HEADER "gate_index,gate,t_count,nodes,width,wgt_bits,seconds,full_support\n"
+
 static void
-trace_row(uint64_t gate_idx, const char *gate, LIMDD state, uint32_t n)
+trace_full(int full)
+{
+    if (full < 0) fprintf(trace_out, "\n");
+    else fprintf(trace_out, "%d\n", full);
+}
+
+static void
+trace_row(uint64_t gate_idx, const char *gate, LIMDD state, uint32_t n, double seconds, int full)
 {
     if (trace_out == NULL) return;
     const size_t nodes = limdd_nodecount(state, n);
     const size_t width = limdd_width(state, n);
     const uint64_t bits = limdd_max_wgt_bits(state, n);
     if (width > stats.max_width) stats.max_width = width;
-    fprintf(trace_out, "%" PRIu64 ",%s,%" PRIu64 ",%zu,%zu,%" PRIu64 "\n",
-            gate_idx, gate, stats.t_count, nodes, width, bits);
+    fprintf(trace_out, "%" PRIu64 ",%s,%" PRIu64 ",%zu,%zu,%" PRIu64 ",%.6f,",
+            gate_idx, gate, stats.t_count, nodes, width, bits, seconds);
+    trace_full(full);
 }
 
 TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
@@ -675,10 +689,10 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
     LIMDD state = limdd_all_zero_state(n);
     limdd_protect(&state);
     uint64_t gate_idx = 0;
-    if (trace_out != NULL)
-        fprintf(trace_out, "gate_index,gate,t_count,nodes,width,wgt_bits\n");
+    if (trace_out != NULL) fprintf(trace_out, TRACE_HEADER);
 
     for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
+        const double t_gate = wctime();
         if (op->type == op_gate) {
             if (!dd_apply_gate(&LIMDD_GATES, &state, op, n)) { limdd_unprotect(&state); return 1; }
         }
@@ -688,6 +702,7 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
         /* Between operations, never inside one: limdd_canonize rebuilds
          * nodes bottom-up and needs a root that is not half-built. */
         if (limdd_canon_due()) state = limdd_canonize(state);
+        const double seconds = wctime() - t_gate;
 
         if (count_nodes) {
             const uint64_t c = limdd_countnodes(state);
@@ -695,7 +710,7 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
         }
 
         if (trace_out != NULL) {
-            trace_row(gate_idx, op->type == op_gate ? op->name : "-", state, n);
+            trace_row(gate_idx, op->type == op_gate ? op->name : "-", state, n, seconds, -1);
         }
         gate_idx++;
 
@@ -829,19 +844,23 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
     BQD state = bqd_basis_state(0, n);
     limdd_protect(&state);
     uint64_t gate_idx = 0;
-    if (trace_out != NULL)
-        fprintf(trace_out, "gate_index,gate,t_count,nodes,width,wgt_bits\n");
+    if (trace_out != NULL) fprintf(trace_out, TRACE_HEADER);
 
     for (quantum_op_t *op = circuit->operations; op != NULL; op = op->next) {
         if (op->type == op_measurement) break;   /* nothing to take from it */
         if (op->type != op_gate) continue;
+        /* before the gate and outside its time: a walk memoised on nodes,
+         * which a diagonal gate makes itself anyway */
+        const int full = (trace_out != NULL) ? (int)bqd_has_full_support(state) : -1;
+        const double t_gate = wctime();
         if (!dd_apply_gate(&BQD_GATES, &state, op, n)) { limdd_unprotect(&state); return 1; }
+        const double seconds = wctime() - t_gate;
 
         if (count_nodes) {
             const uint64_t c = limdd_countnodes(state);
             if (c > stats.max_nodes) stats.max_nodes = c;
         }
-        if (trace_out != NULL) trace_row(gate_idx, op->name, state, n);
+        if (trace_out != NULL) trace_row(gate_idx, op->name, state, n, seconds, full);
         gate_idx++;
 
         /* Between gates only, as on the LIMDD arm: the root is protected and
@@ -906,10 +925,23 @@ void simulate_circuit(quantum_circuit_t* circuit)
     double t_start = wctime();
     QMDD state = qmdd_create_all_zero_state(circuit->qreg_size);
     quantum_op_t *op = circuit->operations;
+    uint64_t gate_idx = 0;
+    if (trace_out != NULL) fprintf(trace_out, TRACE_HEADER);
     while (op != NULL) {
         if (op->type == op_gate) {
+            const double t_gate = wctime();
             state = apply_gate(state, op, circuit->qreg_size);
-
+            if (trace_out != NULL) {
+                /* as the other arms' rows, without a width, which is a LIMDD
+                 * walk; the weight size is the largest over the nodes */
+                const double seconds = wctime() - t_gate;
+                const uint64_t bits = (sylvan_get_edge_weight_type() == WGT_QISQ2)
+                                    ? evbdd_qisqsize(state) : 0;
+                fprintf(trace_out, "%" PRIu64 ",%s,%" PRIu64 ",%" PRIu64 ",,%" PRIu64 ",%.6f,",
+                        gate_idx, op->name, stats.t_count, evbdd_countnodes(state), bits, seconds);
+                trace_full(-1);
+            }
+            gate_idx++;
         }
         else if (op->type == op_measurement) {
             if (circuit->has_intermediate_measurements) {
@@ -1199,6 +1231,9 @@ int main(int argc, char *argv[])
             fprintf(stderr, "cannot write the trace to %s\n", trace_file);
             exit(1);
         }
+        /* a row per line as it is made: a run stopped by a timeout keeps
+         * every gate it finished, where a full buffer kept the first 8 kB */
+        setvbuf(trace_out, NULL, _IOLBF, 0);
     }
 
     if (dd_kind == DD_BQD) canon_name = "n/a";
