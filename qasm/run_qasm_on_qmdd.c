@@ -93,7 +93,7 @@ static struct argp_option options[] =
     {"tol", 't', "<tolerance>", 0, "Tolerance for deciding edge weights equal (default=1e-14)", 0},
     {"json", 'j', "<filename>", 0, "Write stats to given filename as json", 0},
     {"count-nodes", 'c', 0, 0, "Track maximum number of nodes", 0},
-    {"cache-size", 1010, "<size>", 0, "log2 of the operation cache size (default 16)", 0},
+    {"cache-size", 1010, "<size>", 0, "log2 of the operation cache size, fixed; an entry takes 36 bytes, so 2^20 is 36 MB and 2^24 576 MB (default 16 with -d qmdd, 20 with -d limdd or limdd-heur; with -d bqd it starts at 20 and grows, up to 24, after a gate whose results fill a sixteenth of it)", 0},
     {"trace", 1013, "<filename>", 0, "Write per-gate telemetry as CSV: after every gate, the running T count, the node count, the LIMDD width and the largest algebraic weight in bits, the gate's wall-clock time in seconds, and, with -d bqd, whether the state had full support before the gate (1 or 0), which decides whether a diagonal gate takes the O(n) walk. This is what relates the theorems to a run -- width against 2^t, and coefficient size against the bound of Section 5 -- and shows which gates the time goes to. With -d qmdd the width and the support are left empty. Every row is written as it is made, so a run that is killed keeps the rows of the gates it finished.", 0},
     {"lim-stats", 1009, 0, 0, "For limdd: report the Pauli support of the high-edge LIM per level, to size an inline encoding", 0},
     {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
@@ -258,6 +258,7 @@ typedef struct stats_s {
     uint64_t final_qisq_size;
     uint64_t max_qisq_size;
     uint64_t limdd_collections;  /* LIMDD and BQD only: limdd_gc runs between gates */
+    uint64_t final_cache_size;   /* the operation cache's size at the end, which the BQD grows */
     uint64_t shots;
     double simulation_time;
     double norm;
@@ -339,6 +340,9 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"max_node_tab_size\": %" PRId64 ",\n", max_tablesize);
     fprintf(stream, "    \"min_wgt_tab_size\": %" PRId64 ",\n", min_wgt_tab_size);
     fprintf(stream, "    \"max_wgt_tab_size\": %" PRId64 ",\n", max_wgt_tab_size);
+    fprintf(stream, "    \"min_cache_size\": %zu,\n", min_cachesize);
+    fprintf(stream, "    \"max_cache_size\": %zu,\n", max_cachesize);
+    fprintf(stream, "    \"final_cache_size\": %" PRIu64 ",\n", stats.final_cache_size);
     fprintf(stream, "    \"workers\": %d\n", workers);
     fprintf(stream, "  }\n");
     fprintf(stream, "}\n");
@@ -863,6 +867,9 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
         if (trace_out != NULL) trace_row(gate_idx, op->name, state, n, seconds, full);
         gate_idx++;
 
+        /* between gates, as the collection below: no worker is using the cache */
+        bqd_cache_fit();
+
         /* Between gates only, as on the LIMDD arm: the root is protected and
          * no operation's temporaries are live. */
         if (limdd_gc_wanted()) { CALL(limdd_gc); stats.limdd_collections++; }
@@ -1112,6 +1119,7 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
     } else {
         simulate_circuit(circuit);
     }
+    stats.final_cache_size = cache_getsize();
 
     if (json_outputfile != NULL) {
         FILE *fp = fopen(json_outputfile, "w");
@@ -1177,6 +1185,25 @@ int main(int argc, char *argv[])
      */
     if (dd_kind != DD_QMDD && !cache_size_set) {
         min_cachesize = max_cachesize = 1LL << 20;
+    }
+    /*
+     * And up to a bigger one still for the BQD, whose Hadamard is a product
+     * and a quotient at every node above its target, nested, with hundreds of
+     * thousands to millions of distinct high cofactors in one gate, and whose
+     * results the next gate asks for again. A miss there recomputes a whole
+     * product. Measured with -e qisq2 on one worker: the Hadamard at gate 638
+     * of clifford_T_circuit_20_700 takes more than 600s at 2^20, 74s at 2^22
+     * and 33s at 2^24 and 2^26; the first 271 gates of hidden-shift_n30 go
+     * from 560s to 69s, and ising_n16_s3's first 80 from 469s to 171s. But
+     * 2^24 is 576 MB, whose pages cost a circuit of small gates more than its
+     * gates do, again after every collection, which empties the cache. So it
+     * starts at 2^20 and bqd_cache_fit grows it between gates, up to 2^24,
+     * when a gate makes more results than a sixteenth of it. The maximum is
+     * reserved and not touched until it is reached. --cache-size fixes it.
+     */
+    if (dd_kind == DD_BQD && !cache_size_set) {
+        min_cachesize = 1LL << 20;
+        max_cachesize = 1LL << 24;
     }
 
     if (dd_kind != DD_QMDD && rel_tolerance < 0 && !force_absolute) {

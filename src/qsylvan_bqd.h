@@ -179,7 +179,7 @@ void bqd_lim_masks(LIMDD_LIM lim, uint32_t nqubits, EVBDD_WGT *c, uint64_t *s, u
  */
 LIMDD_LIM bqd_lim_word(EVBDD_WGT c, uint64_t s, uint64_t t);
 
-/* --- counts, for diagnostics ------------------------------------------------ */
+/* --- counts, for diagnostics and the size of the cache -------------------- */
 
 /**
  * What the operations did, counted per worker on a padded line of its own and
@@ -187,7 +187,8 @@ LIMDD_LIM bqd_lim_word(EVBDD_WGT c, uint64_t s, uint64_t t);
  * (Cof1, and Join in the translation and Pauli families), the misses of the
  * four pointwise operations, of Canon, of the recursions that avoid the high
  * cofactor (Perm, Pair, X, CanonT) and of the phase multiplications. A test
- * bounds a gate's work by these rather than by its time.
+ * bounds a gate's work by these rather than by its time, and bqd_cache_fit
+ * sizes the operation cache by them.
  */
 typedef enum {
     BQD_COUNT_COF1 = 0,
@@ -215,6 +216,20 @@ bqd_count(unsigned worker, bqd_count_t k)
 /** Zero the counts, and read their sums over the workers; between operations only. */
 void bqd_counts_reset(void);
 void bqd_counts_read(uint64_t out[BQD_COUNTS]);
+
+/**
+ * Between gates: fit Sylvan's operation cache to what the gates since the last
+ * call made, and start the counts above afresh. Their sum is the number of
+ * results the memoised operations made. Where it reaches a sixteenth of the
+ * cache, the cache grows to the least power of two of which it is less than a
+ * sixteenth, up to the maximum sylvan_set_sizes was given, and keeps what it
+ * holds (cache_grow). A cache of fixed size, minimum and maximum equal, is left
+ * alone. The maximum is reserved from the start and costs nothing until the
+ * size in use reaches into it: a gate, and a collection that empties the
+ * cache, touch the size in use and not the maximum. The runner calls it after
+ * every gate; it needs every worker idle, as a collection does.
+ */
+void bqd_cache_fit(void);
 
 /* --- the canonical form --------------------------------------------------- */
 

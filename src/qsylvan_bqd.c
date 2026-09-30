@@ -134,6 +134,38 @@ bqd_counts_read(uint64_t out[BQD_COUNTS])
         for (int k = 0; k < BQD_COUNTS; k++) out[k] += bqd_count_lines[w].n[k];
 }
 
+/*
+ * A gate whose results fill a large part of the cache evicts its own, and the
+ * recursions ask for them again within the gate and in the next one: on
+ * rand_18_500 the scalar family takes 84 s at 2^20 entries and 28 s at 2^24,
+ * on one worker with exact weights. A cache that large costs its pages where
+ * the gates make few results (36 bytes an entry, 576 MB at 2^24), and a
+ * collection empties it so that the next gates fault them back in:
+ * clifford_circuit(8, 4500, 7) in tables small enough to collect five times
+ * takes 0.15 s at 2^20 and 0.6 s at 2^24. So the cache starts small and grows
+ * with the gates. At 1/16, the benchmark circuits that finish in a second
+ * keep 2^20, and on rand_18_500, hidden-shift_n30 and clifford_T_circuit_20_700
+ * it reaches 2^24 before the gates that need it and runs as fast as a cache
+ * fixed at 2^24. cache_grow keeps the entries, where cache_setsize would empty
+ * the cache and cost the next gate the results of the last.
+ */
+#define BQD_CACHE_FILL 16
+
+void
+bqd_cache_fit(void)
+{
+    uint64_t c[BQD_COUNTS];
+    bqd_counts_read(c);
+    bqd_counts_reset();
+    uint64_t made = 0;
+    for (int k = 0; k < BQD_COUNTS; k++) made += c[k];
+    const size_t max = cache_getmaxsize();
+    size_t size = cache_getsize();
+    if (size >= max || made * BQD_CACHE_FILL < size) return;
+    while (size < max && made * BQD_CACHE_FILL >= size) size *= 2;
+    cache_grow(size);
+}
+
 bqd_family_t bqd_family(void) { return family; }
 
 const char *
