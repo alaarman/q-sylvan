@@ -52,6 +52,10 @@ typedef struct {
 
 static SYLVAN_TLS label_memo_t *label_memo = NULL;
 
+/* The diagnostic counts, one padded line per worker, summed when read. */
+bqd_count_line_t *bqd_count_lines = NULL;
+static unsigned   bqd_count_workers = 0;
+
 VOID_TASK_0(bqd_workers_init_task)
 {
     label_memo = (label_memo_t *)sylvan_alloc_padded(sizeof(label_memo_t));
@@ -87,15 +91,47 @@ bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
     family  = f;
     nqubits = n;
     limdd_nodes_init(n, node_tablesize, pauli_tablesize, lim_tablesize, stab_tablesize);
+    /* the phase multiplications hold their exponents as Sylvan MTBDDs
+     * (qsylvan_bqd_exp.h); a second call is a no-op */
+    sylvan_init_mtbdd();
     TOGETHER(bqd_workers_init_task);
+    if (bqd_count_lines == NULL) {
+        bqd_count_workers = (unsigned)lace_workers();
+        if (bqd_count_workers == 0) bqd_count_workers = 1;
+        bqd_count_lines = (bqd_count_line_t *)
+            sylvan_alloc_padded(bqd_count_workers * sizeof(bqd_count_line_t));
+        if (bqd_count_lines == NULL) {
+            fprintf(stderr, "sylvan: out of memory for the BQD counts\n");
+            exit(1);
+        }
+    }
+    bqd_counts_reset();
 }
 
 void
 bqd_quit(void)
 {
     TOGETHER(bqd_workers_quit_task);
+    if (bqd_count_lines != NULL) sylvan_free_padded(bqd_count_lines);
+    bqd_count_lines = NULL;
+    bqd_count_workers = 0;
     limdd_nodes_quit();
     nqubits = 0;
+}
+
+void
+bqd_counts_reset(void)
+{
+    for (unsigned w = 0; w < bqd_count_workers; w++)
+        for (int k = 0; k < BQD_COUNTS; k++) bqd_count_lines[w].n[k] = 0;
+}
+
+void
+bqd_counts_read(uint64_t out[BQD_COUNTS])
+{
+    for (int k = 0; k < BQD_COUNTS; k++) out[k] = 0;
+    for (unsigned w = 0; w < bqd_count_workers; w++)
+        for (int k = 0; k < BQD_COUNTS; k++) out[k] += bqd_count_lines[w].n[k];
 }
 
 bqd_family_t bqd_family(void) { return family; }

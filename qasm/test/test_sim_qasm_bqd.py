@@ -140,11 +140,11 @@ def test_bqd_families_iqp(family, backend, tmp_path):
 
 @pytest.mark.parametrize("workers", [1, 4])
 @pytest.mark.parametrize("kind, n, gates, log_nodes, family", [
-    ('clifford', 8, 1500, 14, None),
+    ('clifford', 8, 4500, 14, None),
     ('iqp', 12, 3000, 12, None),
-    ('clifford', 8, 1500, 14, 'x'),
+    ('clifford', 8, 4500, 14, 'x'),
     ('iqp', 12, 3000, 12, 'x'),
-    ('clifford', 8, 3000, 13, 'pauli'),
+    ('clifford', 8, 9000, 13, 'pauli'),
     ('iqp', 12, 3000, 12, 'pauli'),
 ])
 def test_bqd_collects_between_gates(kind, n, gates, log_nodes, family, workers, tmp_path):
@@ -154,10 +154,13 @@ def test_bqd_collects_between_gates(kind, n, gates, log_nodes, family, workers, 
     in every family, on one worker and on four. Each table is the smallest the
     runner takes, or at least twice the smallest in which its circuit
     finishes, and the collections are counted, so that the case cannot stop
-    collecting unnoticed. The Pauli-BQD keeps so few nodes on the Clifford
-    circuit that it runs twice as many gates to collect; its smallest table
-    is twice the one in which one worker finishes, since four workers each
-    hold a region of 512 buckets and fill a table of 2^12 early."""
+    collecting unnoticed. A swap, a CX with the control below and a diagonal
+    gate make no high cofactor above their qubits, so the Clifford circuit
+    leaves little garbage per gate and runs 4500 gates to collect several
+    times; the Pauli-BQD keeps so few nodes on it that it runs twice as many.
+    Its smallest table is twice the one in which one worker finishes, since
+    four workers each hold a region of 512 buckets and fill a table of 2^12
+    early."""
     path = tmp_path / f"{kind}_{n}.qasm"
     make = clifford_circuit if kind == 'clifford' else iqp_circuit
     path.write_text(make(n, gates, 7))

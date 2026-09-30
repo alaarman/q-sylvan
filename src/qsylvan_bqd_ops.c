@@ -314,7 +314,9 @@ diag_rec(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits)
  * the low child has no zero, since at a zero the copy fires and returns the
  * old high value without the phase. A zero off the path is therefore a wrong
  * result and not a failed check. So the whole diagram is tested, which is a
- * walk memoised on nodes, and a state with a zero takes the general product.
+ * walk memoised on nodes, and a state with a zero takes DiagR, the phase
+ * multiplication of skip:alg:phasemul (bqd_diag_any), which multiplies off the
+ * support of each low child as it goes; it visits no node the walk counts.
  */
 BQD
 bqd_apply_diagonal_counted(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits)
@@ -322,7 +324,7 @@ bqd_apply_diagonal_counted(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint3
     if (visits != NULL) *visits = 0;
     if (!bqd_has_full_support(e)) {
         if (limdd_edge_is_zero(e)) return e;
-        return bqd_multiply(e, bqd_monomial(A, phase, n));
+        return bqd_diag_any(e, A, phase, n);
     }
     if (!scalar_labels_on_full_support()) return bqd_xp_diagonal(e, A, phase, n, visits);
     return diag_rec(e, A, phase, n, visits);

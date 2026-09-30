@@ -18,6 +18,7 @@
 #include <stdlib.h>
 
 #include "qsylvan_bqd_xp.h"
+#include "qsylvan_bqd_exp.h"
 #include "qsylvan_bqd_gates.h"
 #include "qsylvan_gates.h"
 #include "qsylvan_limdd_gc.h"
@@ -196,6 +197,7 @@ TASK_IMPL_1(BQD, bqd_xp_join, LIMDD_TARG, N)
     if (limdd_edge_is_zero(lo)) return unit(limdd_target(hi));
     uint64_t hit;
     if (cache_get3(CACHE_BQD_XP_JOIN, N, 0, 0, &hit)) return (BQD)hit;
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_COF1);
     const BQD r = CALL(bqd_xp_apply_op, BQD_OP_XPROD, lo, unit(limdd_target(hi)));
     cache_put3(CACHE_BQD_XP_JOIN, N, 0, 0, (uint64_t)r);
     return r;
@@ -366,8 +368,17 @@ TASK_IMPL_1(BQD, bqd_xp_canon, BQD, e)
     const uint64_t t = l.t & ~above(limdd_level(N));
     if (l.s == 0 && t == 0) return t == l.t ? e : xedge(l, N);
 
+    /* the translation family: (c X^t, N) is canonical when t is the least
+     * point of its support, and CanonT moves the node otherwise, on its
+     * stored edges where the least point stays (skip:alg:xratio) */
+    if (bqd_family() == BQD_FAMILY_X) {
+        if (minpoint(N, t) == t) return t == l.t ? e : xedge(l, N);
+        return xscale(l.c, CALL(bqd_xp_canon_t, N, t));
+    }
+
     uint64_t hit;
     if (cache_get3(CACHE_BQD_XP_CANON, 0, key_edge(e), 0, &hit)) return xscale(l.c, (BQD)hit);
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_CANON);
 
     const uint32_t v = top_var(N, l.s);
     limdd_refs_push(e);
@@ -466,6 +477,7 @@ TASK_IMPL_3(BQD, bqd_xp_apply_op, int, op, BQD, f, BQD, g)
 
     uint64_t hit;
     if (cache_get3(op_cache_id(op), kept, kF, kG, &hit)) return xscale(outer, (BQD)hit);
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_APPLY);
 
     const uint32_t vf = top_var(nf, lf.s), vg = top_var(ng, lg.s);
     const uint32_t v = vf < vg ? vf : vg;
@@ -813,4 +825,584 @@ bqd_xp_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits
     }
     if (visits != NULL) *visits = count;
     return r;
+}
+
+/* --- gates without the high cofactor (skip:sec:ratio:xp) -------------------- */
+
+/*
+ * In these families the high edge (l_1, N_1) of a node is not its ratio: the
+ * high cofactor is l_1 . ([N_0] (.) [N_1]), and l_1 may translate. What
+ * carries over from the scalar family (qsylvan_bqd_gates.c) is that a
+ * permutation of two qubits commutes with (.) and conjugates a label,
+ *
+ *     pi . (c Z^s X^t . g) = c Z^{pi^T s} X^{pi t} . pi g,
+ *
+ * so PermN maps a node through its two stored edges, and ProdHigh makes the
+ * node of the result without a product wherever the least point of the high
+ * cofactor's support stays where it was; the translation family's Canon does
+ * the same for a translation (CanonT), and so X; and the phase
+ * multiplications carry the labels along (skip:alg:xphase). Pair recurses on
+ * labelled cofactors, since its two operands carry different high labels.
+ */
+
+/** The node of an edge, or 0 for the zero edge. */
+static inline LIMDD_TARG
+node_or_zero(BQD e)
+{
+    return limdd_edge_is_zero(e) ? 0 : limdd_target(e);
+}
+
+/* the label (1, 0, t), the translation X^t */
+static inline label_t
+xlabel(uint64_t t)
+{
+    const label_t l = { EVBDD_ONE, 0, t };
+    return l;
+}
+
+/**
+ * Ind of skip:alg:constructors in these families: the indicator of supp [t]
+ * has the X parts of t's labels, since the high cofactor's support is the
+ * high child's moved by t_1 (the support shadow), and none of their scalars
+ * or signs, which the indicator does not see. It is 1 at 0, so its low edge is
+ * the identity; a node whose two edges are then equal skips its level. The
+ * high edge is normal: a bit of t_1 at a level the indicator of N_1 skips
+ * would be a least point with a 1 where the support is closed under flipping
+ * it, which it is not. Memoised on t.
+ */
+TASK_IMPL_1(LIMDD_TARG, bqd_xp_ind, LIMDD_TARG, t)
+{
+    if (t == LIMDD_TERMINAL) return t;
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_IND, t, 0, 0, &hit)) return (LIMDD_TARG)hit;
+    const LIMDD lo = limdd_node_low(t), hi = limdd_node_high(t);
+    const LIMDD_TARG n0 = node_or_zero(lo), n1 = node_or_zero(hi);
+    if (n0 != 0) SPAWN(bqd_xp_ind, n0);
+    const LIMDD_TARG i1 = (n1 != 0) ? CALL(bqd_xp_ind, n1) : 0;
+    const LIMDD_TARG i0 = (n0 != 0) ? SYNC(bqd_xp_ind) : 0;
+    const BQD e0 = i0 ? unit(i0) : limdd_zero_edge();
+    const BQD e1 = i1 ? xedge(xlabel(label_read(limdd_label(hi)).t), i1) : limdd_zero_edge();
+    const LIMDD_TARG r = (i0 != 0 && e0 == e1) ? i0 : limdd_makenode(limdd_node_var(t), e0, e1);
+    cache_put3(CACHE_BQD_XP_IND, t, 0, 0, r);
+    return r;
+}
+
+/** iota(t): the indicator of supp [t] as a 0/1 exponent, the high child's translated by t_1. */
+TASK_1(BQD_EXP, bqd_xp_iota, LIMDD_TARG, t)
+{
+    if (t == 0) return mtbdd_int64(0);
+    if (t == LIMDD_TERMINAL) return mtbdd_int64(1);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_IOTA, t, 0, 0, &hit)) return (BQD_EXP)hit;
+    const LIMDD hi = limdd_node_high(t);
+    mtbdd_refs_spawn(SPAWN(bqd_xp_iota, node_or_zero(limdd_node_low(t))));
+    BQD_EXP i1 = mtbdd_refs_push(CALL(bqd_xp_iota, node_or_zero(hi)));
+    if (!limdd_edge_is_zero(hi)) {
+        const uint64_t t1 = label_read(limdd_label(hi)).t;
+        const BQD_EXP moved = CALL(bqd_exp_translate, i1, t1);
+        mtbdd_refs_pop(1);
+        i1 = mtbdd_refs_push(moved);
+    }
+    const BQD_EXP i0 = mtbdd_refs_push(mtbdd_refs_sync(SYNC(bqd_xp_iota)));
+    const BQD_EXP r = bqd_exp_node(limdd_node_var(t), i0, i1);
+    mtbdd_refs_pop(2);
+    cache_put3(CACHE_BQD_XP_IOTA, t, 0, 0, r);
+    return r;
+}
+
+/* --- phase multiplications ----------------------------------------------------- */
+
+/**
+ * PhaseMulX of skip:alg:xphase, the translation family: the canonical edge of
+ * [N] . beta^eps, r the order of beta. Where N skips the level it is read
+ * there as its virtual node (N, (id, Ind N)). The low call gives (alpha, U)
+ * with alpha = beta^{eps_0(0)}, since 0 is the least point of every stored
+ * node; the high cofactor keeps its support, so its least point is still t_1
+ * and the quotient of case (v) of skip:prop:xcompose is c_1 [N_1] times
+ * beta to X^{t_1} eps_1 - eps_0 on supp [N_0] and X^{t_1} eps_1 - v off it,
+ * one call with that exponent. No Cof1, no Apply and no Canon. Memoised on N,
+ * eps and beta; the two calls depend on the input alone, and overlap.
+ */
+TASK_IMPL_4(BQD, bqd_xp_phase_mul_x, LIMDD_TARG, N, BQD_EXP, eps, EVBDD_WGT, beta, uint32_t, r)
+{
+    if (bqd_exp_is_const(eps)) return xscale(bqd_exp_power(beta, bqd_exp_value(eps)), unit(N));
+    if (N == LIMDD_TERMINAL) return CALL(bqd_exp_state, eps, beta, r);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_PHASEMUL, N, eps, beta, &hit)) return (BQD)hit;
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_PHASEMUL);
+
+    const uint32_t lN = limdd_level(N), le = bqd_exp_var(eps);
+    const uint32_t l = lN < le ? lN : le;
+    const LIMDD_TARG N0 = lN > l ? N : limdd_target(limdd_node_low(N));
+    const BQD hi = lN > l ? unit(CALL(bqd_xp_ind, N)) : limdd_node_high(N);
+    const BQD_EXP e0 = bqd_exp_cof(eps, l, 0), e1 = bqd_exp_cof(eps, l, 1);
+    BQD res;
+    if (limdd_edge_is_zero(hi)) {
+        const BQD lo = CALL(bqd_xp_phase_mul_x, N0, e0, beta, r);
+        res = limdd_bundle(limdd_label(lo), limdd_makenode(l, unit(limdd_target(lo)), hi));
+    } else {
+        const label_t l1 = label_read(limdd_label(hi));
+        const int64_t v = bqd_exp_eval(e0, 0);
+        const BQD_EXP io = mtbdd_refs_push(CALL(bqd_xp_iota, N0));
+        const BQD_EXP sel = mtbdd_refs_push(CALL(bqd_exp_sel, io, e0, v));
+        const BQD_EXP moved = mtbdd_refs_push(CALL(bqd_exp_translate, e1, l1.t));
+        const BQD_EXP e2 = mtbdd_refs_push(CALL(bqd_exp_sub, moved, sel, r));
+        limdd_refs_spawn(SPAWN(bqd_xp_phase_mul_x, N0, e0, beta, r));
+        const BQD k = limdd_refs_push(xscale(l1.c, CALL(bqd_xp_phase_mul_x, limdd_target(hi),
+                                                        e2, beta, r)));
+        const BQD lo = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_phase_mul_x)));
+        const LIMDD_TARG U = limdd_target(lo);
+        if (l1.t == 0 && limdd_label(k) == LIMDD_LIM_IDENTITY
+            && limdd_target(k) == CALL(bqd_xp_ind, U)) {
+            res = lo;                                   /* f_1 = f_0: the level is skipped */
+        } else {
+            const BQD h = xedge(label_mul(xlabel(l1.t), label_read(limdd_label(k))), limdd_target(k));
+            res = limdd_bundle(limdd_label(lo), limdd_makenode(l, unit(U), h));
+        }
+        limdd_refs_pop(2);
+        mtbdd_refs_pop(4);
+    }
+    cache_put3(CACHE_BQD_XP_PHASEMUL, N, eps, beta, (uint64_t)res);
+    return res;
+}
+
+/**
+ * PhaseMulP of skip:alg:xphase, the Pauli family: the canonical edge of
+ * [N] . w^eps, w = e^{i pi/4} and eps modulo 8. As PhaseMulX, with the sign
+ * patterns carried along: the low result is (c_0 Z^{s_0}, U) with
+ * [N_0] = [U] w^delta, delta = v - eps_0 + P_{s_0}, and moving X^{t_1} past
+ * Z^w, w = s_0 xor s_1, costs (-1)^{w . t_1}, so the quotient is c_1 (-1)^{w.t_1}
+ * [N_1] w^{eps'} with eps' = X^{t_1} eps_1 - v + P_w, plus delta on
+ * supp [N_0]. Equal cofactors skip the level, opposite ones skip it with Z_l,
+ * and a pivot without an argument in [0, pi) gets the sign repair. The high
+ * call needs the low result's sign pattern, so the two run one after the
+ * other. The terminal is its own virtual node, (T, (id, T)). Memoised on N and
+ * eps.
+ */
+TASK_IMPL_2(BQD, bqd_xp_phase_mul_p, LIMDD_TARG, N, BQD_EXP, eps)
+{
+    if (bqd_exp_is_const(eps)) {
+        const EVBDD_WGT w = gates[GATEID_T][3];
+        return xscale(bqd_exp_power(w, bqd_exp_value(eps)), unit(N));
+    }
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_PHASEMULP, N, eps, 0, &hit)) return (BQD)hit;
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_PHASEMUL);
+
+    const uint32_t lN = limdd_level(N), le = bqd_exp_var(eps);
+    const uint32_t l = lN < le ? lN : le;
+    const uint64_t bit = UINT64_C(1) << l;
+    const LIMDD_TARG N0 = lN > l ? N : limdd_target(limdd_node_low(N));
+    const BQD hi = lN > l ? unit(CALL(bqd_xp_ind, N)) : limdd_node_high(N);
+    const BQD_EXP e0 = bqd_exp_cof(eps, l, 0), e1 = bqd_exp_cof(eps, l, 1);
+    const BQD lo = limdd_refs_push(CALL(bqd_xp_phase_mul_p, N0, e0));
+    const label_t l0 = label_read(limdd_label(lo));
+    const LIMDD_TARG U = limdd_target(lo);
+    BQD res;
+    if (limdd_edge_is_zero(hi)) {
+        res = limdd_bundle(limdd_label(lo), limdd_makenode(l, unit(U), hi));
+    } else {
+        const label_t l1 = label_read(limdd_label(hi));
+        const int64_t v = bqd_exp_eval(e0, 0);
+        const uint64_t w = l0.s ^ l1.s;
+        /* delta = v - eps_0 + P_{s_0}, and eps' = X^{t_1} eps_1 - v + Sel(iota N_0, delta, 0) + P_w */
+        const BQD_EXP cv = mtbdd_refs_push(bqd_exp_const(v, 8));
+        const BQD_EXP d1 = mtbdd_refs_push(CALL(bqd_exp_sub, cv, e0, 8));
+        const BQD_EXP ps0 = mtbdd_refs_push(bqd_exp_parity4(l0.s));
+        const BQD_EXP delta = mtbdd_refs_push(CALL(bqd_exp_add, d1, ps0, 8));
+        const BQD_EXP io = mtbdd_refs_push(CALL(bqd_xp_iota, N0));
+        const BQD_EXP sel = mtbdd_refs_push(CALL(bqd_exp_sel, io, delta, 0));
+        const BQD_EXP moved = mtbdd_refs_push(CALL(bqd_exp_translate, e1, l1.t));
+        const BQD_EXP a1 = mtbdd_refs_push(CALL(bqd_exp_sub, moved, cv, 8));
+        const BQD_EXP a2 = mtbdd_refs_push(CALL(bqd_exp_add, a1, sel, 8));
+        const BQD_EXP pw = mtbdd_refs_push(bqd_exp_parity4(w));
+        const BQD_EXP e2 = mtbdd_refs_push(CALL(bqd_exp_add, a2, pw, 8));
+        const EVBDD_WGT gam = parity(w & l1.t) ? neg(l1.c) : l1.c;
+        const BQD k = limdd_refs_push(xscale(gam, CALL(bqd_xp_phase_mul_p, limdd_target(hi), e2)));
+        mtbdd_refs_pop(11);
+        label_t lk = label_read(limdd_label(k));
+        const LIMDD_TARG ind = (l1.t == 0 && lk.s == 0 && lk.t == 0) ? CALL(bqd_xp_ind, U) : 0;
+        if (ind != 0 && limdd_target(k) == ind && lk.c == EVBDD_ONE) {
+            res = lo;                                   /* f_1 = f_0 */
+        } else if (ind != 0 && limdd_target(k) == ind && lk.c == EVBDD_MIN_ONE) {
+            label_t z = l0;                             /* f_1 = -f_0: skipped with Z_l */
+            z.s ^= bit;
+            res = limdd_bundle(label_lim(z), U);
+        } else {
+            label_t root = l0;
+            if (!bqd_arg_in_upper(lk.c)) {              /* the sign repair */
+                lk.c = neg(lk.c);
+                root.s ^= bit;
+            }
+            const BQD h = xedge(label_mul(xlabel(l1.t), lk), limdd_target(k));
+            res = limdd_bundle(label_lim(root), limdd_makenode(l, unit(U), h));
+        }
+        limdd_refs_pop(1);
+    }
+    limdd_refs_pop(1);
+    cache_put3(CACHE_BQD_XP_PHASEMULP, N, eps, 0, (uint64_t)res);
+    return res;
+}
+
+/**
+ * MulOffX: the canonical edge of [k] . c^{[x not in supp [U]]} for a
+ * canonical k = (c' X^t, V) of the translation family, which is
+ * c' X^t . PhaseMulX(V, X^t (1 - iota U), c): the multiplication keeps the
+ * support, so t stays its least point and the label is canonical.
+ */
+TASK_IMPL_3(BQD, bqd_xp_mul_off, BQD, k, EVBDD_WGT, c, LIMDD_TARG, U)
+{
+    if (limdd_edge_is_zero(k) || c == EVBDD_ONE || CALL(bqd_xp_ind, U) == LIMDD_TERMINAL) return k;
+    const uint32_t r = bqd_exp_order(c);
+    const label_t lk = label_read(limdd_label(k));
+    const BQD_EXP one = mtbdd_refs_push(bqd_exp_const(1, r));
+    const BQD_EXP io = mtbdd_refs_push(CALL(bqd_xp_iota, U));
+    const BQD_EXP off = mtbdd_refs_push(CALL(bqd_exp_sub, one, io, r));
+    const BQD_EXP eps = mtbdd_refs_push(CALL(bqd_exp_translate, off, lk.t));
+    const BQD p = CALL(bqd_xp_phase_mul_x, limdd_target(k), eps, c, r);
+    mtbdd_refs_pop(4);
+    return xedge(label_mul(lk, label_read(limdd_label(p))), limdd_target(p));
+}
+
+/* --- Canon of a translation ---------------------------------------------------- */
+
+/**
+ * CanonT of skip:alg:xratio, the translation family: the canonical edge of
+ * X^tau [N]. Where tau has a bit at N's level the two cofactors trade places,
+ * and that is one step of the generic Canon. Otherwise the low cofactor is
+ * X^tau [N_0], whose canonical edge (c_0 X^{t_0}, U) CanonT gives, and the
+ * high one c_1 X^{t_1 xor t_0} (c_0 [U] (.) X^delta [N_1]), delta = tau xor
+ * t_0; where the least point of its support is still t_1 the node's high edge
+ * is X^{t_1} . c_1 MulOffX(CanonT(N_1, delta), 1/c_0, U), and otherwise it is
+ * Compose of the two. No skip: a translation is a bijection, and this family
+ * has no sign repair. Memoised on N and tau; the high call needs t_0.
+ */
+TASK_IMPL_2(BQD, bqd_xp_canon_t, LIMDD_TARG, N, uint64_t, tau)
+{
+    tau &= ~above(limdd_level(N));
+    if (tau == 0) return unit(N);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_CANONT, N, tau, 0, &hit)) return (BQD)hit;
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_PERM);
+
+    const uint32_t l = limdd_node_var(N);
+    BQD r;
+    if ((tau >> l) & 1) {
+        const BQD e = limdd_refs_push(xedge(xlabel(tau), N));
+        const BQD c0 = limdd_refs_push(CALL(bqd_xp_cofactor, e, l, 0));
+        limdd_refs_spawn(SPAWN(bqd_xp_canon, c0));
+        const BQD c1 = limdd_refs_push(CALL(bqd_xp_cofactor, e, l, 1));
+        const BQD hi = limdd_refs_push(CALL(bqd_xp_canon, c1));
+        const BQD lo = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_canon)));
+        r = CALL(bqd_xp_compose, l, lo, hi);
+        limdd_refs_pop(5);
+    } else {
+        const BQD lo = limdd_refs_push(CALL(bqd_xp_canon_t, limdd_target(limdd_node_low(N)), tau));
+        const LIMDD_TARG U = limdd_target(lo);
+        const label_t l0 = label_read(limdd_label(lo));
+        const LIMDD high = limdd_node_high(N);
+        if (limdd_edge_is_zero(high)) {
+            r = limdd_bundle(limdd_label(lo), limdd_makenode(l, unit(U), high));
+        } else {
+            const label_t l1 = label_read(limdd_label(high));
+            const LIMDD_TARG N1 = limdd_target(high);
+            const uint64_t delta = tau ^ l0.t;
+            if (minpoint(N1, delta ^ l1.t) == l1.t) {
+                const BQD m = limdd_refs_push(CALL(bqd_xp_canon_t, N1, delta));
+                const BQD k = xscale(l1.c, CALL(bqd_xp_mul_off, m, wgt_div(EVBDD_ONE, l0.c), U));
+                const BQD h = xedge(label_mul(xlabel(l1.t), label_read(limdd_label(k))), limdd_target(k));
+                r = limdd_bundle(limdd_label(lo), limdd_makenode(l, unit(U), h));
+                limdd_refs_pop(1);
+            } else {
+                const BQD f1 = limdd_refs_push(CALL(bqd_xp_cofactor, unit(N), l, 1));
+                const BQD moved = limdd_refs_push(xedge(label_mul(xlabel(tau), label_read(limdd_label(f1))),
+                                                        limdd_target(f1)));
+                const BQD hi = limdd_refs_push(CALL(bqd_xp_canon, moved));
+                r = CALL(bqd_xp_compose, l, lo, hi);
+                limdd_refs_pop(3);
+            }
+        }
+        limdd_refs_pop(1);
+    }
+    cache_put3(CACHE_BQD_XP_CANONT, N, tau, 0, (uint64_t)r);
+    return r;
+}
+
+/* --- permutations of two qubits ------------------------------------------------ */
+
+/** pi on a mask of qubits, (pi m) for the permutation `kind` of qa < qb. */
+static inline uint64_t
+perm_mask(uint32_t kind, uint32_t qa, uint32_t qb, uint64_t m)
+{
+    const uint64_t a = (m >> qa) & 1, b = (m >> qb) & 1;
+    uint64_t na = a, nb = b;
+    switch (kind) {
+    case BQD_PERM_SWAP:    na = b; nb = a; break;
+    case BQD_PERM_CX_DOWN: nb = b ^ a;     break;     /* control qa, target qb */
+    default:               na = a ^ b;     break;     /* control qb, target qa */
+    }
+    m &= ~((UINT64_C(1) << qa) | (UINT64_C(1) << qb));
+    return m | (na << qa) | (nb << qb);
+}
+
+/**
+ * The conjugated label l^pi = c Z^{pi^T s} X^{pi t}, pi . (l . g) = l^pi . pi g:
+ * s . pi x = pi^T s . x, and pi x xor t = pi (x xor pi t). The swap is its own
+ * transpose, and the CX with the control above is the transpose of the one
+ * with the control below.
+ */
+static inline label_t
+perm_label(uint32_t kind, uint32_t qa, uint32_t qb, label_t l)
+{
+    const uint32_t tk = kind == BQD_PERM_SWAP ? kind
+                      : kind == BQD_PERM_CX_DOWN ? (uint32_t)BQD_PERM_CX_UP : (uint32_t)BQD_PERM_CX_DOWN;
+    l.s = perm_mask(tk, qa, qb, l.s);
+    l.t = perm_mask(kind, qa, qb, l.t);
+    return l;
+}
+
+/** label . e, normal and not canonical: the label product, which Canon makes canonical. */
+static inline BQD
+relabel(label_t l, BQD e)
+{
+    if (limdd_edge_is_zero(e)) return e;
+    return xedge(label_mul(l, label_read(limdd_label(e))), limdd_target(e));
+}
+
+/**
+ * Pair of skip:alg:perm on labelled edges: [x_b = 0] A|_{x_b = s} +
+ * [x_b = 1] B|_{x_b = t}, recursing on the labelled cofactors at the higher
+ * of the two tops (the Shannon level), with Canon on the edges it composes.
+ * Linear in the pair, so the scalar g of the first nonzero operand comes out,
+ * and the memo is on the two edges without it, B's scalar over g, s, t and b:
+ * the scalar and s and b in the first word, below 2^40 since a weight index
+ * is below 2^33 and b below 64, and t in the id.
+ */
+TASK_IMPL_5(BQD, bqd_xp_pair, BQD, A, int, s, BQD, B, int, t, uint32_t, b)
+{
+    const bool az = limdd_edge_is_zero(A), bz = limdd_edge_is_zero(B);
+    if (az && bz) return A;
+    const EVBDD_WGT g = az ? scalar_of(B) : scalar_of(A);
+    const EVBDD_WGT gi = wgt_div(EVBDD_ONE, g);
+    const BQD A1 = az ? A : xscale(gi, A);
+    const BQD B1 = bz ? B : xscale(gi, B);
+    const uint64_t kappa = bz ? 0 : (uint64_t)scalar_of(B1);
+    assert(kappa < (UINT64_C(1) << 33) && "a weight index is below 2^33");
+    const uint64_t k0 = kappa | ((uint64_t)(s & 1) << 33) | ((uint64_t)b << 34);
+    const uint64_t kA = az ? 0 : key_edge(A1), kB = bz ? 0 : key_edge(B1);
+    const uint64_t id = t ? CACHE_BQD_XP_PAIR1 : CACHE_BQD_XP_PAIR0;
+    uint64_t hit;
+    if (cache_get3(id, k0, kA, kB, &hit)) return xscale(g, (BQD)hit);
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_PERM);
+
+    limdd_refs_push(A1);
+    limdd_refs_push(B1);
+    const uint32_t ta = bqd_xp_top(A1), tb = bqd_xp_top(B1);
+    const uint32_t l = ta < tb ? ta : tb;
+    BQD r;
+    if (l > b) {
+        const BQD ca = limdd_refs_push(CALL(bqd_xp_canon, A1));
+        const BQD cb = limdd_refs_push(CALL(bqd_xp_canon, B1));
+        r = CALL(bqd_xp_compose, b, ca, cb);
+        limdd_refs_pop(2);
+    } else if (l == b) {
+        const BQD fa = limdd_refs_push(CALL(bqd_xp_cofactor, A1, b, s));
+        const BQD fb = limdd_refs_push(CALL(bqd_xp_cofactor, B1, b, t));
+        limdd_refs_spawn(SPAWN(bqd_xp_canon, fa));
+        const BQD cb = limdd_refs_push(CALL(bqd_xp_canon, fb));
+        const BQD ca = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_canon)));
+        r = CALL(bqd_xp_compose, b, ca, cb);
+        limdd_refs_pop(4);
+    } else {
+        const BQD a0 = limdd_refs_push(CALL(bqd_xp_cofactor, A1, l, 0));
+        const BQD b0 = limdd_refs_push(CALL(bqd_xp_cofactor, B1, l, 0));
+        limdd_refs_spawn(SPAWN(bqd_xp_pair, a0, s, b0, t, b));
+        const BQD a1 = limdd_refs_push(CALL(bqd_xp_cofactor, A1, l, 1));
+        const BQD b1 = limdd_refs_push(CALL(bqd_xp_cofactor, B1, l, 1));
+        const BQD hi = limdd_refs_push(CALL(bqd_xp_pair, a1, s, b1, t, b));
+        const BQD lo = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_pair)));
+        r = CALL(bqd_xp_compose, l, lo, hi);
+        limdd_refs_pop(6);
+    }
+    cache_put3(id, k0, kA, kB, (uint64_t)r);
+    limdd_refs_pop(2);
+    return xscale(g, r);
+}
+
+/**
+ * ProdHigh of skip:alg:xratio: Compose(j, lo, Canon(lam . ([lo] (.) [W]))),
+ * for lo and W canonical edges of functions with 0 in their support and the
+ * value 1 there, whose cofactors are not equal or opposite. Where lo carries
+ * the identity and W a sign pattern at most, lam . ([U] (.) Z^{s_W} [V]) is
+ * c Z^s X^t . ([U] (.) [V]) with c Z^s X^t = lam Z^{s_W}, and where t is the
+ * least point of the support of that, the ratio of case (v) of
+ * skip:prop:xcompose is X^t c Z^s X^t [V]: no product and no quotient, only a
+ * Canon of a label without X part, which the translation family does not
+ * even need, and the sign repair of the Pauli family. Otherwise the product
+ * is built.
+ */
+TASK_6(BQD, bqd_xp_prod_high, uint32_t, j, BQD, lo, BQD, W, EVBDD_WGT, lc, uint64_t, ls,
+       uint64_t, lt)
+{
+    const label_t lam = { lc, ls, lt };
+    const label_t lw = label_read(limdd_label(W));
+    if (limdd_label(lo) == LIMDD_LIM_IDENTITY && lw.c == EVBDD_ONE && lw.t == 0) {
+        const label_t zw = { EVBDD_ONE, lw.s, 0 };
+        const label_t cst = label_mul(lam, zw);
+        const LIMDD_TARG V = limdd_target(W);
+        if (minpoint(V, cst.t) == cst.t) {
+            const label_t xt = xlabel(cst.t);
+            const BQD k = CALL(bqd_xp_canon, xedge(label_mul(xt, cst), V));
+            label_t lk = label_read(limdd_label(k));
+            label_t root = { EVBDD_ONE, 0, 0 };
+            if (bqd_family() == BQD_FAMILY_PAULI && !bqd_arg_in_upper(lk.c)) {
+                lk.c = neg(lk.c);
+                root.s = UINT64_C(1) << j;
+            }
+            const BQD h = xedge(label_mul(xt, lk), limdd_target(k));
+            return limdd_bundle(label_lim(root), limdd_makenode(j, unit(limdd_target(lo)), h));
+        }
+    }
+    const BQD p = limdd_refs_push(CALL(bqd_xp_apply_op, BQD_OP_XPROD, lo, W));
+    const BQD m = limdd_refs_push(relabel(lam, p));
+    const BQD hi = limdd_refs_push(CALL(bqd_xp_canon, m));
+    const BQD r = CALL(bqd_xp_compose, j, lo, hi);
+    limdd_refs_pop(3);
+    return r;
+}
+
+/**
+ * PermN of skip:alg:xratio: the canonical edge of pi [N], memoised on N, the
+ * kind and the two qubits. Below qa, [N] does not depend on x_qa; at qa the
+ * cofactors are the labelled ones, and the new ones Pairs at qb, or the low
+ * one and X_qb of the high one; above qa the node's two children are mapped,
+ * since pi [N] has the cofactors pi [N_0] and l_1^pi . (pi [N_0] (.) pi [N_1]),
+ * and ProdHigh makes the node.
+ */
+TASK_4(BQD, bqd_xp_perm_node, LIMDD_TARG, N, uint32_t, kind, uint32_t, qa, uint32_t, qb)
+{
+    const uint32_t var = limdd_level(N);
+    if (var > qa && kind == BQD_PERM_CX_UP) return unit(N);
+    const uint64_t key = (uint64_t)kind | ((uint64_t)qa << 8) | ((uint64_t)qb << 16);
+    uint64_t hit;
+    if (cache_get3(CACHE_BQD_XP_PERM, N, key, 0, &hit)) return (BQD)hit;
+    bqd_count(LACE_WORKER_ID, BQD_COUNT_PERM);
+
+    const BQD E = unit(N);
+    BQD r;
+    if (var > qa) {
+        BQD g0, g1;
+        if (kind == BQD_PERM_CX_DOWN) {
+            g0 = limdd_refs_push(E);
+            g1 = limdd_refs_push(CALL(bqd_xp_canon, xedge(xlabel(UINT64_C(1) << qb), N)));
+        } else {
+            limdd_refs_spawn(SPAWN(bqd_xp_restrict, E, qb, 1));
+            g0 = limdd_refs_push(CALL(bqd_xp_restrict, E, qb, 0));
+            g1 = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_restrict)));
+        }
+        r = CALL(bqd_xp_compose, qa, g0, g1);
+        limdd_refs_pop(2);
+    } else if (var == qa) {
+        const BQD f0 = limdd_refs_push(CALL(bqd_xp_cofactor, E, qa, 0));
+        const BQD f1 = limdd_refs_push(CALL(bqd_xp_cofactor, E, qa, 1));
+        BQD g0, g1;
+        if (kind == BQD_PERM_CX_DOWN) {
+            limdd_refs_spawn(SPAWN(bqd_xp_canon, f0));
+            g1 = limdd_refs_push(CALL(bqd_xp_canon, relabel(xlabel(UINT64_C(1) << qb), f1)));
+            g0 = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_canon)));
+        } else {
+            const bool sw = kind == BQD_PERM_SWAP;
+            limdd_refs_spawn(SPAWN(bqd_xp_pair, sw ? f0 : f1, sw ? 1 : 0, sw ? f1 : f0, 1, qb));
+            g0 = limdd_refs_push(CALL(bqd_xp_pair, f0, 0, f1, sw ? 0 : 1, qb));
+            g1 = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_pair)));
+        }
+        r = CALL(bqd_xp_compose, qa, g0, g1);
+        limdd_refs_pop(4);
+    } else {
+        const LIMDD high = limdd_node_high(N);
+        const LIMDD_TARG N0 = limdd_target(limdd_node_low(N));
+        if (limdd_edge_is_zero(high)) {
+            const BQD lo = limdd_refs_push(CALL(bqd_xp_perm_node, N0, kind, qa, qb));
+            r = CALL(bqd_xp_compose, var, lo, high);
+            limdd_refs_pop(1);
+        } else {
+            limdd_refs_spawn(SPAWN(bqd_xp_perm_node, N0, kind, qa, qb));
+            const BQD W = limdd_refs_push(CALL(bqd_xp_perm_node, limdd_target(high), kind, qa, qb));
+            const BQD lo = limdd_refs_push(limdd_refs_sync(SYNC(bqd_xp_perm_node)));
+            const label_t lam = perm_label(kind, qa, qb, label_read(limdd_label(high)));
+            r = CALL(bqd_xp_prod_high, var, lo, W, lam.c, lam.s, lam.t);
+            limdd_refs_pop(2);
+        }
+    }
+    cache_put3(CACHE_BQD_XP_PERM, N, key, 0, (uint64_t)r);
+    return r;
+}
+
+TASK_IMPL_4(BQD, bqd_xp_perm, BQD, e, uint32_t, kind, uint32_t, qa, uint32_t, qb)
+{
+    if (limdd_edge_is_zero(e)) return e;
+    const label_t le = perm_label(kind, qa, qb, label_read(limdd_label(e)));
+    const BQD p = limdd_refs_push(CALL(bqd_xp_perm_node, limdd_target(e), kind, qa, qb));
+    const BQD m = limdd_refs_push(relabel(le, p));
+    const BQD r = CALL(bqd_xp_canon, m);
+    limdd_refs_pop(2);
+    return r;
+}
+
+/** X on qubit q: the label product X_q . e, made canonical by Canon, CanonT in the translation family. */
+TASK_IMPL_2(BQD, bqd_xp_x, BQD, e, uint32_t, q)
+{
+    if (limdd_edge_is_zero(e)) return e;
+    const BQD m = limdd_refs_push(relabel(xlabel(UINT64_C(1) << q), e));
+    const BQD r = CALL(bqd_xp_canon, m);
+    limdd_refs_pop(1);
+    return r;
+}
+
+int
+bqd_xp_w8_log(EVBDD_WGT beta)
+{
+    const EVBDD_WGT w = gates[GATEID_T][3];
+    EVBDD_WGT p = EVBDD_ONE;
+    for (int k = 0; k < 8; k++, p = wgt_mul(p, w)) if (p == beta) return k;
+    return -1;
+}
+
+/**
+ * e . beta^eps on any support in these families: c Z^s X^t . PhaseMulX(N,
+ * X^t eps, beta) in the translation family, and c Z^s X^t . PhaseMulP(N,
+ * X^t (m eps)) in the Pauli family for beta = w^m; the product label is
+ * canonical, since the multiplication keeps the support, and with it the
+ * least point and the pivots. eps is protected by the caller.
+ */
+TASK_IMPL_3(BQD, bqd_xp_phase_mul, BQD, e, BQD_EXP, eps, EVBDD_WGT, beta)
+{
+    if (limdd_edge_is_zero(e) || beta == EVBDD_ONE) return e;
+    const label_t l = label_read(limdd_label(e));
+    const LIMDD_TARG N = limdd_target(e);
+    BQD p;
+    if (bqd_family() == BQD_FAMILY_X) {
+        const uint32_t r = bqd_exp_order(beta);
+        const BQD_EXP moved = mtbdd_refs_push(CALL(bqd_exp_translate, eps, l.t));
+        p = CALL(bqd_xp_phase_mul_x, N, moved, beta, r);
+        mtbdd_refs_pop(1);
+    } else {
+        const int m = bqd_xp_w8_log(beta);
+        if (m < 0) {
+            fprintf(stderr, "sylvan: the Pauli-BQD multiplies by a power of w_8 only\n");
+            exit(1);
+        }
+        /* m eps, the monomial's exponent in base w */
+        const BQD_EXP zero = mtbdd_refs_push(bqd_exp_const(0, 8));
+        BQD_EXP me = mtbdd_refs_push(zero);
+        for (int k = 0; k < m; k++) {
+            const BQD_EXP next = CALL(bqd_exp_add, me, eps, 8);
+            mtbdd_refs_pop(1);
+            me = mtbdd_refs_push(next);
+        }
+        const BQD_EXP moved = mtbdd_refs_push(CALL(bqd_exp_translate, me, l.t));
+        p = CALL(bqd_xp_phase_mul_p, N, moved);
+        mtbdd_refs_pop(3);
+    }
+    return xedge(label_mul(l, label_read(limdd_label(p))), limdd_target(p));
 }

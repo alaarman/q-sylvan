@@ -61,13 +61,18 @@
  * full support in every family: the scalar family's in the translation
  * family too, whose diagram of a function of full support is the scalar
  * family's, and one with label products and a sign repair in the Pauli
- * family (qsylvan_bqd_xp.h). From a Lace worker.
+ * family (qsylvan_bqd_xp.h). The operations declared with a RUN macro, and
+ * bqd_cgate_either and bqd_swap, which reach the diagram only through such
+ * macros, may be called from any thread, as limdd_gate may;
+ * bqd_local_matvec, which pushes on the worker's reference stack itself, only
+ * from a Lace worker.
  */
 
 #ifndef QSYLVAN_BQD_GATES_H
 #define QSYLVAN_BQD_GATES_H
 
 #include "qsylvan_bqd.h"
+#include "qsylvan_bqd_exp.h"
 #include "qsylvan_bqd_ops.h"
 
 #ifdef __cplusplus
@@ -134,6 +139,80 @@ TASK_DECL_3(BQD, bqd_restrict, BQD, uint32_t, int);
 TASK_DECL_3(BQD, bqd_project, BQD, uint32_t, int);
 #define bqd_project(e, q, b) RUN(bqd_project, e, q, b)
 
+/* --- gates without the high cofactor (skip:sec:ratio) --------------------- */
+
+/*
+ * A node stores its low cofactor and the ratio of its two cofactors, so an
+ * operation that recurses on cofactors makes the high one (Cof1, a product)
+ * at every node above the level it acts on, and forms each new ratio by a
+ * quotient. The operations below read a node's stored edges instead wherever
+ * the gate leaves the pairing of the two cofactors alone: an operation that
+ * takes each value of its result from one value of an operand commutes with
+ * the pair (low cofactor, ratio) (skip:lem:select). Above the qubits they act
+ * on they make no Cof1 and no Apply, and at most one call per node of the
+ * diagram. The gate entry points below use them, and so do bqd_restrict,
+ * bqd_project and, on a state without full support, bqd_apply_diagonal.
+ * Every result is the canonical edge, the one bqd_from_vector builds.
+ */
+
+/** The three permutations of two qubits qa < qb, (pi f)(x) = f(pi x). */
+enum {
+    BQD_PERM_SWAP    = 0,   /* exchange x_qa and x_qb */
+    BQD_PERM_CX_DOWN = 1,   /* CX, control qa above target qb: x_qb ^= x_qa */
+    BQD_PERM_CX_UP   = 2,   /* CX, control qb below target qa: x_qa ^= x_qb */
+};
+
+/**
+ * Perm of skip:alg:perm and skip:alg:xratio: the permutation `kind` of the
+ * qubits qa < qb. Above qa it maps a node through its two stored edges; at qa
+ * it takes the node's two cofactors, and the new ones are Pairs at qb.
+ */
+TASK_DECL_4(BQD, bqd_perm, BQD, uint32_t, uint32_t, uint32_t);
+#define bqd_perm(e, kind, qa, qb) RUN(bqd_perm, e, kind, qa, qb)
+
+/** X on qubit q: XQ of skip:alg:perm, and Canon(X_q . e) in the other families (CanonT). */
+TASK_DECL_2(BQD, bqd_x, BQD, uint32_t);
+#define bqd_x(e, q) RUN(bqd_x, e, q)
+
+/**
+ * Pair of skip:alg:perm: [x_b = 0] A|_{x_b = s} + [x_b = 1] B|_{x_b = t}, the
+ * function whose values come from A where x_b is 0 and from B where it is 1.
+ */
+TASK_DECL_5(BQD, bqd_pair, BQD, int, BQD, int, uint32_t);
+#define bqd_pair(A, s, B, t, b) RUN(bqd_pair, A, s, B, t, b)
+
+/** Ind: the node of the indicator of supp [t], the terminal on full support. */
+TASK_DECL_1(LIMDD_TARG, bqd_ind, LIMDD_TARG);
+#define bqd_ind(t) RUN(bqd_ind, t)
+
+/**
+ * MulOff of skip:alg:rebuild: [k] . c^{[x not in supp [u]]}, k on the support
+ * of u and c k off it; in the scalar and the translation family.
+ */
+TASK_DECL_3(BQD, bqd_mul_off, BQD, EVBDD_WGT, LIMDD_TARG);
+#define bqd_mul_off(k, c, u) RUN(bqd_mul_off, k, c, u)
+
+/**
+ * PhaseMul of skip:alg:phasemul and skip:alg:xphase: [k] . beta^eps on any
+ * support, eps an exponent diagram (qsylvan_bqd_exp.h) with its values in
+ * the base beta, which in the Pauli family must be a power of w_8. No Cof1
+ * and no Apply. eps is protected by the caller.
+ */
+TASK_DECL_3(BQD, bqd_phase_mul, BQD, BQD_EXP, EVBDD_WGT);
+#define bqd_phase_mul(k, eps, beta) RUN(bqd_phase_mul, k, eps, beta)
+
+/** Exp of skip:alg:phasemul: beta^eps, of full support, r the order of beta; not in the Pauli family. */
+TASK_DECL_3(BQD, bqd_exp_state, BQD_EXP, EVBDD_WGT, uint32_t);
+#define bqd_exp_state(eps, beta, r) RUN(bqd_exp_state, eps, beta, r)
+
+/**
+ * DiagR: e . phase^{x_A} on any support by PhaseMul, A a vector-index mask as
+ * bqd_apply_diagonal's, which calls it off full support. In the Pauli family a
+ * phase that is not a power of w_8 takes the product with the monomial.
+ */
+TASK_DECL_4(BQD, bqd_diag_any, BQD, uint64_t, EVBDD_WGT, uint32_t);
+#define bqd_diag_any(e, A, phase, nqubits) RUN(bqd_diag_any, e, A, phase, nqubits)
+
 /**
  * The dense 2^k x 2^k matrix M applied to the qubits of e: row-major, bit
  * k-1-i of an index is qubits[i], so gates[] order for k = 1. It is
@@ -151,7 +230,9 @@ BQD bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t
 /**
  * `gateid` (an index into gates[]) applied to qubit `target`. Any 2x2 matrix
  * in the table: the Hadamard, X, Y, the square roots, and the diagonal gates,
- * which go through bqd_apply_diagonal. As limdd_gate.
+ * which go through bqd_apply_diagonal; X, Y and any other matrix with a zero
+ * diagonal go through bqd_x after the diagonal gate that makes them X. As
+ * limdd_gate.
  */
 TASK_DECL_4(BQD, bqd_gate, BQD, uint32_t, uint32_t, uint32_t);
 #define bqd_gate(e, gateid, target, nqubits) RUN(bqd_gate, e, gateid, target, nqubits)
@@ -161,7 +242,8 @@ TASK_DECL_4(BQD, bqd_gate, BQD, uint32_t, uint32_t, uint32_t);
  * for qubit c, as limdd_cgate) being |1>. A diagonal gate whose u00 is one is
  * a monomial and may have its controls anywhere. Any other gate needs every
  * control above the target, control_mask < 2^target, as limdd_cgate does, and
- * the call exits with a message otherwise.
+ * the call exits with a message otherwise. A gate with a zero diagonal and one
+ * control is bqd_perm between two monomials, the CX itself Perm alone.
  */
 TASK_DECL_5(BQD, bqd_cgate, BQD, uint32_t, uint64_t, uint32_t, uint32_t);
 #define bqd_cgate(e, gateid, control_mask, target, nqubits) \
@@ -169,14 +251,14 @@ TASK_DECL_5(BQD, bqd_cgate, BQD, uint32_t, uint64_t, uint32_t, uint32_t);
 
 /**
  * One control on either side of the target, as limdd_cgate_either: a diagonal
- * gate directly, and CX with the control below the target by
- * (H (x) H) CNOT_{a->b} (H (x) H) = CNOT_{b->a}. Any other gate with the
- * control below the target sets *ok to false and returns e.
+ * gate directly, and CX, CY and any gate with a zero diagonal by bqd_perm with
+ * the control below the target, BQD_PERM_CX_UP, between two monomials. Any
+ * other gate with the control below the target sets *ok to false and returns e.
  */
 BQD bqd_cgate_either(BQD e, uint32_t gateid, uint32_t control, uint32_t target,
                      uint32_t nqubits, bool *ok);
 
-/** Exchange two qubits, as three CNOTs, as limdd_swap. */
+/** Exchange two qubits, bqd_perm with BQD_PERM_SWAP, as limdd_swap. */
 BQD bqd_swap(BQD e, uint32_t a, uint32_t b, uint32_t nqubits);
 
 #ifdef __cplusplus

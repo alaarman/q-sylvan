@@ -110,6 +110,7 @@
 #define QSYLVAN_BQD_XP_H
 
 #include "qsylvan_bqd.h"
+#include "qsylvan_bqd_exp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -211,6 +212,53 @@ BQD bqd_xp_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
  * the scalar walk serves it. From a Lace worker.
  */
 BQD bqd_xp_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits, uint32_t *visits);
+
+/* --- gates without the high cofactor (skip:sec:ratio:xp) ------------------- */
+
+/*
+ * The counterparts in these families of the operations of qsylvan_bqd_gates.h
+ * that avoid the high cofactor; the entry points there dispatch here. Masks
+ * are LIM masks, bit q for qubit q, and kinds those of bqd_perm.
+ */
+
+/** Ind in these families: the indicator of supp [t], with the X parts of t's high labels. */
+TASK_DECL_1(LIMDD_TARG, bqd_xp_ind, LIMDD_TARG);
+
+/** Perm of skip:alg:xratio: Canon(l^pi . PermN(N)) for e = (l, N), PermN on the stored edges. */
+TASK_DECL_4(BQD, bqd_xp_perm, BQD, uint32_t, uint32_t, uint32_t);
+
+/** X on qubit q, Canon(X_q . e). */
+TASK_DECL_2(BQD, bqd_xp_x, BQD, uint32_t);
+
+/** Pair of skip:alg:perm on labelled edges, at the Shannon level. */
+TASK_DECL_5(BQD, bqd_xp_pair, BQD, int, BQD, int, uint32_t);
+
+/**
+ * CanonT of skip:alg:xratio, the translation family: the canonical edge of
+ * X^tau [N], on N's stored edges where the least point stays. Canon of the
+ * translation family is the edge itself when its translation is the least
+ * point of its support, and CanonT otherwise.
+ */
+TASK_DECL_2(BQD, bqd_xp_canon_t, LIMDD_TARG, uint64_t);
+
+/** MulOffX, the translation family: [k] . c^{[x not in supp [U]]}. */
+TASK_DECL_3(BQD, bqd_xp_mul_off, BQD, EVBDD_WGT, LIMDD_TARG);
+
+/** PhaseMulX of skip:alg:xphase: [N] . beta^eps in the translation family, r the order of beta. */
+TASK_DECL_4(BQD, bqd_xp_phase_mul_x, LIMDD_TARG, BQD_EXP, EVBDD_WGT, uint32_t);
+
+/** PhaseMulP of skip:alg:xphase: [N] . w_8^eps in the Pauli family, eps modulo 8. */
+TASK_DECL_2(BQD, bqd_xp_phase_mul_p, LIMDD_TARG, BQD_EXP);
+
+/**
+ * e . beta^eps for a labelled edge e: the label times PhaseMulX of the
+ * translated exponent, or in the Pauli family, for beta = w_8^m, times
+ * PhaseMulP of m eps; the Pauli family exits on any other beta.
+ */
+TASK_DECL_3(BQD, bqd_xp_phase_mul, BQD, BQD_EXP, EVBDD_WGT);
+
+/** m with w_8^m = beta, or -1 when beta is no power of w_8. */
+int bqd_xp_w8_log(EVBDD_WGT beta);
 
 #ifdef __cplusplus
 }

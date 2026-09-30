@@ -56,12 +56,14 @@
  * too. The Pauli family has sign labels there, and a product of two pivot
  * values in [0, pi) need not be in [0, pi), so a node of the product may
  * need the sign repair. So each tests full support of its whole input, a
- * walk memoised on nodes (bqd_has_full_support), and hands a state with a
- * zero to the general product of qsylvan_bqd_gates.h, which is correct on
- * any support and has no bound; bqd_product hands it every state of the
- * Pauli family as well, and bqd_apply_diagonal takes a state of full support
- * in the Pauli family to bqd_xp_diagonal, the same walk with label products
- * and the sign repair at the last qubit of A (skip:alg:xdiag).
+ * walk memoised on nodes (bqd_has_full_support). bqd_product hands a state
+ * with a zero, and every state of the Pauli family, to the general product of
+ * qsylvan_bqd_gates.h, which is correct on any support and has no bound.
+ * bqd_apply_diagonal hands a state with a zero to DiagR of skip:alg:phasemul
+ * (bqd_diag_any), which multiplies by the monomial on any support without a
+ * product, and takes a state of full support in the Pauli family to
+ * bqd_xp_diagonal, the same walk with label products and the sign repair at
+ * the last qubit of A (skip:alg:xdiag).
  */
 
 #ifndef QSYLVAN_BQD_OPS_H
@@ -106,10 +108,13 @@ BQD bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
  * whatever |e| is; the walk stops early where e skips a qubit of A
  * (skip:prop:diag). At most one new node per level is made, after the test
  * for full support, which is memoised and so costs only the nodes it has not
- * seen. Without full support it is bqd_multiply with the monomial, and
- * visits nothing. In the Pauli family the walk is bqd_xp_diagonal, which
- * visits the same path. The result is the canonical diagram, the same edge
- * as bqd_product(e, bqd_monomial(...)). From a Lace worker.
+ * seen. Without full support it is DiagR, the phase multiplication of
+ * skip:alg:phasemul (bqd_diag_any in qsylvan_bqd_gates.h), which recurses on
+ * the stored edges with an exponent diagram and makes no high cofactor and no
+ * product, and it visits no node the walk counts. In the Pauli family the
+ * walk is bqd_xp_diagonal, which visits the same path. The result is the
+ * canonical diagram, the same edge as bqd_product(e, bqd_monomial(...)). From
+ * a Lace worker.
  */
 BQD bqd_apply_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits);
 

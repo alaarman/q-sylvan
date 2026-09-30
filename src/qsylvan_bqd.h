@@ -179,6 +179,43 @@ void bqd_lim_masks(LIMDD_LIM lim, uint32_t nqubits, EVBDD_WGT *c, uint64_t *s, u
  */
 LIMDD_LIM bqd_lim_word(EVBDD_WGT c, uint64_t s, uint64_t t);
 
+/* --- counts, for diagnostics ------------------------------------------------ */
+
+/**
+ * What the operations did, counted per worker on a padded line of its own and
+ * summed when read, so that counting shares nothing: the high cofactors made
+ * (Cof1, and Join in the translation and Pauli families), the misses of the
+ * four pointwise operations, of Canon, of the recursions that avoid the high
+ * cofactor (Perm, Pair, X, CanonT) and of the phase multiplications. A test
+ * bounds a gate's work by these rather than by its time.
+ */
+typedef enum {
+    BQD_COUNT_COF1 = 0,
+    BQD_COUNT_APPLY,
+    BQD_COUNT_CANON,
+    BQD_COUNT_PERM,
+    BQD_COUNT_PHASEMUL,
+    BQD_COUNTS
+} bqd_count_t;
+
+typedef struct {
+    uint64_t n[BQD_COUNTS];
+    char pad[SYLVAN_SHARING_PAD - (BQD_COUNTS * sizeof(uint64_t)) % SYLVAN_SHARING_PAD];
+} bqd_count_line_t;
+
+extern bqd_count_line_t *bqd_count_lines;
+
+/** Count one k on `worker`'s line, LACE_WORKER_ID from inside a task. */
+static inline void
+bqd_count(unsigned worker, bqd_count_t k)
+{
+    bqd_count_lines[worker].n[k]++;
+}
+
+/** Zero the counts, and read their sums over the workers; between operations only. */
+void bqd_counts_reset(void);
+void bqd_counts_read(uint64_t out[BQD_COUNTS]);
+
 /* --- the canonical form --------------------------------------------------- */
 
 /**

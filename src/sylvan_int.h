@@ -170,6 +170,31 @@ static const uint64_t CACHE_BQD_XP_JOIN              = (130LL<<40);
 static const uint64_t CACHE_BQD_XP_GATE              = (131LL<<40);
 static const uint64_t CACHE_BQD_XP_RESTRICT          = (132LL<<40);
 static const uint64_t CACHE_BQD_XP_PROJECT           = (133LL<<40);
+/* the BQD's gates without the high cofactor (skip:sec:ratio of bqd-skip.tex):
+ * the support indicator and its exponent, the permutations of two qubits,
+ * X, the phase multiplications, and the exponent diagrams they recurse on */
+static const uint64_t CACHE_BQD_IND                  = (134LL<<40);
+static const uint64_t CACHE_BQD_IOTA                 = (135LL<<40);
+static const uint64_t CACHE_BQD_SUBSET               = (136LL<<40);
+static const uint64_t CACHE_BQD_PERM                 = (137LL<<40);
+static const uint64_t CACHE_BQD_PAIR                 = (138LL<<40);
+static const uint64_t CACHE_BQD_XQ                   = (139LL<<40);
+static const uint64_t CACHE_BQD_PHASEMUL             = (140LL<<40);
+static const uint64_t CACHE_BQD_EXP                  = (141LL<<40);
+static const uint64_t CACHE_BQD_EXP_SUB              = (142LL<<40);
+static const uint64_t CACHE_BQD_EXP_ADD              = (143LL<<40);
+static const uint64_t CACHE_BQD_EXP_SEL              = (144LL<<40);
+static const uint64_t CACHE_BQD_EXP_TRANSLATE        = (145LL<<40);
+static const uint64_t CACHE_BQD_XP_IND               = (146LL<<40);
+static const uint64_t CACHE_BQD_XP_IOTA              = (147LL<<40);
+static const uint64_t CACHE_BQD_XP_PERM              = (148LL<<40);
+/* two, for the two values of the high operand's restriction: the key has no
+ * room for it beside the scalar, the qubit and the low one's */
+static const uint64_t CACHE_BQD_XP_PAIR0             = (149LL<<40);
+static const uint64_t CACHE_BQD_XP_PAIR1             = (150LL<<40);
+static const uint64_t CACHE_BQD_XP_CANONT            = (151LL<<40);
+static const uint64_t CACHE_BQD_XP_PHASEMUL          = (152LL<<40);
+static const uint64_t CACHE_BQD_XP_PHASEMULP         = (153LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);
