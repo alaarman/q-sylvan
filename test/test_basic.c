@@ -104,6 +104,73 @@ test_cache()
     return 0;
 }
 
+/**
+ * cache_grow keeps what the cache holds: every entry found before is found
+ * after, with its value, in a cache four times the size, and nothing else
+ * is; an entry of two buckets is found with its values or not at all; and
+ * the grown cache takes new entries in the buckets it gained.
+ */
+static int
+test_cache_grow()
+{
+    cache_clear();
+    const size_t size = cache_getsize();
+    test_assert(cache_getmaxsize() >= 4 * size);
+
+    const size_t number_add = 2 * size;
+    uint64_t *arr = (uint64_t*)malloc(sizeof(uint64_t)*4*number_add);
+    char *held = (char*)malloc(number_add);
+    for (size_t i=0; i<number_add*4; i++) arr[i] = xorshift_rand();
+    for (size_t i=0; i<number_add; i++) cache_put(arr[4*i], arr[4*i+1], arr[4*i+2], arr[4*i+3]);
+    size_t count = 0;
+    for (size_t i=0; i<number_add; i++) {
+        uint64_t val;
+        held[i] = (char)cache_get(arr[4*i], arr[4*i+1], arr[4*i+2], &val);
+        test_assert(!held[i] || val == arr[4*i+3]);
+        if (held[i]) count++;
+    }
+    test_assert(count == cache_getused());
+
+    cache_grow(4 * size);
+    test_assert(cache_getsize() == 4 * size);
+    test_assert(count == cache_getused());
+    for (size_t i=0; i<number_add; i++) {
+        uint64_t val;
+        const int res = cache_get(arr[4*i], arr[4*i+1], arr[4*i+2], &val);
+        test_assert(res == held[i]);
+        test_assert(!res || val == arr[4*i+3]);
+    }
+
+    /* two-bucket entries among them, and the next growth */
+    for (size_t i=0; i<number_add/4; i++) {
+        cache_put6(arr[8*i+1], arr[8*i], arr[8*i+2], arr[8*i+3], arr[8*i+4], arr[8*i+5], arr[8*i+6], arr[8*i+7]);
+    }
+    cache_grow(cache_getmaxsize());
+    for (size_t i=0; i<number_add/4; i++) {
+        uint64_t val1, val2;
+        const int res = cache_get6(arr[8*i+1], arr[8*i], arr[8*i+2], arr[8*i+3], arr[8*i+4], arr[8*i+5], &val1, &val2);
+        test_assert(res == 0 || (val1 == arr[8*i+6] && val2 == arr[8*i+7]));
+    }
+    for (size_t i=0; i<number_add; i++) {
+        uint64_t val;
+        const int res = cache_get(arr[4*i], arr[4*i+1], arr[4*i+2], &val);
+        test_assert(res == 0 || val == arr[4*i+3]);
+    }
+
+    /* and the buckets it gained take entries */
+    for (size_t i=0; i<number_add; i++) {
+        test_assert(cache_put(arr[4*i+3], arr[4*i+2], arr[4*i+1], arr[4*i]));
+        uint64_t val;
+        test_assert(cache_get(arr[4*i+3], arr[4*i+2], arr[4*i+1], &val) == 1);
+        test_assert(val == arr[4*i]);
+    }
+
+    free(held);
+    free(arr);
+    cache_clear();
+    return 0;
+}
+
 static inline BDD
 make_random(int i, int j)
 {
@@ -601,6 +668,8 @@ TASK_0(int, runtests)
 
     printf("Testing cache.\n");
     if (test_cache()) return 1;
+    printf("Testing cache growth.\n");
+    if (test_cache_grow()) return 1;
     printf("Testing bdd.\n");
     if (test_bdd()) return 1;
     printf("Testing mtbdd.\n");
@@ -628,7 +697,7 @@ int main()
     lace_start(1, 0);
 
     // Simple Sylvan initialization, also initialize BDD, MTBDD and LDD support
-    sylvan_set_sizes(1LL<<20, 1LL<<20, 1LL<<16, 1LL<<16);
+    sylvan_set_sizes(1LL<<20, 1LL<<20, 1LL<<16, 1LL<<20);
     sylvan_init_package();
     sylvan_init_bdd();
     sylvan_init_mtbdd();

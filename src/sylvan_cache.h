@@ -117,6 +117,13 @@ void cache_clear(void);
 
 void cache_setsize(size_t size);
 
+/**
+ * Grow the cache to `size`, at most its maximum, keeping its entries where
+ * the new size is a multiple of the old one and emptying it otherwise, as
+ * cache_setsize does. Not while any worker uses the cache.
+ */
+void cache_grow(size_t size);
+
 size_t cache_getused(void);
 
 size_t cache_getsize(void);

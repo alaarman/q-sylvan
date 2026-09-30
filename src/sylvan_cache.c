@@ -277,6 +277,50 @@ cache_setsize(size_t size)
     cache_create(size, cache_max);
 }
 
+/*
+ * Grow without losing what the cache holds. The table is allocated at the
+ * maximum, and the buckets past the size in use have not been written since
+ * it was mapped, so they are still zero. With the new size a multiple of the
+ * old, an entry at bucket i belongs at hash % size, which is i + k * old for
+ * some k: it stays, or moves to a zero bucket past the old size, which no
+ * other entry moves to. An entry of two buckets (cache_put6) is hashed from
+ * all six of its keys, so it is not at the bucket its first three give and is
+ * dropped, as is one whose status its hash does not match. A bucket left
+ * behind is zeroed, as one never written is.
+ */
+void
+cache_grow(size_t size)
+{
+    if (size > cache_max) size = cache_max;
+    if (size <= cache_size) return;
+    const size_t old = cache_size;
+    if (size % old != 0) {
+        cache_setsize(size);
+        return;
+    }
+    cache_size = size;
+#if CACHE_MASK
+    cache_mask = cache_size - 1;
+#endif
+    for (size_t i = 0; i < old; i++) {
+        const uint32_t s = cache_status[i];
+        if (s == 0) continue;
+        const uint64_t hash = cache_hash(cache_table[i].a, cache_table[i].b, cache_table[i].c);
+        const struct cache_entry vacant = { 0, 0, 0, 0 };
+        if (hash % old != i || (s & 0xc0000000) || ((s ^ (hash >> 32)) & 0x3fff0000)) {
+            cache_table[i] = vacant;
+            cache_status[i] = 0;
+            continue;
+        }
+        const size_t j = hash % cache_size;
+        if (j == i) continue;
+        cache_table[j] = cache_table[i];
+        cache_status[j] = s;
+        cache_table[i] = vacant;
+        cache_status[i] = 0;
+    }
+}
+
 size_t
 cache_getsize(void)
 {
