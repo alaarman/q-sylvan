@@ -171,6 +171,14 @@ LIMDD_LIM bqd_lim_make(EVBDD_WGT c, uint64_t s, uint64_t t, uint32_t nqubits);
 /** Read a label back as (c, s, t). The zero label reads as (0, 0, 0). */
 void bqd_lim_masks(LIMDD_LIM lim, uint32_t nqubits, EVBDD_WGT *c, uint64_t *s, uint64_t *t);
 
+/**
+ * The label c Z^s X^t with s and t as LIM masks, bit q for qubit q, which is
+ * what the recursions hold. Interned through a per-worker, direct-mapped memo
+ * in front of the LIM table, so that a label met again costs no shared
+ * access; a scalar label is interned in one table lookup, without its word.
+ */
+LIMDD_LIM bqd_lim_word(EVBDD_WGT c, uint64_t s, uint64_t t);
+
 /* --- the canonical form --------------------------------------------------- */
 
 /**

@@ -31,7 +31,8 @@ scalar_of(BQD e)
 static inline BQD
 with_scalar(EVBDD_WGT c, LIMDD_TARG t, uint32_t n)
 {
-    return limdd_bundle(bqd_lim_make(c, 0, 0, n), t);
+    (void)n;
+    return limdd_bundle(bqd_lim_word(c, 0, 0), t);
 }
 
 /*

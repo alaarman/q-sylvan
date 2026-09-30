@@ -67,16 +67,11 @@ label_read(LIMDD_LIM lim)
     return l;
 }
 
-/** The LIM of a label, interned; the zero weight gives the zero label. */
+/** The LIM of a label, interned through the per-worker memo; the zero weight gives the zero label. */
 static inline LIMDD_LIM
 label_lim(label_t l)
 {
-    if (l.c == EVBDD_ZERO) return LIMDD_LIM_ZERO;
-    if (l.c == EVBDD_ONE && l.s == 0 && l.t == 0) return LIMDD_LIM_IDENTITY;
-    limdd_pauli_t p = limdd_pauli_identity();
-    p.x[0] = l.t;
-    p.z[0] = l.s;
-    return limdd_lim_make(p, l.c);
+    return bqd_lim_word(l.c, l.s, l.t);
 }
 
 /**

@@ -153,6 +153,20 @@ limdd_pauli_t limdd_pauli_deref(LIMDD_PAULI_REF ref);
  */
 LIMDD_LIM limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w);
 
+/**
+ * The LIM `w * I`, the one limdd_lim_make gives for the identity word, in one
+ * table lookup: the identity word is not built and not looked up.
+ */
+LIMDD_LIM limdd_lim_scalar(EVBDD_WGT w);
+
+/**
+ * The generation of the LIM indices, which moves on at every collection and
+ * every new pair of tables: a memo of LIMs kept outside the table holds for
+ * one generation only, since a swept bucket is handed out again and a
+ * collection may renumber the weights a LIM holds.
+ */
+uint64_t limdd_lim_generation(void);
+
 /** The Pauli word of `lim`. For LIMDD_LIM_ZERO this is the identity. */
 limdd_pauli_t limdd_lim_pauli(LIMDD_LIM lim);
 

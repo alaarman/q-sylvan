@@ -30,12 +30,15 @@ scalar_of(BQD e)
     return limdd_lim_weight(limdd_label(e));
 }
 
-/** c . [t], the zero edge for c = 0. The label is the one bqd_build writes. */
+/**
+ * c . [t], the zero edge for c = 0. The label is the one bqd_build writes,
+ * interned through the per-worker memo of bqd_lim_word.
+ */
 static inline BQD
 edge(EVBDD_WGT c, LIMDD_TARG t)
 {
     if (c == EVBDD_ZERO) return limdd_zero_edge();
-    return limdd_bundle(bqd_lim_make(c, 0, 0, (uint32_t)limdd_lims_nqubits()), t);
+    return limdd_bundle(bqd_lim_word(c, 0, 0), t);
 }
 
 static inline BQD

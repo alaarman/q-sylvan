@@ -35,6 +35,16 @@ static llmsset_t pauli_table = NULL;
 static llmsset_t lim_table   = NULL;
 static size_t    lim_nqubits = 0;
 
+/*
+ * The generation of the LIM indices: moved on whenever an index may come to
+ * mean another LIM, which is at every collection, where a swept bucket is
+ * handed out again and the weights a LIM holds may be renumbered, and at every
+ * new pair of tables. A memo of interned LIMs kept outside the table is
+ * valid for one generation (the BQD's, in qsylvan_bqd.c). Written only there,
+ * while no operation runs, so a reader never sees it change under it.
+ */
+static _Atomic(uint64_t) lim_generation = 1;
+
 /**
  * i^0, i^1, i^2, i^3 as edge weights.
  *
@@ -185,6 +195,50 @@ limdd_lim_table_count(void)
     return table_count(lim_table);
 }
 
+uint64_t
+limdd_lim_generation(void)
+{
+    return atomic_load_explicit(&lim_generation, memory_order_relaxed);
+}
+
+/*
+ * An edge carries a LIM index in LIMDD_LIM_BITS bits, so an index at or above
+ * the limit cannot be represented: limdd_bundle would overflow it into the
+ * target field and hand back an edge pointing at an unrelated node. That is
+ * silent in a release build -- the assertion in limdd_makenode_ex is compiled
+ * out -- so it is checked here, where the index is produced, rather than where
+ * the corruption is noticed.
+ */
+static LIMDD_LIM
+lim_checked(uint64_t lim)
+{
+    if (lim == 0) die("LIM", lim_table);
+    if (lim >= LIMDD_LIM_MAX) {
+        fprintf(stderr, "sylvan: LIMDD LIM table index %llu exceeds the %d-bit "
+                        "edge field; the LIM table cannot exceed %llu entries\n",
+                (unsigned long long)lim, LIMDD_LIM_BITS,
+                (unsigned long long)LIMDD_LIM_MAX);
+        exit(1);
+    }
+    return lim;
+}
+
+/*
+ * The identity word is interned with the identity LIM and marked with it at
+ * every collection, and llmsset keeps a marked bucket where it is, so its
+ * reference is read from the identity's bucket instead of being looked up.
+ * One table lookup where limdd_lim_make makes two, and no word to build.
+ */
+LIMDD_LIM
+limdd_lim_scalar(EVBDD_WGT w)
+{
+    assert(lim_table != NULL);
+    if (w == EVBDD_ZERO) return LIMDD_LIM_ZERO;
+    int created;
+    return lim_checked(llmsset_lookup(lim_table, limdd_lim_pauli_ref(LIMDD_LIM_IDENTITY), w,
+                                      &created));
+}
+
 LIMDD_LIM
 limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w)
 {
@@ -201,24 +255,7 @@ limdd_lim_make(limdd_pauli_t p, EVBDD_WGT w)
     const LIMDD_PAULI_REF pref = limdd_pauli_intern(p);
 
     int created;
-    uint64_t lim = llmsset_lookup(lim_table, pref, w, &created);
-    if (lim == 0) die("LIM", lim_table);
-    /*
-     * An edge carries this index in 23 bits, so an index at or above the
-     * limit cannot be represented: limdd_bundle would overflow it into the
-     * target field and hand back an edge pointing at an unrelated node. That
-     * is silent in a release build -- the assertion in limdd_makenode_ex is
-     * compiled out -- so it is checked here, where the index is produced,
-     * rather than where the corruption is noticed.
-     */
-    if (lim >= LIMDD_LIM_MAX) {
-        fprintf(stderr, "sylvan: LIMDD LIM table index %llu exceeds the %d-bit "
-                        "edge field; the LIM table cannot exceed %llu entries\n",
-                (unsigned long long)lim, LIMDD_LIM_BITS,
-                (unsigned long long)LIMDD_LIM_MAX);
-        exit(1);
-    }
-    return lim;
+    return lim_checked(llmsset_lookup(lim_table, pref, w, &created));
 }
 
 limdd_pauli_t
@@ -306,6 +343,7 @@ limdd_gc_mark_lim(LIMDD_LIM lim)
 void
 limdd_gc_clear_lims(void)
 {
+    atomic_fetch_add_explicit(&lim_generation, 1, memory_order_relaxed);
     llmsset_clear_data(lim_table);
     llmsset_clear_data(pauli_table);
 }
@@ -369,6 +407,7 @@ limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
         exit(1);
     }
 
+    atomic_fetch_add_explicit(&lim_generation, 1, memory_order_relaxed);
     lim_nqubits  = nqubits;
     pauli_table  = llmsset_create(pauli_tablesize, pauli_tablesize);
 #if LIMDD_PAULI_WORDS > 1

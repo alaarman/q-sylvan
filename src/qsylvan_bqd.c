@@ -25,6 +25,48 @@
 static bqd_family_t family  = BQD_FAMILY_SCALAR;
 static size_t       nqubits = 0;
 
+/* --- per-worker state ------------------------------------------------------ */
+
+/*
+ * The memo of interned labels, one per worker (bqd_lim_word). Interning a
+ * label is a lookup of its Pauli word and then of the LIM, two hashed probes
+ * into shared tables, and the recursions intern one on nearly every edge they
+ * scale: a profile of a stalled gate put 17 to 45% of its samples there. A
+ * label seen before is found here with no shared access at all. Direct
+ * mapped, so a collision overwrites; a slot holds (c, s, t) and its LIM, and
+ * a LIM of 0, which llmsset never hands out, marks it empty. It holds for one
+ * generation of LIM indices (limdd_lim_generation) and empties itself when
+ * the generation moves on, which is only ever between operations.
+ */
+#define LABEL_MEMO_BITS 12
+
+typedef struct {
+    uint64_t  c, s, t;
+    LIMDD_LIM lim;
+} label_slot_t;
+
+typedef struct {
+    uint64_t     generation;
+    label_slot_t slot[1u << LABEL_MEMO_BITS];
+} label_memo_t;
+
+static SYLVAN_TLS label_memo_t *label_memo = NULL;
+
+VOID_TASK_0(bqd_workers_init_task)
+{
+    label_memo = (label_memo_t *)sylvan_alloc_padded(sizeof(label_memo_t));
+    if (label_memo == NULL) {
+        fprintf(stderr, "sylvan: out of memory allocating a BQD label memo\n");
+        exit(1);
+    }
+}
+
+VOID_TASK_0(bqd_workers_quit_task)
+{
+    if (label_memo != NULL) sylvan_free_padded(label_memo);
+    label_memo = NULL;
+}
+
 void
 bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
          size_t pauli_tablesize, size_t lim_tablesize, size_t stab_tablesize)
@@ -45,11 +87,13 @@ bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
     family  = f;
     nqubits = n;
     limdd_nodes_init(n, node_tablesize, pauli_tablesize, lim_tablesize, stab_tablesize);
+    TOGETHER(bqd_workers_init_task);
 }
 
 void
 bqd_quit(void)
 {
+    TOGETHER(bqd_workers_quit_task);
     limdd_nodes_quit();
     nqubits = 0;
 }
@@ -126,6 +170,52 @@ bqd_arg_in_upper(EVBDD_WGT w)
 
 /* --- labels --------------------------------------------------------------- */
 
+/* The LIM of c Z^s X^t, s and t LIM masks, from the tables. */
+static LIMDD_LIM
+lim_intern(EVBDD_WGT c, uint64_t s, uint64_t t)
+{
+    if (s == 0 && t == 0) return limdd_lim_scalar(c);
+    limdd_pauli_t p = limdd_pauli_identity();
+    p.x[0] = t;
+    p.z[0] = s;
+    return limdd_lim_make(p, c);
+}
+
+LIMDD_LIM
+bqd_lim_word(EVBDD_WGT c, uint64_t s, uint64_t t)
+{
+    if (c == EVBDD_ZERO) return LIMDD_LIM_ZERO;
+    if (c == EVBDD_ONE && s == 0 && t == 0) return LIMDD_LIM_IDENTITY;
+    label_memo_t *m = label_memo;
+    if (m == NULL) return lim_intern(c, s, t);         /* not on a worker of this session */
+    const uint64_t gen = limdd_lim_generation();
+    if (m->generation != gen) {
+        memset(m->slot, 0, sizeof(m->slot));
+        m->generation = gen;
+    }
+    uint64_t h = (uint64_t)c * UINT64_C(0x9E3779B97F4A7C15);
+    h ^= (s + UINT64_C(0x632BE59BD9B4E019)) * UINT64_C(0xC2B2AE3D27D4EB4F);
+    h ^= (t + UINT64_C(0x85EBCA77C2B2AE63)) * UINT64_C(0x165667B19E3779F9);
+    label_slot_t *slot = &m->slot[h >> (64 - LABEL_MEMO_BITS)];
+    if (slot->lim != 0 && slot->c == (uint64_t)c && slot->s == s && slot->t == t) return slot->lim;
+    const LIMDD_LIM lim = lim_intern(c, s, t);
+    slot->c = (uint64_t)c;
+    slot->s = s;
+    slot->t = t;
+    slot->lim = lim;
+    return lim;
+}
+
+/* A vector-index mask as a LIM mask: qubit q is bit n-1-q of the one and bit q of the other. */
+static uint64_t
+lim_mask(uint64_t v, uint32_t n)
+{
+    uint64_t m = 0;
+    for (uint64_t rest = v; rest != 0; rest &= rest - 1)
+        m |= UINT64_C(1) << (n - 1 - (uint32_t)__builtin_ctzll(rest));
+    return m;
+}
+
 LIMDD_LIM
 bqd_lim_make(EVBDD_WGT c, uint64_t s, uint64_t t, uint32_t n)
 {
@@ -133,14 +223,7 @@ bqd_lim_make(EVBDD_WGT c, uint64_t s, uint64_t t, uint32_t n)
     assert(family != BQD_FAMILY_SCALAR || (s == 0 && t == 0));
     assert(family != BQD_FAMILY_X || s == 0);
     if (c == EVBDD_ZERO) return LIMDD_LIM_ZERO;
-    limdd_pauli_t p;
-    memset(&p, 0, sizeof(p));
-    for (uint32_t q = 0; q < n; q++) {
-        const uint32_t b = n - 1 - q;                 /* qubit q at bit n-1-q */
-        if ((t >> b) & 1) p.x[LIMDD_PAULI_LANE(q)] |= LIMDD_PAULI_BIT(q);
-        if ((s >> b) & 1) p.z[LIMDD_PAULI_LANE(q)] |= LIMDD_PAULI_BIT(q);
-    }
-    return limdd_lim_make(p, c);
+    return bqd_lim_word(c, lim_mask(s, n), lim_mask(t, n));
 }
 
 void
