@@ -72,6 +72,8 @@ static const char *dd_kind_name = "qmdd";
 static bqd_family_t bqd_family_opt = BQD_FAMILY_SCALAR;   /* --bqd-family */
 static const char *bqd_family_opt_name = "scalar";
 static bool bqd_family_set = false;
+static bqd_zero_rule_t bqd_zero_opt = BQD_ZERO_SM;          /* --bqd-zero */
+static bool bqd_zero_set = false;
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
 static char* json_outputfile = NULL;
@@ -111,6 +113,7 @@ static struct argp_option options[] =
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram, with scalar labels unless --bqd-family picks others, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It is meant for -e qisq2: on float weights it runs every gate but warns, since after a gate that can cancel amplitudes a rounding residue can move an amplitude by orders of magnitude. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
     {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound. Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. On a 16-qubit Clifford+T circuit both take longer than the scalar family with two fifths of its nodes or fewer, and on a 20-qubit Clifford circuit x takes as long with a fifth of them; pauli is the faster one there. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float both run with the scalar family's warning and are more fragile: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
+    {"bqd-zero", 1015, "<sm|copy>", 0, "With -d bqd: what a node does where its low cofactor is zero, the zero rule (default sm with the scalar family, copy with x and pauli). copy is the paper's def:bqd: every node stores its low cofactor and the ratio of the two, and where the low cofactor is zero the ratio holds a copy of the high one, so a gate that recurses on a node's stored edges has to multiply that part off again. sm, Shannon where misaligned, has no copy: a node whose high cofactor is zero wherever its low one is stores the ratio, as before, and any other node stores its two cofactors and says so in a tag. The two give the same diagram on every state of full support and on every state whose support is an affine subspace, the stabiliser states among them; elsewhere they differ, and on the circuits measured sm's has had no more nodes than copy's at the end of a run or at its peak, and between gates at most 7.5% more, on 21 of 17,721 states. Each rule has its own gate algorithms, so a timing of one against the other measures the rule and the algorithms together. On a state of full support the two hold one diagram and sm's recursion is still the faster one: it takes a gate through a node whose ratio does not depend on the gate's qubit without forming the high cofactor, and multiplies and divides two nodes that store ratios level by level. On clifford_T_circuit_20_700 copy spends 89% of its time on the 39 gates it meets on full support, and sm runs those 148 times faster. On a state with zeros no gate under sm makes a copy or multiplies one off, which adds to that. With a node table of 2^25, hidden-shift_n30, which never has full support, fills it under copy and takes 1 s under sm, clifford_T_circuit_20_700 runs out of 900 s under copy and takes 50 s under sm, and rand_18_500, with 5 of 500 gates on full support, takes 20 s under copy and 1 s under sm. sm is the scalar family's for now: x and pauli refuse it.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -227,6 +230,12 @@ parse_opt(int key, char *arg, struct argp_state *state)
         else if (strcmp(arg, "pauli") == 0)  bqd_family_opt = BQD_FAMILY_PAULI;
         else argp_error(state, "unknown bqd family '%s'", arg);
         break;
+    case 1015:
+        bqd_zero_set = true;
+        if (strcmp(arg, "sm") == 0)         bqd_zero_opt = BQD_ZERO_SM;
+        else if (strcmp(arg, "copy") == 0)  bqd_zero_opt = BQD_ZERO_COPY;
+        else argp_error(state, "unknown bqd zero rule '%s'", arg);
+        break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1) argp_usage(state);
         qasm_inputfile = arg;
@@ -234,6 +243,13 @@ parse_opt(int key, char *arg, struct argp_state *state)
     case ARGP_KEY_END:
         if (state->arg_num < 1) argp_usage(state);
         if (bqd_family_set && dd_kind != DD_BQD) argp_error(state, "--bqd-family needs -d bqd");
+        if (bqd_zero_set && dd_kind != DD_BQD) argp_error(state, "--bqd-zero needs -d bqd");
+        if (bqd_zero_set && bqd_zero_opt == BQD_ZERO_SM && bqd_family_opt != BQD_FAMILY_SCALAR)
+            argp_error(state, "--bqd-zero=sm is the scalar family's for now; "
+                              "--bqd-family %s takes --bqd-zero=copy", bqd_family_opt_name);
+        /* the family's default where none was asked for */
+        if (!bqd_zero_set) bqd_zero_opt = (bqd_family_opt == BQD_FAMILY_SCALAR) ? BQD_ZERO_SM
+                                                                                 : BQD_ZERO_COPY;
         break;
     default:
         return ARGP_ERR_UNKNOWN;
@@ -330,6 +346,8 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
     fprintf(stream, "    \"dd\": \"%s\",\n", dd_kind_name);
     fprintf(stream, "    \"canon\": \"%s\",\n", canon_name);
     fprintf(stream, "    \"bqd_family\": \"%s\",\n", dd_kind == DD_BQD ? bqd_family_opt_name : "n/a");
+    fprintf(stream, "    \"bqd_zero\": \"%s\",\n",
+            dd_kind == DD_BQD ? bqd_zero_rule_name(bqd_zero_opt) : "n/a");
     fprintf(stream, "    \"merging_rule\": \"%s\",\n",
             rel_tolerance >= 0 ? "hybrid" : "absolute");
     fprintf(stream, "    \"rel_tol\": %.5e,\n", rel_tolerance);
@@ -803,17 +821,31 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
  * every qubit and then diagonal gates, therefore stays on the proved path
  * after its first layer.
  *
+ * The zero rule, --bqd-zero, is fixed with the tables. Under the copy rule of
+ * the paper's def:bqd a node whose low cofactor is zero somewhere holds a copy
+ * of its high cofactor there, and the gates that recurse on stored edges
+ * multiply it off again; under rule SM, the scalar family's default
+ * (qsylvan_bqd_sm.h), such a node stores its two cofactors instead, and no
+ * gate multiplies anything off. On full support and on affine supports the
+ * two are one diagram, so the proved path above is the same under both.
+ *
  * Exact weights are what the arm is for. Float weights are taken all the
  * same, in every family and for every gate, with a warning: what they do is
- * worth measuring, and it is not what they do to an EVDD. A residue where a
- * value should be 0 turns a copy point into a ratio point, and a value that
- * merges into 0 turns a ratio point into a copy point, so a node that stored
- * 1 / 1e-14 decodes to 1e14 where it decoded to 1. One merge within the
- * tolerance can then move an amplitude by orders of magnitude, where in an
- * EVDD it loses one that was small already, and no tolerance avoids that
- * (test_bqd_gates.c has the measurements). Only the gates that cannot cancel
- * are safe on floats: the diagonal ones, and a Hadamard on a qubit no gate
- * has touched, which is the IQP layer.
+ * worth measuring, and it is not what they do to an EVDD. Under the copy
+ * rule a residue where a value should be 0 turns a copy point into a ratio
+ * point, and a value that merges into 0 turns a ratio point into a copy
+ * point, so a node that stored 1 / 1e-14 decodes to 1e14 where it decoded
+ * to 1. Under rule SM the same residue makes a node Q that should be S, and
+ * a low value that merges into 0 in an operation that takes the low
+ * cofactors and the ratios apart, such as the nested product, leaves its
+ * ratio standing where the low cofactor is now 0: the high value there
+ * decodes to 0, and the support walks (Sub, Ind, Side), which take the
+ * support of a Q node's ratio for that of its high cofactor, misjudge it.
+ * One merge within the tolerance can then move an amplitude by orders of
+ * magnitude, where in an EVDD it loses one that was small already, and no
+ * tolerance avoids that (test_bqd_gates.c has the measurements). Only the
+ * gates that cannot cancel are safe on floats: the diagonal ones, and a
+ * Hadamard on a qubit no gate has touched, which is the IQP layer.
  *
  * The translation and Pauli families, the X-BQD and the Pauli-BQD, take the
  * same gates through the same entry points (qsylvan_bqd_xp.h): the diagonal
@@ -840,8 +872,12 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
     if (sylvan_get_edge_weight_type() != WGT_QISQ2) {
         fprintf(stderr, "bqd: warning: float weights. The quotient rule divides by values "
                         "a rounding residue can stand in for, and a value that merges into "
-                        "0 turns a ratio into a copy, so after a gate that can cancel the "
-                        "state can be far off; -e qisq2 is exact\n");
+                        "0 %s, so after a gate that can cancel the state can be far off; "
+                        "-e qisq2 is exact\n",
+                bqd_zero_rule() == BQD_ZERO_COPY
+                    ? "turns a ratio into a copy"
+                    : "changes a node's tag or leaves a ratio standing where the low "
+                      "cofactor is 0");
     }
 
     const double t_start = wctime();
@@ -1102,7 +1138,7 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
          * them past the terminal. */
         if (dd_kind == DD_BQD) {
             /* The same tables, read under the quotient rule; see qsylvan_bqd.h. */
-            bqd_init(bqd_family_opt, circuit->qreg_size, lt, pauli_t, lim_t, lt);
+            bqd_init_rule(bqd_family_opt, bqd_zero_opt, circuit->qreg_size, lt, pauli_t, lim_t, lt);
             if (CALL(bqd_simulate_circuit, circuit) != 0) {
                 bqd_quit();
                 exit(1);
