@@ -574,15 +574,26 @@ QMDD measure(QMDD state, quantum_op_t *meas, quantum_circuit_t* circuit)
 typedef struct {
     const char *name;
     LIMDD (*gate)(LIMDD e, uint32_t gateid, uint32_t target, uint32_t n);
-    LIMDD (*cgate)(LIMDD e, uint32_t gateid, uint64_t cmask, uint32_t target, uint32_t n);
+    /* the controls as a list of k qubits, so that a control can be any
+     * qubit: a 64-bit mask stops at qubit 63 */
+    LIMDD (*cgate)(LIMDD e, uint32_t gateid, const uint32_t *controls, uint32_t k,
+                   uint32_t target, uint32_t n);
     LIMDD (*cgate_either)(LIMDD e, uint32_t gateid, uint32_t c, uint32_t t, uint32_t n, bool *ok);
     LIMDD (*swap)(LIMDD e, uint32_t a, uint32_t b, uint32_t n);
 } dd_gate_ops_t;
 
 static LIMDD op_limdd_gate(LIMDD e, uint32_t g, uint32_t t, uint32_t n) { return limdd_gate(e, g, t, n); }
-static LIMDD op_limdd_cgate(LIMDD e, uint32_t g, uint64_t m, uint32_t t, uint32_t n) { return limdd_cgate(e, g, m, t, n); }
+static LIMDD op_limdd_cgate(LIMDD e, uint32_t g, const uint32_t *c, uint32_t k, uint32_t t, uint32_t n)
+{
+    return limdd_cgate_list(e, g, limdd_control_list(c, k), t, n);
+}
 static LIMDD op_bqd_gate(LIMDD e, uint32_t g, uint32_t t, uint32_t n) { return bqd_gate(e, g, t, n); }
-static LIMDD op_bqd_cgate(LIMDD e, uint32_t g, uint64_t m, uint32_t t, uint32_t n) { return bqd_cgate(e, g, m, t, n); }
+static LIMDD op_bqd_cgate(LIMDD e, uint32_t g, const uint32_t *c, uint32_t k, uint32_t t, uint32_t n)
+{
+    uint64_t m = 0;   /* a BQD has at most 63 qubits */
+    for (uint32_t i = 0; i < k; i++) m |= UINT64_C(1) << c[i];
+    return bqd_cgate(e, g, m, t, n);
+}
 
 static const dd_gate_ops_t LIMDD_GATES = { "limdd", op_limdd_gate, op_limdd_cgate, limdd_cgate_either, limdd_swap };
 static const dd_gate_ops_t BQD_GATES   = { "bqd",   op_bqd_gate,   op_bqd_cgate,   bqd_cgate_either,   bqd_swap };
@@ -640,7 +651,7 @@ dd_apply_gate(const dd_gate_ops_t *dd, LIMDD *state, quantum_op_t *gate, BDDVAR 
         const uint32_t b = gate->ctrls[0] < t ? t : gate->ctrls[0];
         stats.t_count += 3;
         *state = dd->cgate(*state, gate->name[2] == 'd' ? GATEID_Sdag : GATEID_S,
-                           UINT64_C(1) << a, b, nqubits);
+                           &a, 1, b, nqubits);
         return true;
     }
     else if (strcmp(gate->name, "ccz") == 0) {
@@ -649,8 +660,7 @@ dd_apply_gate(const dd_gate_ops_t *dd, LIMDD *state, quantum_op_t *gate, BDDVAR 
         for (int i = 0; i < 2; i++) for (int j = i + 1; j < 3; j++)
             if (q[j] < q[i]) { const uint32_t x = q[i]; q[i] = q[j]; q[j] = x; }
         stats.t_count += 7;
-        *state = dd->cgate(*state, GATEID_Z, (UINT64_C(1) << q[0]) | (UINT64_C(1) << q[1]),
-                           q[2], nqubits);
+        *state = dd->cgate(*state, GATEID_Z, q, 2, q[2], nqubits);
         return true;
     }
     else {

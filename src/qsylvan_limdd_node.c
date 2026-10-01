@@ -278,7 +278,7 @@ limdd_node_table_count(void)
 
 /**
  * Amplitude of basis state `b` under edge `e`, where `e` lives at `level` and
- * bit k of `b` is qubit k.
+ * bit k % 64 of word k / 64 of `b` is qubit k.
  *
  * Applying the edge's LIM `w * P` to the vector v that its target denotes:
  * P maps the basis state |c> to a phase times |c XOR x>, so the only c that
@@ -290,7 +290,7 @@ limdd_node_table_count(void)
  * and the two phase factors combine into the single power of i below.
  */
 static EVBDD_WGT
-eval_edge(LIMDD e, uint64_t b, uint32_t level)
+eval_edge(LIMDD e, const uint64_t b[LIMDD_PAULI_WORDS], uint32_t level)
 {
     if (limdd_edge_is_zero(e)) return EVBDD_ZERO;
 
@@ -307,8 +307,9 @@ eval_edge(LIMDD e, uint64_t b, uint32_t level)
 
     /* i per Y, and -1 == i^2 per Z or Y meeting a set bit. This also advances
      * `b` to the basis state that actually reaches the target. */
-    uint64_t c = b;
-    const unsigned k = limdd_pauli_apply_basis(p, &c);
+    uint64_t c[LIMDD_PAULI_WORDS];
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) c[i] = b[i];
+    const unsigned k = limdd_pauli_apply_basis(p, c);
 
     EVBDD_WGT w = limdd_lim_weight(lim);
     if (k != 0) w = wgt_mul(w, limdd_wgt_i_pow(k));
@@ -325,7 +326,8 @@ eval_edge(LIMDD e, uint64_t b, uint32_t level)
      * (-1)^c_j for a Z there, -i(-1)^c_j for a Y, nothing for I or X -- they
      * contribute nothing, and the walk resumes at the target's own level.
      */
-    const LIMDD child = ((c >> lev) & 1) ? limdd_node_high(t) : limdd_node_low(t);
+    const LIMDD child = (c[LIMDD_PAULI_LANE(lev)] & LIMDD_PAULI_BIT(lev))
+                      ? limdd_node_high(t) : limdd_node_low(t);
     const EVBDD_WGT sub = eval_edge(child, c, lev + 1);
     if (sub == EVBDD_ZERO) return EVBDD_ZERO;
 
@@ -337,9 +339,9 @@ limdd_eval(LIMDD e, const bool *bits, size_t nqubits)
 {
     assert(nqubits == limdd_nqubits);
 
-    uint64_t b = 0;
+    uint64_t b[LIMDD_PAULI_WORDS] = { 0 };
     for (size_t k = 0; k < nqubits; k++) {
-        if (bits[k]) b |= UINT64_C(1) << k;
+        if (bits[k]) b[LIMDD_PAULI_LANE(k)] |= LIMDD_PAULI_BIT(k);
     }
     return eval_edge(e, b, 0);
 }

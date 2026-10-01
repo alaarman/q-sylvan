@@ -16,6 +16,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include <sylvan_int.h>
@@ -104,6 +105,64 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
 }
 
 /*
+ * The controls of a gate as a list of qubits, not a mask. A 64-bit mask stops
+ * at qubit 63, and a shift by 64 or more is undefined: on ARM and x86-64 it
+ * wrapped around, so that on 70 or 80 qubits a gate kept the Pauli of the
+ * wrong qubit and a control at qubit 66 controlled on qubit 2. A list holds at
+ * most four distinct qubits, each plus one in 16 bits, in increasing order
+ * from the low bits, so the first is the control nearest the root. The empty
+ * list is 0.
+ */
+#define CTL_BITS 16
+#define CTL_MASK ((UINT64_C(1) << CTL_BITS) - 1)
+#define CTL_MAX  (64 / CTL_BITS)
+
+static_assert(LIMDD_MAX_QUBITS <= CTL_MASK,
+              "a control list keeps each qubit plus one in CTL_BITS bits");
+
+static inline uint32_t ctl_first(uint64_t c) { return (uint32_t)(c & CTL_MASK) - 1; }
+static inline uint64_t ctl_rest(uint64_t c)  { return c >> CTL_BITS; }
+static inline uint64_t ctl_one(uint32_t q)   { return (uint64_t)q + 1; }
+
+uint64_t
+limdd_control_list(const uint32_t *qubits, uint32_t k)
+{
+    /* Insertion into q[], which stays sorted. A qubit named twice counts once,
+     * as it did in a mask, so `ccz a,a,b` is a CZ and its diagram canonical. */
+    uint32_t q[CTL_MAX];
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < k; i++) {
+        const uint32_t x = qubits[i];
+        assert(x < LIMDD_MAX_QUBITS);
+        uint32_t j = m;
+        while (j > 0 && q[j - 1] > x) j--;
+        if (j > 0 && q[j - 1] == x) continue;
+        /* Not an assertion: q[] would overflow in a release build, and
+         * limdd_cgate took any number of controls while they were a mask. */
+        if (m == CTL_MAX) {
+            fprintf(stderr, "sylvan: a LIMDD gate takes at most %d controls\n", CTL_MAX);
+            exit(1);
+        }
+        for (uint32_t l = m; l > j; l--) q[l] = q[l - 1];
+        q[j] = x;
+        m++;
+    }
+    uint64_t c = 0;
+    for (uint32_t i = m; i-- > 0; ) c = (c << CTL_BITS) | ctl_one(q[i]);
+    return c;
+}
+
+/** A control mask, qubits below 64 only, as a list. */
+static uint64_t
+ctl_from_mask(uint64_t m)
+{
+    uint32_t q[64];
+    uint32_t k = 0;
+    for (; m != 0; m &= m - 1) q[k++] = (uint32_t)__builtin_ctzll(m);
+    return limdd_control_list(q, k);
+}
+
+/*
  * A gate jumps over levels an edge skips by moving the label's entries there
  * out of the recursion: they act on qubits the gate does not touch, so they
  * commute with it and can wait outside, and leaving them in would hand
@@ -113,9 +172,10 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
 
 /**
  * `e` with every part of its label a gate cannot tell apart moved out:
- * the scalar, and the Pauli entries on every qubit not in `keep`. What stays
- * on the edge is the Pauli on the `keep` qubits with scalar one; `*outer` is
- * the rest, and outer . result is the gate applied to e.
+ * the scalar, and the Pauli entries on every qubit other than the target and
+ * the `controls` (a control list, 0 for none). What stays on the edge is the
+ * Pauli on those qubits with scalar one; `*outer` is the rest, and
+ * outer . result is the gate applied to e.
  *
  * A gate on qubits Q commutes with a Pauli on qubits outside Q, and with a
  * scalar, so U(c P_Q P_rest |v>) = c P_rest U(P_Q |v>). The two parts act
@@ -130,13 +190,15 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
  * Paulis alone moved changed nothing.
  */
 static inline LIMDD
-lim_split_gate(LIMDD e, uint64_t keep, LIMDD_LIM *outer)
+lim_split_gate(LIMDD e, uint64_t controls, uint32_t target, LIMDD_LIM *outer)
 {
     const LIMDD_LIM l = limdd_label(e);
     limdd_pauli_t rest = limdd_lim_pauli(l);
     limdd_pauli_t kept = limdd_pauli_identity();
-    for (uint64_t m = keep; m != 0; m &= m - 1) {
-        const size_t q = (size_t)__builtin_ctzll(m);
+    limdd_pauli_set(&kept, target, limdd_pauli_get(rest, target));
+    limdd_pauli_set(&rest, target, LIMDD_PAULI_I);
+    for (uint64_t c = controls; c != 0; c = ctl_rest(c)) {
+        const size_t q = ctl_first(c);
         limdd_pauli_set(&kept, q, limdd_pauli_get(rest, q));
         limdd_pauli_set(&rest, q, LIMDD_PAULI_I);
     }
@@ -473,7 +535,7 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
     const uint64_t opid = CACHE_LIMDD_GATE | ((uint64_t)gateid << 20) | target;
 
     LIMDD_LIM outer;
-    const LIMDD inner = lim_split_gate(e, UINT64_C(1) << target, &outer);
+    const LIMDD inner = lim_split_gate(e, 0, target, &outer);
     if (inner != e) return lim_times_edge(outer, CALL(limdd_gate, inner, gateid, target, nqubits));
 
     LIMDD res;
@@ -520,7 +582,13 @@ TASK_IMPL_4(LIMDD, limdd_gate, LIMDD, e, uint32_t, gateid, uint32_t, target,
     return res;
 }
 
-TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
+TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, control_mask,
+            uint32_t, target, uint32_t, nqubits)
+{
+    return CALL(limdd_cgate_list, e, gateid, ctl_from_mask(control_mask), target, nqubits);
+}
+
+TASK_IMPL_5(LIMDD, limdd_cgate_list, LIMDD, e, uint32_t, gateid, uint64_t, controls,
             uint32_t, target, uint32_t, nqubits)
 {
     sylvan_gc_test();
@@ -536,8 +604,10 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
      * restriction and falls back to building the gate as a matrix and doing a
      * matrix-vector product; LIMDD has no matrix representation yet.
      */
-    assert(controls < (UINT64_C(1) << target)
-           && "limdd_cgate needs every control above the target");
+#ifndef NDEBUG
+    for (uint64_t c = controls; c != 0; c = ctl_rest(c))
+        assert(ctl_first(c) < target && "limdd_cgate needs every control above the target");
+#endif
 
     /*
      * Work at the first level that matters: the target's node, or the
@@ -548,7 +618,7 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
      * the key needs no level of its own.
      */
     const uint32_t lev = limdd_level(limdd_target(e));
-    const uint32_t top = (uint32_t)__builtin_ctzll(controls);
+    const uint32_t top = ctl_first(controls);
     const uint32_t var = lev < top ? lev : top;
     assert(var < nqubits);
 
@@ -558,9 +628,9 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     const uint64_t opid = CACHE_LIMDD_CGATE | ((uint64_t)gateid << 20) | target;
 
     LIMDD_LIM outer;
-    const LIMDD inner = lim_split_gate(e, controls | (UINT64_C(1) << target), &outer);
+    const LIMDD inner = lim_split_gate(e, controls, target, &outer);
     if (inner != e)
-        return lim_times_edge(outer, CALL(limdd_cgate, inner, gateid, controls, target, nqubits));
+        return lim_times_edge(outer, CALL(limdd_cgate_list, inner, gateid, controls, target, nqubits));
 
     LIMDD res;
     if (cache_get3(opid, 0, e, controls, &res)) return res;
@@ -568,23 +638,22 @@ TASK_IMPL_5(LIMDD, limdd_cgate, LIMDD, e, uint32_t, gateid, uint64_t, controls,
     LIMDD lo, hi;
     limdd_cofactors(e, var, &lo, &hi);
 
-    const uint64_t bit = UINT64_C(1) << var;
-    if (controls & bit) {
+    if (var == top) {
         /* A control qubit: the |0> branch is untouched, and only the |1>
          * branch continues carrying the remaining controls. */
         limdd_refs_push(lo); limdd_refs_push(hi);
-        const LIMDD new_hi = CALL(limdd_cgate, hi, gateid, controls & ~bit,
+        const LIMDD new_hi = CALL(limdd_cgate_list, hi, gateid, ctl_rest(controls),
                                   target, nqubits);
         limdd_refs_push(new_hi);
         res = limdd_makeedge(var, lo, new_hi);
         limdd_refs_pop(3);
     } else {
         limdd_refs_push(lo); limdd_refs_push(hi);
-        limdd_refs_spawn(SPAWN(limdd_cgate, hi, gateid, controls, target, nqubits));
-        const LIMDD new_lo = CALL(limdd_cgate, lo, gateid, controls, target,
+        limdd_refs_spawn(SPAWN(limdd_cgate_list, hi, gateid, controls, target, nqubits));
+        const LIMDD new_lo = CALL(limdd_cgate_list, lo, gateid, controls, target,
                                   nqubits);
         limdd_refs_push(new_lo);
-        const LIMDD new_hi = limdd_refs_sync(SYNC(limdd_cgate));
+        const LIMDD new_hi = limdd_refs_sync(SYNC(limdd_cgate_list));
         limdd_refs_push(new_hi);
         res = limdd_makeedge(var, new_lo, new_hi);
         limdd_refs_pop(4);
@@ -603,7 +672,7 @@ cx_reversed(LIMDD e, uint32_t c, uint32_t t, uint32_t nq)
     assert(c > t);
     e = limdd_gate(e, GATEID_H, c, nq);
     e = limdd_gate(e, GATEID_H, t, nq);
-    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << t, c, nq);  /* now t < c */
+    e = limdd_cgate_list(e, GATEID_X, ctl_one(t), c, nq);  /* now t < c */
     e = limdd_gate(e, GATEID_H, t, nq);
     e = limdd_gate(e, GATEID_H, c, nq);
     return e;
@@ -614,12 +683,12 @@ limdd_cgate_either(LIMDD e, uint32_t gateid, uint32_t control, uint32_t target,
                    uint32_t nqubits, bool *ok)
 {
     *ok = true;
-    if (control < target) return limdd_cgate(e, gateid, UINT64_C(1) << control,
-                                             target, nqubits);
+    if (control < target) return limdd_cgate_list(e, gateid, ctl_one(control),
+                                                  target, nqubits);
 
     if (gateid == GATEID_Z) {
         /* CZ = diag(1,1,1,-1) is symmetric in its two qubits. */
-        return limdd_cgate(e, GATEID_Z, UINT64_C(1) << target, control, nqubits);
+        return limdd_cgate_list(e, GATEID_Z, ctl_one(target), control, nqubits);
     }
     if (gateid == GATEID_X) return cx_reversed(e, control, target, nqubits);
 
@@ -633,9 +702,9 @@ limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits)
     if (a == b) return e;
     if (a > b) { const uint32_t t = a; a = b; b = t; }
 
-    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << a, b, nqubits);
+    e = limdd_cgate_list(e, GATEID_X, ctl_one(a), b, nqubits);
     e = cx_reversed(e, b, a, nqubits);
-    e = limdd_cgate(e, GATEID_X, UINT64_C(1) << a, b, nqubits);
+    e = limdd_cgate_list(e, GATEID_X, ctl_one(a), b, nqubits);
     return e;
 }
 

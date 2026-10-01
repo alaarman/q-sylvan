@@ -165,10 +165,30 @@ TASK_DECL_4(LIMDD, limdd_gate, LIMDD, uint32_t, uint32_t, uint32_t);
  * mixed. Q-Sylvan's QMDD has the same restriction and falls back to a
  * matrix-vector product; LIMDD has no matrix representation yet, so callers
  * must reorder (the simulator has --reorder-swaps for this).
+ *
+ * The mask has a bit for qubits 0..63 only, and at most four may be set. More
+ * stop the program with a message. The target may be any qubit, and
+ * limdd_cgate_list, below, takes a control on any qubit as well.
  */
 TASK_DECL_5(LIMDD, limdd_cgate, LIMDD, uint32_t, uint64_t, uint32_t, uint32_t);
 #define limdd_cgate(e, gateid, control_mask, target, nqubits) \
     limdd_reduce_root(RUN(limdd_cgate, e, gateid, control_mask, target, nqubits), 0)
+
+/**
+ * limdd_cgate with the controls as a list of qubits, so that a control can be
+ * any qubit: a mask stops at qubit 63. `controls` is what limdd_control_list
+ * returns, and every control is above the target.
+ */
+TASK_DECL_5(LIMDD, limdd_cgate_list, LIMDD, uint32_t, uint64_t, uint32_t, uint32_t);
+#define limdd_cgate_list(e, gateid, controls, target, nqubits) \
+    limdd_reduce_root(RUN(limdd_cgate_list, e, gateid, controls, target, nqubits), 0)
+
+/**
+ * The `k` qubits at `qubits` as the control list limdd_cgate_list takes. They
+ * come in any order, and a qubit named twice counts once, as in a mask. More
+ * than four distinct qubits stop the program with a message.
+ */
+uint64_t limdd_control_list(const uint32_t *qubits, uint32_t k);
 
 /**
  * A controlled gate with the control on either side of the target.

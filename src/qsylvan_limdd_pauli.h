@@ -273,21 +273,25 @@ limdd_pauli_cmp(limdd_pauli_t a, limdd_pauli_t b)
 }
 
 /**
- * Apply `p` to the basis state `*b`, returning the power of i it contributes.
+ * Apply `p` to the basis state `b`, returning the power of i it contributes.
+ * Qubit q is bit q % 64 of word q / 64 of `b`, as in a Pauli component.
  *
- * P sends |c> to i^(x&z) (-1)^(z&c) |c XOR x>, so `*b` is advanced to the
+ * P sends |c> to i^(x&z) (-1)^(z&c) |c XOR x>, so `b` is advanced to the
  * basis state that actually reaches the target and the phase comes back as a
  * power of i, mod 4.
  */
 static inline unsigned
-limdd_pauli_apply_basis(limdd_pauli_t p, uint64_t *b)
+limdd_pauli_apply_basis(limdd_pauli_t p, uint64_t b[LIMDD_PAULI_WORDS])
 {
-    /* The basis state is a single word, so this serves the evaluators only,
-     * which are exponential and never run above a few tens of qubits. */
-    const uint64_t c = *b ^ p.x[0];
-    *b = c;
-    return (unsigned)(popcnt_uint64(p.x[0] & p.z[0])
-                      + 2u * popcnt_uint64(p.z[0] & c)) & 3u;
+    /* The basis state has as many words as a Pauli: one word stopped at
+     * qubit 63, and on more qubits the evaluator read the wrong bits. */
+    unsigned k = 0;
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++) {
+        const uint64_t c = b[i] ^ p.x[i];
+        b[i] = c;
+        k += (unsigned)(popcnt_uint64(p.x[i] & p.z[i]) + 2u * popcnt_uint64(p.z[i] & c));
+    }
+    return k & 3u;
 }
 
 /** Serialise into, and load from, the two words of a table entry. */

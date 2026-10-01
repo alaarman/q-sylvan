@@ -223,6 +223,16 @@ sylvan_test_warnings(test_limdd_ops)
 
 add_test(NAME test_limdd_ops COMMAND test_limdd_ops)
 
+# Gates on qubits 64 and up. It runs at every LIMDD_PAULI_WORDS, and is the
+# test the CI's two-word build is there for.
+add_executable(test_limdd_wide)
+target_sources(test_limdd_wide PRIVATE test_limdd_wide.c)
+target_link_libraries(test_limdd_wide PRIVATE qsylvan::sylvan)
+target_compile_features(test_limdd_wide PRIVATE c_std_11)
+sylvan_test_warnings(test_limdd_wide)
+
+add_test(NAME test_limdd_wide COMMAND test_limdd_wide)
+
 # ── Q-Sylvan QMDD tests ──────────────────────────────────────────────────────
 
 foreach(_qmdd_test

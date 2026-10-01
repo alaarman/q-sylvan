@@ -49,6 +49,21 @@ jobs:
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest -C ${{env.BUILD_TYPE}}
 
+    - name: Configure CMake with two Pauli words
+      # LIMDD_PAULI_WORDS=2 takes LIMDDs to 128 qubits. The build above has one
+      # word, so it never runs a gate on qubit 64 or above. Nothing runs the
+      # examples, so they are left out.
+      run: cmake -B ${{github.workspace}}/build-w2 -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DLIMDD_PAULI_WORDS=2 -DSYLVAN_BUILD_EXAMPLES=OFF
+
+    - name: Build with two Pauli words
+      run: cmake --build ${{github.workspace}}/build-w2 --config ${{env.BUILD_TYPE}}
+
+    - name: Test LIMDDs with two Pauli words
+      # pytest below also runs this build's run_qasm_on_qmdd, in
+      # qasm/test/test_sim_qasm_wide.py.
+      working-directory: ${{github.workspace}}/build-w2
+      run: ctest -C ${{env.BUILD_TYPE}} -R '^test_(limdd_|lowlevel_ops)'
+
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
