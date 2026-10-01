@@ -38,28 +38,29 @@ static LIMDD zero_edge = 0;
 static LIMDD one_edge  = 0;
 
 /*
- * Field masks. These are deliberately the same constants EVBDD uses, so a
- * LIMDD node and an EVBDD node have their variable, mark and target fields in
- * the same places; anything that walks either representation generically (a
- * dot writer, a GC mark loop) sees one layout.
- */
-/* Bit 63 of the high word is the GC mark. It has no constant here because
- * nothing collects yet; llmsset_index_to_ptr hands out the whole bucket, so
- * the mark loop will set it directly when GC is wired up. */
-/*
- * Bit 63 of the LOW word: set iff this node's stabiliser group is provably
- * trivial by the cheap test in stab_trivially_trivial() below. Bit 63 of the
- * low word is the one spare bit that neither EVBDD nor LIMDD uses for
- * anything else -- EVBDD's mark is bit 63 of the HIGH word, and its
- * wgt_val flag is bit 45 of the low one.
+ * Field masks, for the layout in the header (NODES). The variable field,
+ * bits 47..62 of the low word, sits where EVBDD has its own, but the two
+ * layouts do not agree. Bits 32..45 of the low word are the flags of the
+ * diagram that reads the node, which the LIMDD leaves at zero and the BQD's
+ * rule SM sets (bit 45 for its tag S, bit 44 for full; qsylvan_bqd_sm.h),
+ * and bit 45 is EVBDD's wgt_val flag. The high word is a LIM and a target,
+ * all 64 bits, and EVBDD keeps its mark in bit 63 of it. A walker that read
+ * LIMDD buckets as EVBDD nodes would misread both; none does, since only
+ * this file reads them, and collection marks in llmsset's own bitmap, not in
+ * the bucket.
+ *
+ * Bit 63 of the low word is set iff this node's stabiliser group is provably
+ * trivial by the cheap test in stab_trivially_trivial() below.
  */
 static const uint64_t limdd_stab_triv_mask = UINT64_C(0x8000000000000000);
 static const uint64_t limdd_var_mask      = UINT64_C(0x7fff800000000000); // bits 47..62
 static const uint64_t limdd_low_zero_mask = UINT64_C(0x0000400000000000); // bit 46
+static const uint64_t limdd_flags_mask    = UINT64_C(0x00003fff00000000); // bits 32..45
 static const uint64_t limdd_lim_mask      = UINT64_C(0xffffffff00000000); // bits 32..63
 static const uint64_t limdd_targ_mask     = UINT64_C(0x00000000ffffffff); // bits 0..31
 
 #define LIMDD_VAR_SHIFT 47
+#define LIMDD_FLAGS_SHIFT 32
 
 /** A node as it sits in the table: exactly one 16-byte llmsset bucket. */
 typedef struct __attribute__((packed)) limddnode {
@@ -154,6 +155,12 @@ limdd_level(LIMDD_TARG p)
     return p == LIMDD_TERMINAL ? (uint32_t)limdd_nqubits : limdd_node_var(p);
 }
 
+uint32_t
+limdd_node_flags(LIMDD_TARG p)
+{
+    return (uint32_t)((limdd_getnode(p)->low & limdd_flags_mask) >> LIMDD_FLAGS_SHIFT);
+}
+
 LIMDD
 limdd_node_low(LIMDD_TARG p)
 {
@@ -186,8 +193,22 @@ limdd_makenode(uint32_t var, LIMDD low, LIMDD high)
 LIMDD_TARG
 limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
 {
+    return limdd_makenode_flags_ex(var, low, high, 0, created);
+}
+
+LIMDD_TARG
+limdd_makenode_flags(uint32_t var, LIMDD low, LIMDD high, uint32_t flags)
+{
+    int created;
+    return limdd_makenode_flags_ex(var, low, high, flags, &created);
+}
+
+LIMDD_TARG
+limdd_makenode_flags_ex(uint32_t var, LIMDD low, LIMDD high, uint32_t flags, int *created)
+{
     assert(limdd_nodes != NULL);
     assert(var < limdd_nqubits);
+    assert(flags < (UINT32_C(1) << LIMDD_NODE_FLAG_BITS));
 
     const LIMDD_LIM low_lim  = limdd_label(low);
     const LIMDD_LIM high_lim = limdd_label(high);
@@ -228,6 +249,7 @@ limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created)
     n.low  = ((uint64_t)var << LIMDD_VAR_SHIFT)
            | (limdd_lim_is_zero(low_lim) ? limdd_low_zero_mask : 0)
            | (stab_trivially_trivial(var, low, high) ? limdd_stab_triv_mask : 0)
+           | (((uint64_t)flags << LIMDD_FLAGS_SHIFT) & limdd_flags_mask)
            | low_targ;
     n.high = ((uint64_t)high_lim << LIMDD_TARG_BITS) | high_targ;
 

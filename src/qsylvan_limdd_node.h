@@ -43,7 +43,7 @@
  *   low word:   1 bit  set iff this node's stabiliser group is trivial
  *              16 bits variable (qubit) of this node
  *               1 bit  set iff the low edge is the zero map
- *              14 bits unused
+ *              14 bits flags of the diagram that reads the node
  *              32 bits low edge target
  *
  *   high word: 32 bits LIM labelling the high edge
@@ -53,6 +53,12 @@
  * the bucket. Nothing reads a LIMDD node through EVBDD's accessors or the
  * reverse -- they do not even share a table -- so the two layouts need not
  * agree, and this one uses every bit of the high word.
+ *
+ * The 14 flag bits are the LIMDD's to leave at zero and a diagram's that
+ * reads the same tables to set: the BQD's rule SM stores its node tag and a
+ * fullness bit there (qsylvan_bqd_sm.h). They are part of the bucket, so of
+ * the node's identity in the unique table, which keeps one node per function
+ * as long as the flags are a function of the node's function.
  *
  * Only the high edge carries a LIM. That is not a space trick, it is what
  * LIMDD normalisation gives you: the low edge's label is factored out to the
@@ -237,6 +243,22 @@ LIMDD_TARG limdd_makenode(uint32_t var, LIMDD low, LIMDD high);
  * occupant would otherwise be read as that node's.
  */
 LIMDD_TARG limdd_makenode_ex(uint32_t var, LIMDD low, LIMDD high, int *created);
+
+/** The number of flag bits a node holds, and so the bound on `flags` below. */
+#define LIMDD_NODE_FLAG_BITS 14
+
+/**
+ * As limdd_makenode and limdd_makenode_ex, with `flags` (below
+ * 2^LIMDD_NODE_FLAG_BITS) in the node's flag bits. The flags are part of the
+ * node: (var, low, high) with two different flags are two nodes. The LIMDD
+ * passes 0, which is what limdd_makenode does.
+ */
+LIMDD_TARG limdd_makenode_flags(uint32_t var, LIMDD low, LIMDD high, uint32_t flags);
+LIMDD_TARG limdd_makenode_flags_ex(uint32_t var, LIMDD low, LIMDD high, uint32_t flags,
+                                   int *created);
+
+/** The flags node `p` was made with. `p` must not be the terminal. */
+uint32_t limdd_node_flags(LIMDD_TARG p);
 
 /** The variable of node `p`. `p` must not be the terminal. */
 uint32_t limdd_node_var(LIMDD_TARG p);
