@@ -279,3 +279,10 @@ Hadamard in general (sec:ops:hadamard). On float weights the arm takes only
 the diagonal gates and a Hadamard on an untouched qubit: once a gate can
 cancel, a rounding residue under the copy clause turns an amplitude of size 1
 into 0, and no merging tolerance prevents it (`test/test_bqd_gates.c`).
+
+## The LIMDD amendment
+
+`amendment/` holds the scripts of the paper's LIMDD amendment (revision of
+2026-10-01); `amendment/README.md` says what each one makes and how its data,
+kept outside the repo, is laid out. `gen_realistic.py` writes the amendment's
+hidden-shift, adder and Ising circuits.
