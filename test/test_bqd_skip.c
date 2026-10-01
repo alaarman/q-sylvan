@@ -93,7 +93,9 @@
  *                 under an alarm; and a Pauli table smaller than the LIM
  *                 table, which only the trigger keeps from filling
  *
- * Exact weights, in Q(w_8, sqrt2), throughout. Every check runs on the number
+ * The scalar family runs the copy rule of def:bqd here, which bqd_init_rule
+ * gives on request; its default, rule SM, is test_bqd_sm's. Exact weights, in
+ * Q(w_8, sqrt2), throughout. Every check runs on the number
  * of workers in BQD_SKIP_WORKERS (default 4), BQD_SKIP_REPEAT times (default
  * 1), each run in a fresh session on the same draws; BQD_SKIP_FAMILY (0, 1
  * or 2) runs one family alone, with its collections, and 3 the sessions
@@ -137,6 +139,18 @@
 #ifndef THIN
 #define THIN 1
 #endif
+
+/*
+ * The diagram here is the copy rule's, def:bqd, in every family: the
+ * structure checks below are written from it. The scalar family's default is
+ * rule SM, which test_bqd_sm checks, so every session here asks for the copy
+ * rule by name.
+ */
+static void
+init_copy(bqd_family_t fam, size_t n, size_t nodes, size_t paulis, size_t lims, size_t stabs)
+{
+    bqd_init_rule(fam, BQD_ZERO_COPY, n, nodes, paulis, lims, stabs);
+}
 
 static int failures = 0;
 static EVBDD_WGT pw[8];                     /* w_8^e */
@@ -2205,7 +2219,7 @@ VOID_TASK_0(check_gc_pool)
 
 TASK_0(int, run_collections)
 {
-    bqd_init(BQD_FAMILY_SCALAR, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
+    init_copy(BQD_FAMILY_SCALAR, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
     exact_constants();
     rng_state = UINT64_C(0x5EED6C000000);
 
@@ -2356,7 +2370,7 @@ VOID_TASK_0(check_gc_xp_pool)
 
 TASK_1(int, run_collections_xp, int, fam)
 {
-    bqd_init((bqd_family_t)fam, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
+    init_copy((bqd_family_t)fam, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
     exact_constants();
     rng_state = UINT64_C(0x5EED6C000000) + (uint64_t)fam;
 
@@ -2387,7 +2401,7 @@ session_gates(bqd_family_t fam)
 {
     enum { SN = 3, SLEN = 1 << SN };
     static const uint32_t one[] = { GATEID_H, GATEID_X, GATEID_S, GATEID_T, GATEID_Y, GATEID_Z };
-    bqd_init(fam, SN, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
+    init_copy(fam, SN, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
     exact_constants();
     rng_state = UINT64_C(0x5E55105);
     EVBDD_WGT v[SLEN], w[SLEN];
@@ -2448,7 +2462,7 @@ VOID_TASK_0(ask_for_collections)
 TASK_0(int, run_contention)
 {
     enum { CN = 6, CLEN = 1 << CN };
-    bqd_init(BQD_FAMILY_PAULI, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
+    init_copy(BQD_FAMILY_PAULI, GC_WIDTH, 1LL << 16, 1LL << 16, 1LL << 17, 1LL << 16);
     exact_constants();
     rng_state = UINT64_C(0xC0117E57);
     EVBDD_WGT f[CLEN], g[CLEN];
@@ -2515,10 +2529,10 @@ TASK_0(int, run_pauli_trigger)
     unsigned collected = 0;
     const int before = failures;
 
-    bqd_init(BQD_FAMILY_PAULI, TN, 1LL << 14, 1LL << 14, 1LL << 20, 1LL << 14);
+    init_copy(BQD_FAMILY_PAULI, TN, 1LL << 14, 1LL << 14, 1LL << 20, 1LL << 14);
     bqd_to_vector(CALL(trigger_gates, true, &collected), TN, a);
     bqd_quit();
-    bqd_init(BQD_FAMILY_PAULI, TN, 1LL << 20, 1LL << 22, 1LL << 22, 1LL << 20);
+    init_copy(BQD_FAMILY_PAULI, TN, 1LL << 20, 1LL << 22, 1LL << 22, 1LL << 20);
     bqd_to_vector(CALL(trigger_gates, false, &collected), TN, b);
     bqd_quit();
 
@@ -2532,7 +2546,7 @@ TASK_0(int, run_pauli_trigger)
 
 TASK_1(int, run_family, int, fam)
 {
-    bqd_init((bqd_family_t)fam, NQ, 1LL << 21, 1LL << 20, 1LL << 22, 1LL << 20);
+    init_copy((bqd_family_t)fam, NQ, 1LL << 21, 1LL << 20, 1LL << 22, 1LL << 20);
     exact_constants();
     rng_state = UINT64_C(0x5EED5C1B0000) + (uint64_t)fam;
 

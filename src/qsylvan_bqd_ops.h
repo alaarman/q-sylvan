@@ -64,6 +64,14 @@
  * product, and takes a state of full support in the Pauli family to
  * bqd_xp_diagonal, the same walk with label products and the sign repair at
  * the last qubit of A (skip:alg:xdiag).
+ *
+ * All of that is the copy rule's. Under rule SM, the scalar family's default
+ * (qsylvan_bqd_sm.h), there is no copy, and bqd_product is Apply's product,
+ * which is prop:prodscalar's recursion at every level where both operands
+ * are nested, on any support; bqd_apply_diagonal takes the walk where the
+ * node's fullness flag says the state has full support, a test of one bit,
+ * with the same path and visit count, and the memoised Diag of
+ * skip:alg:smdiag elsewhere; and bqd_monomial makes the same nodes.
  */
 
 #ifndef QSYLVAN_BQD_OPS_H

@@ -19,6 +19,7 @@
 
 #include "qsylvan_bqd_ops.h"
 #include "qsylvan_bqd_gates.h"
+#include "qsylvan_bqd_sm.h"
 #include "qsylvan_bqd_xp.h"
 #include "qsylvan_limdd_gc.h"
 
@@ -172,6 +173,9 @@ TASK_2(BQD, bqd_product_rec, BQD, f, BQD, g)
 
 TASK_IMPL_2(BQD, bqd_product, BQD, f, BQD, g)
 {
+    /* under rule SM the product of two nested nodes is prop:prodscalar on any
+     * support, and Apply takes that branch by the tags with no test of the whole */
+    if (bqd_sm()) return CALL(bqd_sm_apply, BQD_SM_MUL, f, g);
     if (!scalar_labels_on_full_support()) return bqd_multiply(f, g);
     if (limdd_edge_is_zero(f) || limdd_edge_is_zero(g)) return limdd_zero_edge();
     /* the hypothesis for the whole recursion, tested once: a zero anywhere
@@ -222,6 +226,7 @@ monomial_edge(uint64_t A, EVBDD_WGT phase, uint32_t n)
 BQD
 bqd_monomial(uint64_t A, EVBDD_WGT phase, uint32_t n)
 {
+    if (bqd_sm()) return bqd_sm_monomial(bqd_sm_var_mask(A, n), phase);
     if (!scalar_labels_on_full_support()) return bqd_xp_monomial(A, phase, n);
     return monomial_edge(A, phase, n);
 }
@@ -322,6 +327,14 @@ BQD
 bqd_apply_diagonal_counted(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits)
 {
     if (visits != NULL) *visits = 0;
+    if (bqd_sm()) {
+        /* rule SM: the walk where the flag says full support, and Diag, which
+         * needs no product and no multiplication off a support, elsewhere */
+        if (limdd_edge_is_zero(e)) return e;
+        const uint64_t vars = bqd_sm_var_mask(A, n);
+        if (bqd_sm_full(limdd_target(e))) return bqd_sm_diag_walk(e, vars, phase, visits);
+        return RUN(bqd_sm_diag, e, vars, phase);
+    }
     if (!bqd_has_full_support(e)) {
         if (limdd_edge_is_zero(e)) return e;
         return bqd_diag_any(e, A, phase, n);

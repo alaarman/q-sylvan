@@ -57,8 +57,11 @@
  *                 all on states without full support, makes no high
  *                 cofactor and no pointwise operation (DiagR)
  *
- * Exact weights, in Q(w_8, sqrt2), throughout, on BQD_RATIO_WORKERS workers
- * (default 4).
+ * Every section runs the scalar family twice, under the copy rule of def:bqd
+ * and under rule SM, its default (qsylvan_bqd_sm.h), which has no copy to
+ * multiply off and on full support and affine supports the same diagram, so
+ * the regression's node counts hold under both. Exact weights, in
+ * Q(w_8, sqrt2), throughout, on BQD_RATIO_WORKERS workers (default 4).
  */
 
 #include <stdio.h>
@@ -106,6 +109,42 @@ exact_constants(void)
     const EVBDD_WGT w = qisq2_lookup(0, 1, 1, 2, 0, 1, 1, 2);
     for (int e = 1; e < 8; e++) pw[e] = wgt_mul(pw[e - 1], w);
     isq2 = qisq2_lookup(0, 1, 1, 2, 0, 1, 0, 1);
+}
+
+/*
+ * The arms: the scalar family under each of its two zero rules, the copy
+ * rule of def:bqd and rule SM (qsylvan_bqd_sm.h), and the translation and
+ * Pauli families under the copy rule, theirs. A section's task takes the
+ * family, and the scalar family's rule is the arm's, which main writes before
+ * the section's RUN and the task reads after it.
+ */
+enum { ARMS = 4 };
+static bqd_zero_rule_t arm_rule = BQD_ZERO_COPY;
+
+static bqd_family_t
+arm_family(int arm)
+{
+    return arm <= 1 ? BQD_FAMILY_SCALAR : (bqd_family_t)(arm - 1);
+}
+
+static bqd_zero_rule_t
+arm_zero(int arm)
+{
+    return arm == 1 ? BQD_ZERO_SM : BQD_ZERO_COPY;
+}
+
+static const char *
+arm_name(int arm)
+{
+    static const char *names[ARMS] = { "BQD, rule copy", "BQD, rule sm", "X-BQD", "Pauli-BQD" };
+    return names[arm];
+}
+
+static void
+arm_init(bqd_family_t fam, size_t n, size_t nodes, size_t paulis, size_t lims, size_t stabs)
+{
+    bqd_init_rule(fam, fam == BQD_FAMILY_SCALAR ? arm_rule : BQD_ZERO_COPY, n, nodes, paulis, lims,
+                  stabs);
 }
 
 static uint64_t rng_state;
@@ -879,7 +918,7 @@ gate_sequences(tally_t *t, unsigned *collected, int runs)
 
 TASK_1(int, run_collections, int, fam)
 {
-    bqd_init((bqd_family_t)fam, NQ + 2, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
+    arm_init((bqd_family_t)fam, NQ + 2, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
     exact_constants();
     rng_state = UINT64_C(0xC011EC7) + (uint64_t)fam;
     const int before = failures;
@@ -973,7 +1012,7 @@ TASK_1(int, run_regression, int, fam)
      * and after gate 592, per family */
     static const size_t after573[3] = { 1089, 151, 71 };
     static const size_t after592[3] = { 218, 146, 63 };
-    bqd_init((bqd_family_t)fam, RN, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    arm_init((bqd_family_t)fam, RN, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
     const int before = failures;
     BQD state = bqd_basis_state(0, RN), prev = state;
     limdd_protect(&state);
@@ -1091,7 +1130,7 @@ random_phase_mul(BQD F, EVBDD_WGT *f, unsigned n, EVBDD_WGT beta, uint32_t r, in
 TASK_1(int, run_any_worker, int, fam)
 {
     enum { ROUNDS = 32, STEPS = 6 };
-    bqd_init((bqd_family_t)fam, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    arm_init((bqd_family_t)fam, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
     exact_constants();
     rng_state = UINT64_C(0xA11C011EC7) + (uint64_t)fam;
     const int before = failures;
@@ -1159,7 +1198,7 @@ TASK_1(int, run_any_worker, int, fam)
  */
 VOID_TASK_1(any_thread_init, int, fam)
 {
-    bqd_init((bqd_family_t)fam, NQ, 1LL << 18, 1LL << 18, 1LL << 20, 1LL << 18);
+    arm_init((bqd_family_t)fam, NQ, 1LL << 18, 1LL << 18, 1LL << 20, 1LL << 18);
     exact_constants();
 }
 
@@ -1213,7 +1252,7 @@ run_any_thread(int fam)
 
 TASK_1(int, run_family, int, fam)
 {
-    bqd_init((bqd_family_t)fam, NQ, 1LL << 21, 1LL << 20, 1LL << 22, 1LL << 20);
+    arm_init((bqd_family_t)fam, NQ, 1LL << 21, 1LL << 20, 1LL << 22, 1LL << 20);
     exact_constants();
     rng_state = UINT64_C(0x5EED2A7100) + (uint64_t)fam;
     const int before = failures;
@@ -1244,16 +1283,20 @@ main(void)
     setvbuf(stdout, NULL, _IOLBF, 0);
     const unsigned workers = getenv("BQD_RATIO_WORKERS") ? (unsigned)atoi(getenv("BQD_RATIO_WORKERS")) : 4;
     int bad = 0;
-    for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
-        printf("== %s, exact weights, %u workers ==\n", bqd_family_name((bqd_family_t)fam), workers);
+    for (int arm = 0; arm < ARMS; arm++) {
+        const int fam = (int)arm_family(arm);
+        arm_rule = arm_zero(arm);
+        printf("== %s, exact weights, %u workers ==\n", arm_name(arm), workers);
         session_begin(workers, 20, 20);
         const int res = RUN(run_family, fam);
         session_end();
         printf("  %s\n", res ? "FAILED" : "ok");
         bad |= res;
     }
-    for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
-        printf("== %s, collections, %u workers ==\n", bqd_family_name((bqd_family_t)fam), workers);
+    for (int arm = 0; arm < ARMS; arm++) {
+        const int fam = (int)arm_family(arm);
+        arm_rule = arm_zero(arm);
+        printf("== %s, collections, %u workers ==\n", arm_name(arm), workers);
         session_begin(workers, 16, 16);
         sylvan_gc_hook_postgc(count_sylvan_collection_CALL);
         const int res = RUN(run_collections, fam);
@@ -1261,18 +1304,21 @@ main(void)
         printf("  %s\n", res ? "FAILED" : "ok");
         bad |= res;
     }
-    for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
+    for (int arm = 0; arm < ARMS; arm++) {
+        const int fam = (int)arm_family(arm);
+        arm_rule = arm_zero(arm);
         printf("== %s, the swaps of clifford_T_circuit_20_700, %u workers ==\n",
-               bqd_family_name((bqd_family_t)fam), workers);
+               arm_name(arm), workers);
         session_begin(workers, 20, 20);
         const int res = RUN(run_regression, fam);
         session_end();
         printf("  %s\n", res ? "FAILED" : "ok");
         bad |= res;
     }
-    for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
-        printf("== %s, Sylvan collections from any worker, 8 workers ==\n",
-               bqd_family_name((bqd_family_t)fam));
+    for (int arm = 0; arm < ARMS; arm++) {
+        const int fam = (int)arm_family(arm);
+        arm_rule = arm_zero(arm);
+        printf("== %s, Sylvan collections from any worker, 8 workers ==\n", arm_name(arm));
         session_begin(8, 12, 16);
         sylvan_gc_hook_pregc(note_collection_start_CALL);
         const int res = RUN(run_any_worker, fam);
@@ -1280,9 +1326,10 @@ main(void)
         printf("  %s\n", res ? "FAILED" : "ok");
         bad |= res;
     }
-    for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
-        printf("== %s, from the main thread, %u workers ==\n",
-               bqd_family_name((bqd_family_t)fam), workers);
+    for (int arm = 0; arm < ARMS; arm++) {
+        const int fam = (int)arm_family(arm);
+        arm_rule = arm_zero(arm);
+        printf("== %s, from the main thread, %u workers ==\n", arm_name(arm), workers);
         session_begin(workers, 20, 20);
         const int res = run_any_thread(fam);
         session_end();

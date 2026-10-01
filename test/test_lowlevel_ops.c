@@ -16,6 +16,8 @@
  *
  * A LIMDD's recursions end at the width of its tables, so each width runs in
  * a session of its own; the BQD and the LIMDD share tables and run apart.
+ * The BQD runs under each of its scalar family's two zero rules, the copy
+ * rule of def:bqd and rule SM, in a session of each.
  */
 
 #include <stdio.h>
@@ -46,8 +48,10 @@ static uint64_t rnd(void)
 }
 static uint64_t rnd_below(uint64_t n) { return rnd() % n; }
 
-typedef enum { EVDD = 0, LIMDD_K = 1, BQD_K = 2 } kind_t;
-static const char *kind_name[3] = { "EVDD", "LIMDD", "BQD" };
+/* the BQD twice: under the copy rule of def:bqd, and under rule SM, the
+ * scalar family's default (qsylvan_bqd_sm.h) */
+typedef enum { EVDD = 0, LIMDD_K = 1, BQD_K = 2, BQD_SM_K = 3 } kind_t;
+static const char *kind_name[4] = { "EVDD", "LIMDD", "BQD-cp", "BQD-sm" };
 
 /* --- vectors: qubit q is bit n-1-q of an index --------------------------- */
 
@@ -103,7 +107,7 @@ build(kind_t k, const EVBDD_WGT *f, unsigned n)
 static void
 read_back(kind_t k, uint64_t e, unsigned n, EVBDD_WGT *out)
 {
-    if (k == BQD_K) { bqd_to_vector(e, n, out); return; }
+    if (k >= BQD_K) { bqd_to_vector(e, n, out); return; }
     bool bits[MAXN];
     for (uint64_t x = 0; x < (UINT64_C(1) << n); x++) {
         for (unsigned q = 0; q < n; q++) bits[q] = (x >> (n - 1 - q)) & 1;
@@ -143,7 +147,7 @@ typedef struct { unsigned tot, bad_value, bad_edge; } tally_t;
 enum { T_TIMES, T_PLUS, T_SCALE, T_NEGATE, T_RESTRICT, T_PROJECT, T_MATVEC, T_GATE, N_T };
 static const char *tname[N_T] = { "times", "plus", "scale", "negate", "restrict",
                                   "project", "local_matvec", "matvec = gate" };
-static tally_t tally[3][N_T];
+static tally_t tally[4][N_T];
 
 static void
 check(kind_t k, int t, uint64_t e, const EVBDD_WGT *want, unsigned n)
@@ -314,8 +318,18 @@ TASK_0(int, run_ev_li)
 
 TASK_0(int, run_bqd)
 {
-    bqd_init(BQD_FAMILY_SCALAR, MAXN, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    bqd_init_rule(BQD_FAMILY_SCALAR, BQD_ZERO_COPY, MAXN, 1LL << 20, 1LL << 20, 1LL << 22,
+                  1LL << 20);
     for (unsigned n = 1; n <= MAXN; n++) run_checks(BQD_K, n, 30);
+    bqd_quit();
+    return 0;
+}
+
+TASK_0(int, run_bqd_sm)
+{
+    bqd_init_rule(BQD_FAMILY_SCALAR, BQD_ZERO_SM, MAXN, 1LL << 20, 1LL << 20, 1LL << 22,
+                  1LL << 20);
+    for (unsigned n = 1; n <= MAXN; n++) run_checks(BQD_SM_K, n, 30);
     bqd_quit();
     return 0;
 }
@@ -334,6 +348,7 @@ session(int (*go)(void))
 
 static int go_ev_li(void) { return RUN(run_ev_li); }
 static int go_bqd(void) { return RUN(run_bqd); }
+static int go_bqd_sm(void) { return RUN(run_bqd_sm); }
 
 int
 main(void)
@@ -344,9 +359,11 @@ main(void)
         session(go_ev_li);
     }
     session(go_bqd);
-    printf("exact weights, EVDD and LIMDD at widths 1, 2, 3, 5, 7, BQD at 1..7:\n");
+    session(go_bqd_sm);
+    printf("exact weights, EVDD and LIMDD at widths 1, 2, 3, 5, 7, BQD at 1..7 under both rules:\n");
     report(EVDD);
     report(LIMDD_K);
     report(BQD_K);
+    report(BQD_SM_K);
     return failures != 0;
 }

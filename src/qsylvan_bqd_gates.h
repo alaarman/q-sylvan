@@ -53,6 +53,13 @@
  * support, and fall back to the product here when it does not, since the walk
  * is only correct on full support.
  *
+ * That is the copy rule of def:bqd. Under rule SM, the scalar family's
+ * default (bqd_init_rule), a node whose high support is not inside its low
+ * one stores both cofactors, and every entry point here goes to the SM
+ * recursions of qsylvan_bqd_sm.h first: the same operations with the same
+ * results as functions, on that rule's diagram, and none of them multiplies
+ * off a support. The rest of this comment is about the copy rule.
+ *
  * Everything here is for all three label families. In the translation and
  * Pauli families the entry points dispatch to qsylvan_bqd_xp.h, whose
  * recursion is the one above on labelled edges, at the top of its arguments

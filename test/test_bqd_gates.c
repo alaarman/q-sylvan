@@ -18,7 +18,8 @@
  *   circuits          random Clifford+T circuits from |0...0>, Hadamards
  *                     anywhere, the diagram compared after every gate
  *
- * Scalar family, exact weights only. On floats these operations are not
+ * Scalar family, under both zero rules, the copy rule and SM (qsylvan_bqd_sm.h),
+ * exact weights only. On floats these operations are not
  * reliable, and no tolerance makes them so; this is measured, not assumed.
  * A cancellation that should give 0 leaves a residue, and under the copy
  * clause a residue is not a small error: it turns a copy point into a ratio
@@ -342,9 +343,10 @@ check_circuits(unsigned max_n, unsigned per_n)
 
 /* --- harness -------------------------------------------------------------- */
 
-TASK_0(int, run_exact)
+TASK_1(int, run_exact, int, rule)
 {
-    bqd_init(BQD_FAMILY_SCALAR, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    bqd_init_rule(BQD_FAMILY_SCALAR, (bqd_zero_rule_t)rule, NQ, 1LL << 20, 1LL << 20, 1LL << 22,
+                  1LL << 20);
     pw[0] = EVBDD_ONE;
     const EVBDD_WGT w = qisq2_lookup(0, 1, 1, 2, 0, 1, 1, 2);
     for (int k = 1; k < 8; k++) pw[k] = wgt_mul(pw[k - 1], w);
@@ -358,16 +360,20 @@ TASK_0(int, run_exact)
     return failures != before;
 }
 
+/* under each zero rule of the scalar family: the copy rule of def:bqd, and SM */
 int
 main(void)
 {
-    printf("== scalar BQD, exact weights ==\n");
-    lace_start(4, 0);
-    sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
-    sylvan_init_package();
-    qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, QISQ2_MAP, NORM_LOW);
-    const int res = RUN(run_exact);
-    sylvan_quit();
-    lace_stop();
+    int res = 0;
+    for (int rule = BQD_ZERO_SM; rule <= BQD_ZERO_COPY; rule++) {
+        printf("== scalar BQD, rule %s, exact weights ==\n", bqd_zero_rule_name((bqd_zero_rule_t)rule));
+        lace_start(4, 0);
+        sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
+        sylvan_init_package();
+        qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, QISQ2_MAP, NORM_LOW);
+        res |= RUN(run_exact, rule);
+        sylvan_quit();
+        lace_stop();
+    }
     return res;
 }

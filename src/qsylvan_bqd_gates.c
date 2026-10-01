@@ -19,6 +19,7 @@
 
 #include "qsylvan_bqd_gates.h"
 #include "qsylvan_bqd_exp.h"
+#include "qsylvan_bqd_sm.h"
 #include "qsylvan_bqd_xp.h"
 #include "qsylvan_gates.h"
 #include "qsylvan_limdd_gc.h"
@@ -210,22 +211,27 @@ TASK_IMPL_3(BQD, bqd_apply_op, int, op, BQD, f, BQD, g)
 /*
  * The entry points below are where the translation and Pauli families part:
  * their labels are not scalars, so they go to qsylvan_bqd_xp.h. The scalar
- * recursion calls the scalar tasks directly and never tests the family.
+ * recursion calls the scalar tasks directly and never tests the family. A
+ * session of rule SM, which is the scalar family's, goes to qsylvan_bqd_sm.h
+ * before either, so the copy rule's code never meets an SM node.
  */
 TASK_IMPL_2(BQD, bqd_multiply, BQD, f, BQD, g)
 {
+    if (bqd_sm()) return CALL(bqd_sm_apply, BQD_SM_MUL, f, g);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_apply_op, BQD_OP_MUL, f, g);
     return CALL(bqd_apply_op, OP_MUL, f, g);
 }
 
 TASK_IMPL_2(BQD, bqd_add, BQD, f, BQD, g)
 {
+    if (bqd_sm()) return CALL(bqd_sm_apply, BQD_SM_ADD, f, g);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_apply_op, BQD_OP_ADD, f, g);
     return CALL(bqd_apply_op, OP_ADD, f, g);
 }
 
 TASK_IMPL_3(BQD, bqd_compose, uint32_t, var, BQD, a, BQD, b)
 {
+    if (bqd_sm()) return CALL(bqd_sm_compose, var, a, b);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_compose, var, a, b);
     return CALL(bqd_compose_scalar, var, a, b);
 }
@@ -246,6 +252,7 @@ TASK_IMPL_3(BQD, bqd_cofactor_scalar, BQD, e, uint32_t, var, int, b)
  * makes the canonical edge (skip:lem:xcof, skip:prop:xcanon). */
 TASK_IMPL_3(BQD, bqd_cofactor, BQD, e, uint32_t, var, int, b)
 {
+    if (bqd_sm()) return CALL(bqd_sm_cof, e, var, b);
     if (bqd_family() == BQD_FAMILY_SCALAR) return CALL(bqd_cofactor_scalar, e, var, b);
     const BQD c = limdd_refs_push(CALL(bqd_xp_cofactor, e, var, b));
     const BQD r = CALL(bqd_xp_canon, c);
@@ -338,12 +345,14 @@ TASK_IMPL_3(BQD, bqd_project_scalar, BQD, e, uint32_t, q, int, b)
  * goes through Canon where the scalar family returns it (skip:alg:xrestrict). */
 TASK_IMPL_3(BQD, bqd_restrict, BQD, e, uint32_t, q, int, b)
 {
+    if (bqd_sm()) return CALL(bqd_sm_restrict, e, q, b);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_restrict, e, q, b);
     return CALL(bqd_restrict_scalar, e, q, b);
 }
 
 TASK_IMPL_3(BQD, bqd_project, BQD, e, uint32_t, q, int, b)
 {
+    if (bqd_sm()) return CALL(bqd_sm_project, e, q, b);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_project, e, q, b);
     return CALL(bqd_project_scalar, e, q, b);
 }
@@ -391,6 +400,7 @@ bqd_local_matvec(BQD e, const EVBDD_WGT *M, const uint32_t *qubits, uint32_t k, 
 BQD
 bqd_basis_state(uint64_t x, uint32_t n)
 {
+    if (bqd_sm()) return bqd_sm_basis_state(x, n);
     if (bqd_family() != BQD_FAMILY_SCALAR) return bqd_xp_basis_state(x, n);
     LIMDD_TARG t = LIMDD_TERMINAL;
     for (uint32_t v = n; v-- > 0; ) {
@@ -425,6 +435,7 @@ bool
 bqd_has_full_support(BQD e)
 {
     if (limdd_edge_is_zero(e)) return false;
+    if (bqd_sm()) return bqd_sm_full(limdd_target(e));          /* the node's flag, O(1) */
     return RUN(bqd_full_rec, limdd_target(e)) != 0;
 }
 
@@ -773,6 +784,7 @@ minpoint_scalar(LIMDD_TARG t)
  */
 TASK_IMPL_3(BQD, bqd_exp_state, BQD_EXP, eps, EVBDD_WGT, beta, uint32_t, r)
 {
+    if (bqd_sm()) return CALL(bqd_sm_exp, eps, beta, r);
     if (bqd_exp_is_const(eps)) return edge(bqd_exp_power(beta, bqd_exp_value(eps)), LIMDD_TERMINAL);
     uint64_t hit;
     if (cache_get3(CACHE_BQD_EXP, beta, eps, r, &hit)) return (BQD)hit;
@@ -946,30 +958,35 @@ is_flip(uint32_t gid)
 TASK_IMPL_4(BQD, bqd_perm, BQD, e, uint32_t, kind, uint32_t, qa, uint32_t, qb)
 {
     assert(qa < qb && kind <= BQD_PERM_CX_UP);
+    if (bqd_sm()) return CALL(bqd_sm_perm, e, kind, qa, qb);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_perm, e, kind, qa, qb);
     return CALL(bqd_perm_rec, e, kind, qa, qb);
 }
 
 TASK_IMPL_2(BQD, bqd_x, BQD, e, uint32_t, q)
 {
+    if (bqd_sm()) return CALL(bqd_sm_xq, e, q);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_x, e, q);
     return CALL(bqd_xq_rec, e, q);
 }
 
 TASK_IMPL_5(BQD, bqd_pair, BQD, A, int, s, BQD, B, int, t, uint32_t, b)
 {
+    if (bqd_sm()) return CALL(bqd_sm_pair, A, s, B, t, b);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_pair, A, s, B, t, b);
     return CALL(bqd_pair_rec, A, s, B, t, b);
 }
 
 TASK_IMPL_1(LIMDD_TARG, bqd_ind, LIMDD_TARG, t)
 {
+    if (bqd_sm()) return CALL(bqd_sm_ind, t);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_ind, t);
     return CALL(bqd_ind_rec, t);
 }
 
 TASK_IMPL_3(BQD, bqd_mul_off, BQD, k, EVBDD_WGT, c, LIMDD_TARG, u)
 {
+    if (bqd_sm()) return CALL(bqd_sm_mul_off, k, c, u);
     switch (bqd_family()) {
     case BQD_FAMILY_SCALAR: return CALL(bqd_mul_off_rec, k, c, u);
     case BQD_FAMILY_X:      return CALL(bqd_xp_mul_off, k, c, u);
@@ -983,6 +1000,7 @@ TASK_IMPL_3(BQD, bqd_phase_mul, BQD, k, BQD_EXP, eps, EVBDD_WGT, beta)
 {
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_phase_mul, k, eps, beta);
     if (beta == EVBDD_ONE) return k;
+    if (bqd_sm()) return CALL(bqd_sm_phase_mul, k, eps, beta, bqd_exp_order(beta));
     return CALL(bqd_phase_mul_rec, k, eps, beta, bqd_exp_order(beta));
 }
 
@@ -997,6 +1015,7 @@ TASK_IMPL_4(BQD, bqd_diag_any, BQD, e, uint64_t, A, EVBDD_WGT, phase, uint32_t, 
 {
     if (limdd_edge_is_zero(e) || phase == EVBDD_ONE) return e;
     if (A == 0) return bqd_scale(e, phase);
+    if (bqd_sm()) return CALL(bqd_sm_diag, e, bqd_sm_var_mask(A, n), phase);
     if (bqd_family() == BQD_FAMILY_PAULI && bqd_xp_w8_log(phase) < 0) {
         limdd_refs_push(e);
         const BQD m = limdd_refs_push(bqd_monomial(A, phase, n));
@@ -1043,6 +1062,7 @@ TASK_IMPL_4(BQD, bqd_gate, BQD, e, uint32_t, gid, uint32_t, target, uint32_t, n)
         limdd_refs_pop(1);
         return bqd_scale(x, u10);
     }
+    if (bqd_sm()) return CALL(bqd_sm_gate, e, gid, 0, target);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_cgate_rec, e, gid, 0, target);
     return CALL(bqd_cgate_rec, e, gid, 0, target);
 }
@@ -1086,6 +1106,7 @@ TASK_IMPL_5(BQD, bqd_cgate, BQD, e, uint32_t, gid, uint64_t, cmask, uint32_t, ta
     }
     if (is_flip(gid) && (cmask & (cmask - 1)) == 0)
         return CALL(bqd_controlled_flip, e, gid, (uint32_t)__builtin_ctzll(cmask), target, n);
+    if (bqd_sm()) return CALL(bqd_sm_gate, e, gid, cmask, target);
     if (bqd_family() != BQD_FAMILY_SCALAR) return CALL(bqd_xp_cgate_rec, e, gid, cmask, target);
     return CALL(bqd_cgate_rec, e, gid, cmask, target);
 }

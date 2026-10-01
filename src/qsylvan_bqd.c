@@ -19,11 +19,14 @@
 #include <string.h>
 
 #include "qsylvan_bqd.h"
+#include "qsylvan_bqd_sm.h"
 #include "edge_weight_storage/qisq2_map.h"
 
-/* Written once by bqd_init and read afterwards. */
-static bqd_family_t family  = BQD_FAMILY_SCALAR;
-static size_t       nqubits = 0;
+/* Written once by bqd_init_rule and read afterwards. */
+static bqd_family_t    family  = BQD_FAMILY_SCALAR;
+static bqd_zero_rule_t rule    = BQD_ZERO_COPY;
+static size_t          nqubits = 0;
+bool                   bqd_sm_session = false;
 
 /* --- per-worker state ------------------------------------------------------ */
 
@@ -75,6 +78,19 @@ void
 bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
          size_t pauli_tablesize, size_t lim_tablesize, size_t stab_tablesize)
 {
+    bqd_init_rule(f, f == BQD_FAMILY_SCALAR ? BQD_ZERO_SM : BQD_ZERO_COPY, n, node_tablesize,
+                  pauli_tablesize, lim_tablesize, stab_tablesize);
+}
+
+void
+bqd_init_rule(bqd_family_t f, bqd_zero_rule_t z, size_t n, size_t node_tablesize,
+              size_t pauli_tablesize, size_t lim_tablesize, size_t stab_tablesize)
+{
+    if (z == BQD_ZERO_SM && f != BQD_FAMILY_SCALAR) {
+        fprintf(stderr, "sylvan: rule SM is the scalar family's, and the %s keeps the copy\n",
+                bqd_family_name(f));
+        exit(1);
+    }
     if (n == 0 || n > 63) {
         fprintf(stderr, "sylvan: a BQD indexes its vectors by a 64-bit word, so "
                         "it holds 1 to 63 qubits, not %zu\n", n);
@@ -89,7 +105,9 @@ bqd_init(bqd_family_t f, size_t n, size_t node_tablesize,
         exit(1);
     }
     family  = f;
+    rule    = z;
     nqubits = n;
+    bqd_sm_session = (z == BQD_ZERO_SM);
     limdd_nodes_init(n, node_tablesize, pauli_tablesize, lim_tablesize, stab_tablesize);
     /* the phase multiplications hold their exponents as Sylvan MTBDDs
      * (qsylvan_bqd_exp.h); a second call is a no-op */
@@ -117,6 +135,8 @@ bqd_quit(void)
     bqd_count_workers = 0;
     limdd_nodes_quit();
     nqubits = 0;
+    rule = BQD_ZERO_COPY;
+    bqd_sm_session = false;
 }
 
 void
@@ -167,6 +187,18 @@ bqd_cache_fit(void)
 }
 
 bqd_family_t bqd_family(void) { return family; }
+
+bqd_zero_rule_t bqd_zero_rule(void) { return rule; }
+
+const char *
+bqd_zero_rule_name(bqd_zero_rule_t r)
+{
+    switch (r) {
+    case BQD_ZERO_SM:   return "sm";
+    case BQD_ZERO_COPY: return "copy";
+    }
+    return "?";
+}
 
 const char *
 bqd_family_name(bqd_family_t f)
@@ -449,6 +481,7 @@ TASK_3(LIMDD_TARG, bqd_build, const EVBDD_WGT *, g, uint32_t, var, uint32_t, n)
 TASK_IMPL_2(BQD, bqd_from_vector, const EVBDD_WGT *, f, uint32_t, n)
 {
     assert(n >= 1 && n <= nqubits);
+    if (bqd_sm()) return CALL(bqd_sm_from_vector, f, n);
     const uint64_t len = UINT64_C(1) << n;
     if (lexmin(f, len) < 0) return limdd_zero_edge();
 
@@ -529,6 +562,7 @@ VOID_TASK_4(bqd_decode, LIMDD_TARG, p, uint32_t, var, uint32_t, n, EVBDD_WGT *, 
 VOID_TASK_IMPL_3(bqd_to_vector, BQD, e, uint32_t, n, EVBDD_WGT *, out)
 {
     assert(n >= 1 && n <= nqubits);
+    if (bqd_sm()) { CALL(bqd_sm_to_vector, e, n, out); return; }
     const uint64_t len = UINT64_C(1) << n;
     if (limdd_edge_is_zero(e)) { fill_zero(out, len); return; }
 
@@ -585,6 +619,7 @@ EVBDD_WGT
 bqd_eval(BQD e, uint32_t n, uint64_t x)
 {
     assert(n >= 1 && n <= nqubits);
+    if (bqd_sm()) return bqd_sm_eval(e, n, x);
     if (limdd_edge_is_zero(e)) return EVBDD_ZERO;
     EVBDD_WGT c; uint64_t s, t;
     bqd_lim_masks(limdd_label(e), n, &c, &s, &t);

@@ -191,6 +191,14 @@ sylvan_test_warnings(test_bqd_ratio)
 
 add_test(NAME test_bqd_ratio COMMAND test_bqd_ratio)
 
+add_executable(test_bqd_sm)
+target_sources(test_bqd_sm PRIVATE test_bqd_sm.c)
+target_link_libraries(test_bqd_sm PRIVATE qsylvan::sylvan)
+target_compile_features(test_bqd_sm PRIVATE c_std_11)
+sylvan_test_warnings(test_bqd_sm)
+
+add_test(NAME test_bqd_sm COMMAND test_bqd_sm)
+
 add_executable(test_lowlevel_ops)
 target_sources(test_lowlevel_ops PRIVATE test_lowlevel_ops.c)
 target_link_libraries(test_lowlevel_ops PRIVATE qsylvan::sylvan)

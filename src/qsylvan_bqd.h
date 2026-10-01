@@ -30,6 +30,12 @@
  * its degree, so the recursion stops after k steps at level k of the Clifford
  * hierarchy. That is where the succinctness comes from.
  *
+ * That is the copy rule. A session of the scalar family runs rule SM by
+ * default, which has no copy: a node whose cofactors have misaligned supports
+ * stores both, as a Shannon node, and says so in a tag (bqd_zero_rule_t,
+ * qsylvan_bqd_sm.h), and the copy rule is there on request. The two are one
+ * diagram on full support. The rest of this header describes the copy rule.
+ *
  * Three label families, each a diagram of its own:
  *
  *     BQD_FAMILY_SCALAR   labels c            the BQD
@@ -143,7 +149,9 @@ typedef enum {
 } bqd_family_t;
 
 /**
- * Create the tables through limdd_nodes_init, and fix the label family. A
+ * Create the tables through limdd_nodes_init, and fix the label family, with
+ * its default zero rule (bqd_init_rule): SM in the scalar family, the copy in
+ * the other two. A
  * vector is indexed by a 64-bit word, so `nqubits` may not exceed 63. Must be
  * called from a Lace worker; the edge weight table must already exist and
  * must hold complex weights. Not to be combined with limdd_nodes_init in one
@@ -158,6 +166,50 @@ void bqd_quit(void);
 
 bqd_family_t bqd_family(void);
 const char  *bqd_family_name(bqd_family_t f);
+
+/**
+ * What a node does where its low cofactor is zero, the zero rule of the
+ * session. BQD_ZERO_COPY is def:bqd: a quotient node everywhere, its ratio a
+ * copy of the high cofactor where the low one is zero. BQD_ZERO_SM is rule SM
+ * of skip:def:sm (qsylvan_bqd_sm.h): a quotient node where the support of the
+ * high cofactor lies inside that of the low one, and a Shannon node, which
+ * stores the two cofactors, where it does not; there is no copy. The two give
+ * one diagram on every function of full support and on every function whose
+ * support is an affine subspace (skip:cor:smd0), and different ones
+ * elsewhere, so a session has one rule, fixed with its tables.
+ */
+typedef enum {
+    BQD_ZERO_SM   = 0,
+    BQD_ZERO_COPY = 1,
+} bqd_zero_rule_t;
+
+/**
+ * bqd_init with the zero rule named. SM is the scalar family's: the
+ * translation and Pauli families keep the copy, and asking SM of them exits
+ * with a message. bqd_init is this call with SM for the scalar family and
+ * the copy rule for the other two; a session that wants the copy rule in the
+ * scalar family, as the paper's def:bqd has it, asks for it here.
+ */
+void bqd_init_rule(bqd_family_t family, bqd_zero_rule_t rule, size_t nqubits,
+                   size_t node_tablesize, size_t pauli_tablesize, size_t lim_tablesize,
+                   size_t stab_tablesize);
+
+bqd_zero_rule_t bqd_zero_rule(void);
+const char     *bqd_zero_rule_name(bqd_zero_rule_t r);
+
+/* Written once by bqd_init_rule and read afterwards, by bqd_sm. */
+extern bool bqd_sm_session;
+
+/**
+ * Whether the session runs rule SM, which is the scalar family's alone. The
+ * public entry points ask this first and go to qsylvan_bqd_sm.h when it
+ * holds; the copy rule's code is reached only where it does not.
+ */
+static inline bool
+bqd_sm(void)
+{
+    return bqd_sm_session;
+}
 
 /* --- labels --------------------------------------------------------------- */
 

@@ -195,6 +195,27 @@ static const uint64_t CACHE_BQD_XP_PAIR1             = (150LL<<40);
 static const uint64_t CACHE_BQD_XP_CANONT            = (151LL<<40);
 static const uint64_t CACHE_BQD_XP_PHASEMUL          = (152LL<<40);
 static const uint64_t CACHE_BQD_XP_PHASEMULP         = (153LL<<40);
+/* the scalar family under rule SM, qsylvan_bqd_sm.h (skip:sec:sm:impl of
+ * bqd-skip.tex): Apply, the high cofactor, the support walks, the gates,
+ * selections and phase multiplications */
+static const uint64_t CACHE_BQD_SM_MUL               = (154LL<<40);
+static const uint64_t CACHE_BQD_SM_RATIO             = (155LL<<40);
+static const uint64_t CACHE_BQD_SM_ADD               = (156LL<<40);
+static const uint64_t CACHE_BQD_SM_COF1              = (157LL<<40);
+static const uint64_t CACHE_BQD_SM_GATE              = (158LL<<40);
+static const uint64_t CACHE_BQD_SM_RESTRICT          = (159LL<<40);
+static const uint64_t CACHE_BQD_SM_PROJECT           = (160LL<<40);
+static const uint64_t CACHE_BQD_SM_IND               = (161LL<<40);
+static const uint64_t CACHE_BQD_SM_SUBSET            = (162LL<<40);
+static const uint64_t CACHE_BQD_SM_DEP               = (163LL<<40);
+static const uint64_t CACHE_BQD_SM_SIDE              = (164LL<<40);
+static const uint64_t CACHE_BQD_SM_XQ                = (165LL<<40);
+static const uint64_t CACHE_BQD_SM_PAIR              = (166LL<<40);
+static const uint64_t CACHE_BQD_SM_PERM              = (167LL<<40);
+static const uint64_t CACHE_BQD_SM_DIAG              = (168LL<<40);
+static const uint64_t CACHE_BQD_SM_PHASEMUL          = (169LL<<40);
+static const uint64_t CACHE_BQD_SM_EXP               = (170LL<<40);
+static const uint64_t CACHE_BQD_SM_IOTA              = (171LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);

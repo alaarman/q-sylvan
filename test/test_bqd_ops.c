@@ -20,7 +20,8 @@
  *                     nodes at the level with v decided variables, and its
  *                     amplitudes are the phase polynomial
  *
- * Scalar family, exact weights in Q(w_8).
+ * Scalar family, under both zero rules, the copy rule and SM (qsylvan_bqd_sm.h),
+ * which on full support are one diagram, exact weights in Q(w_8).
  */
 
 #include <stdio.h>
@@ -266,9 +267,11 @@ check_iqp(void)
     free(poly); free(v);
 }
 
-TASK_0(int, runtests)
+TASK_1(int, runtests, int, rule)
 {
-    bqd_init(BQD_FAMILY_SCALAR, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    bqd_init_rule(BQD_FAMILY_SCALAR, (bqd_zero_rule_t)rule, NQ, 1LL << 20, 1LL << 20, 1LL << 22,
+                  1LL << 20);
+    printf("== scalar BQD, rule %s ==\n", bqd_zero_rule_name((bqd_zero_rule_t)rule));
     pw[0] = EVBDD_ONE;
     const EVBDD_WGT w = qisq2_lookup(0, 1, 1, 2, 0, 1, 1, 2);
     for (int e = 1; e < 8; e++) pw[e] = wgt_mul(pw[e - 1], w);
@@ -283,15 +286,19 @@ TASK_0(int, runtests)
     return failures != 0;
 }
 
+/* under each zero rule of the scalar family: the copy rule of def:bqd, and SM */
 int
 main(void)
 {
-    lace_start(4, 0);
-    sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
-    sylvan_init_package();
-    qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, QISQ2_MAP, NORM_LOW);
-    const int res = RUN(runtests);
-    sylvan_quit();
-    lace_stop();
+    int res = 0;
+    for (int rule = BQD_ZERO_SM; rule <= BQD_ZERO_COPY; rule++) {
+        lace_start(4, 0);
+        sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
+        sylvan_init_package();
+        qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, QISQ2_MAP, NORM_LOW);
+        res |= RUN(runtests, rule);
+        sylvan_quit();
+        lace_stop();
+    }
     return res;
 }

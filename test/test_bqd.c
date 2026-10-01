@@ -48,7 +48,9 @@
  *
  * Everything but the last is exact, in Q(w_8, sqrt2): coset states have
  * amplitudes that are eighth roots of unity or zero, which is what the
- * paper's prototype stores.
+ * paper's prototype stores. The scalar family runs twice, under the copy
+ * rule of def:bqd and under rule SM, its default (qsylvan_bqd_sm.h), where
+ * the points the copy rule copies are those of S nodes.
  */
 
 #include <math.h>
@@ -622,8 +624,9 @@ check_coset_states(void)
         snprintf(buf, sizeof(buf), "the copy never fired on any of %u coset states; the scalar "
                  "family should degrade on a proper support", states);
         expect(copies_seen > 0, "scalar labels degrade", buf);
-        printf("  copy fired on %u of %u states (expected: it does, without a translation)\n",
-               copies_seen, states);
+        /* under rule SM the points the copy rule copies are those of S nodes */
+        printf("  %s on %u of %u states (expected: it does, without a translation)\n",
+               bqd_sm() ? "S nodes" : "copy fired", copies_seen, states);
     }
     if (fam == BQD_FAMILY_X) {
         snprintf(buf, sizeof(buf), "%u full-support states carried a translation", trans_bad);
@@ -723,9 +726,10 @@ check_prep_algebraic(void)
 
 /* --- harness -------------------------------------------------------------- */
 
-TASK_1(int, runtests, int, fam)
+TASK_2(int, runtests, int, fam, int, rule)
 {
-    bqd_init((bqd_family_t)fam, NQ, 1LL << 20, 1LL << 20, 1LL << 22, 1LL << 20);
+    bqd_init_rule((bqd_family_t)fam, (bqd_zero_rule_t)rule, NQ, 1LL << 20, 1LL << 20, 1LL << 22,
+                  1LL << 20);
 
     /* w_8 = (1 + i)/sqrt2 = sqrt2/2 + i sqrt2/2, and its powers by multiplication */
     pw[0] = EVBDD_ONE;
@@ -745,16 +749,18 @@ TASK_1(int, runtests, int, fam)
     return failures != before;
 }
 
+/* The scalar family under each zero rule, SM and the copy rule of def:bqd,
+ * and the other two under the copy rule, theirs. */
 static int
-run_family(bqd_family_t fam)
+run_family(bqd_family_t fam, bqd_zero_rule_t rule)
 {
-    printf("== %s ==\n", bqd_family_name(fam));
+    printf("== %s, rule %s ==\n", bqd_family_name(fam), bqd_zero_rule_name(rule));
     lace_start(4, 0);
     sylvan_set_sizes(1LL << 20, 1LL << 20, 1LL << 20, 1LL << 20);
     sylvan_init_package();
     qsylvan_init_simulator(1LL << 22, 1LL << 22, -1, QISQ2_MAP, NORM_LOW);
 
-    const int res = RUN(runtests, (int)fam);
+    const int res = RUN(runtests, (int)fam, (int)rule);
 
     sylvan_quit();
     lace_stop();
@@ -823,9 +829,10 @@ int
 main(void)
 {
     int bad = 0;
-    bad |= run_family(BQD_FAMILY_SCALAR);
-    bad |= run_family(BQD_FAMILY_X);
-    bad |= run_family(BQD_FAMILY_PAULI);
+    bad |= run_family(BQD_FAMILY_SCALAR, BQD_ZERO_COPY);
+    bad |= run_family(BQD_FAMILY_SCALAR, BQD_ZERO_SM);
+    bad |= run_family(BQD_FAMILY_X, BQD_ZERO_COPY);
+    bad |= run_family(BQD_FAMILY_PAULI, BQD_ZERO_COPY);
 
     printf("== Pauli-BQD, float weights ==\n");
     lace_start(4, 0);
