@@ -72,7 +72,7 @@ static const char *dd_kind_name = "qmdd";
 static bqd_family_t bqd_family_opt = BQD_FAMILY_SCALAR;   /* --bqd-family */
 static const char *bqd_family_opt_name = "scalar";
 static bool bqd_family_set = false;
-static bqd_zero_rule_t bqd_zero_opt = BQD_ZERO_SM;          /* --bqd-zero */
+static bqd_zero_rule_t bqd_zero_opt = BQD_ZERO_SM;          /* --bqd-zero, every family */
 static bool bqd_zero_set = false;
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
@@ -112,8 +112,8 @@ static struct argp_option options[] =
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
     {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram, with scalar labels unless --bqd-family picks others, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It is meant for -e qisq2: on float weights it runs every gate but warns, since after a gate that can cancel amplitudes a rounding residue can move an amplitude by orders of magnitude. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
-    {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound. Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. On a 16-qubit Clifford+T circuit both take longer than the scalar family with two fifths of its nodes or fewer, and on a 20-qubit Clifford circuit x takes as long with a fifth of them; pauli is the faster one there. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float both run with the scalar family's warning and are more fragile: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
-    {"bqd-zero", 1015, "<sm|copy>", 0, "With -d bqd: what a node does where its low cofactor is zero, the zero rule (default sm with the scalar family, copy with x and pauli). copy is the paper's def:bqd: every node stores its low cofactor and the ratio of the two, and where the low cofactor is zero the ratio holds a copy of the high one, so a gate that recurses on a node's stored edges has to multiply that part off again. sm, Shannon where misaligned, has no copy: a node whose high cofactor is zero wherever its low one is stores the ratio, as before, and any other node stores its two cofactors and says so in a tag. The two give the same diagram on every state of full support and on every state whose support is an affine subspace, the stabiliser states among them; elsewhere they differ, and on the circuits measured sm's has had no more nodes than copy's at the end of a run or at its peak, and between gates at most 7.5% more, on 21 of 17,721 states. Each rule has its own gate algorithms, so a timing of one against the other measures the rule and the algorithms together. On a state of full support the two hold one diagram and sm's recursion is still the faster one: it takes a gate through a node whose ratio does not depend on the gate's qubit without forming the high cofactor, and multiplies and divides two nodes that store ratios level by level. On clifford_T_circuit_20_700 copy spends 89% of its time on the 39 gates it meets on full support, and sm runs those 148 times faster. On a state with zeros no gate under sm makes a copy or multiplies one off, which adds to that. With a node table of 2^25, hidden-shift_n30, which never has full support, fills it under copy and takes 1 s under sm, clifford_T_circuit_20_700 runs out of 900 s under copy and takes 50 s under sm, and rand_18_500, with 5 of 500 gates on full support, takes 20 s under copy and 1 s under sm. sm is the scalar family's for now: x and pauli refuse it.", 0},
+    {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound, under either zero rule (--bqd-zero). Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. Under sm, on a 16-qubit Clifford+T circuit of 500 gates x takes as long as the scalar family with two fifths of its nodes, and pauli two and a half times as long with less than a third; on a 20-qubit Clifford circuit of 400 gates x takes as long with a fifth of them, and pauli twice as long with a twenty-fifth. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float both run with the scalar family's warning and are more fragile: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
+    {"bqd-zero", 1015, "<sm|copy>", 0, "With -d bqd: what a node does where its low cofactor is zero, the zero rule (default sm, in every family). copy is the paper's def:bqd: every node stores its low cofactor and the ratio of the two, and where the low cofactor is zero the ratio holds a copy of the high one, so a gate that recurses on a node's stored edges has to multiply that part off again. sm, Shannon where misaligned, has no copy: a node whose high cofactor is zero wherever its low one is stores the ratio, as before, and any other node stores its two cofactors and says so in a tag. The two give the same diagram on every state of full support and on every state whose support is an affine subspace, the stabiliser states among them; elsewhere they differ, and on the circuits measured in the scalar family sm's has had no more nodes than copy's at the end of a run or at its peak, and between gates at most 7.5% more, on 21 of 17,721 states. Each rule has its own gate algorithms, so a timing of one against the other measures the rule and the algorithms together. On a state of full support the two hold one diagram and sm's recursion is still the faster one: it takes a gate through a node whose ratio does not depend on the gate's qubit without forming the high cofactor, and multiplies and divides two nodes that store ratios level by level. On clifford_T_circuit_20_700 copy spends 89% of its time on the 39 gates it meets on full support, and sm runs those 148 times faster. On a state with zeros no gate under sm makes a copy or multiplies one off, which adds to that. With a node table of 2^25, in the scalar family, hidden-shift_n30, which never has full support, fills it under copy and takes 1 s under sm, clifford_T_circuit_20_700 runs out of 900 s under copy and takes 50 s under sm, and rand_18_500, with 5 of 500 gates on full support, takes 20 s under copy and 1 s under sm. x and pauli have sm too: there a node's high cofactor is moved by its least point before its tag is decided, so a translation can turn a node of one kind into the other, and the two rules are again one diagram on full and affine supports. With the same table, rand_18_500 takes 0.9 s in x and 1.6 s in pauli under sm, and 61 s and 145 s under copy; hidden-shift_n30 takes 1.5 s and 2.0 s under sm, and copy reaches gate 325 and 301 of 431 in 900 s; clifford_T_circuit_20_700 takes 41 s and 48 s under sm, and copy reaches gate 681 and 654 of 700. On those three and ising_n16_s3, sm's diagram had more nodes than copy's after 7 of the 3,133 gates both rules ran, at most 7.1% more, and never a larger peak; on 36 smaller circuits it had neither a larger final count nor a larger peak in either family.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -244,12 +244,6 @@ parse_opt(int key, char *arg, struct argp_state *state)
         if (state->arg_num < 1) argp_usage(state);
         if (bqd_family_set && dd_kind != DD_BQD) argp_error(state, "--bqd-family needs -d bqd");
         if (bqd_zero_set && dd_kind != DD_BQD) argp_error(state, "--bqd-zero needs -d bqd");
-        if (bqd_zero_set && bqd_zero_opt == BQD_ZERO_SM && bqd_family_opt != BQD_FAMILY_SCALAR)
-            argp_error(state, "--bqd-zero=sm is the scalar family's for now; "
-                              "--bqd-family %s takes --bqd-zero=copy", bqd_family_opt_name);
-        /* the family's default where none was asked for */
-        if (!bqd_zero_set) bqd_zero_opt = (bqd_family_opt == BQD_FAMILY_SCALAR) ? BQD_ZERO_SM
-                                                                                 : BQD_ZERO_COPY;
         break;
     default:
         return ARGP_ERR_UNKNOWN;
@@ -834,10 +828,11 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
  * The zero rule, --bqd-zero, is fixed with the tables. Under the copy rule of
  * the paper's def:bqd a node whose low cofactor is zero somewhere holds a copy
  * of its high cofactor there, and the gates that recurse on stored edges
- * multiply it off again; under rule SM, the scalar family's default
- * (qsylvan_bqd_sm.h), such a node stores its two cofactors instead, and no
- * gate multiplies anything off. On full support and on affine supports the
- * two are one diagram, so the proved path above is the same under both.
+ * multiply it off again; under rule SM, the default in every family
+ * (qsylvan_bqd_sm.h, qsylvan_bqd_xp_sm.h), such a node stores its two
+ * cofactors instead, and no gate multiplies anything off. On full support and
+ * on affine supports the two are one diagram, so the proved path above is the
+ * same under both.
  *
  * Exact weights are what the arm is for. Float weights are taken all the
  * same, in every family and for every gate, with a warning: what they do is
@@ -858,10 +853,11 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
  * Hadamard on a qubit no gate has touched, which is the IQP layer.
  *
  * The translation and Pauli families, the X-BQD and the Pauli-BQD, take the
- * same gates through the same entry points (qsylvan_bqd_xp.h): the diagonal
- * ones by the O(n) walk while the state has full support, the scalar
- * family's in the translation family and one with label products in the
- * Pauli family, and every other gate by the recursion on labelled edges.
+ * same gates through the same entry points (qsylvan_bqd_xp_sm.h under rule
+ * SM, qsylvan_bqd_xp.h under the copy rule): the diagonal ones by the O(n)
+ * walk while the state has full support, the scalar family's in the
+ * translation family and one with label products in the Pauli family, and
+ * every other gate by the recursion on labelled edges.
  * They start from the same |0...0>. On floats they have two more ways to go
  * wrong. Their canonical form places every translation at the least point of
  * a support, a comparison with zero that a residue decides wrongly, and in
