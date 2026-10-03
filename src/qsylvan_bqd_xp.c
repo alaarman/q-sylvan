@@ -18,114 +18,16 @@
 #include <stdlib.h>
 
 #include "qsylvan_bqd_xp.h"
+#include "qsylvan_bqd_xp_int.h"
 #include "qsylvan_bqd_exp.h"
 #include "qsylvan_bqd_gates.h"
 #include "qsylvan_gates.h"
 #include "qsylvan_limdd_gc.h"
 
-/* --- labels ------------------------------------------------------------------ */
-
-/**
- * A label c Z^s X^t, read out of its LIM. s is the LIM's z word and t its x
- * word, bit q for qubit q, in the first lane: a BQD has at most 63 qubits.
- */
-typedef struct {
-    EVBDD_WGT c;
-    uint64_t  s, t;
-} label_t;
-
-static inline bool parity(uint64_t v) { return __builtin_parityll(v) != 0; }
-
-/*
- * -c, as the product with -1, which the operation cache remembers. wgt_neg
- * works out the value and looks it up in the weight table every time, and the
- * signs of the Pauli family -- of a cofactor, of a label product, the test
- * b = -a and the sign repair -- took a fifth of the time of its gates that way.
- */
-static inline EVBDD_WGT
-neg(EVBDD_WGT c)
-{
-    return wgt_mul(EVBDD_MIN_ONE, c);
-}
-
-/** The qubits above variable v, which are the bits below bit v. */
-static inline uint64_t
-above(uint32_t v)
-{
-    return (UINT64_C(1) << v) - 1;
-}
-
-static inline label_t
-label_read(LIMDD_LIM lim)
-{
-    label_t l = { EVBDD_ONE, 0, 0 };
-    if (lim == LIMDD_LIM_IDENTITY) return l;
-    if (limdd_lim_is_zero(lim)) { l.c = EVBDD_ZERO; return l; }
-    const limdd_pauli_t p = limdd_lim_pauli(lim);
-    l.c = limdd_lim_weight(lim);
-    l.s = p.z[0];
-    l.t = p.x[0];
-    return l;
-}
-
-/** The LIM of a label, interned through the per-worker memo; the zero weight gives the zero label. */
-static inline LIMDD_LIM
-label_lim(label_t l)
-{
-    return bqd_lim_word(l.c, l.s, l.t);
-}
-
-/**
- * The label a . b, which acts as b and then a. X^t Z^s = (-1)^{s.t} Z^s X^t,
- * so moving b's Z past a's X costs the sign of s_b . t_a.
- */
-static inline label_t
-label_mul(label_t a, label_t b)
-{
-    label_t r = { wgt_mul(a.c, b.c), a.s ^ b.s, a.t ^ b.t };
-    if (parity(b.s & a.t)) r.c = neg(r.c);
-    return r;
-}
-
-/** The inverse: (c Z^s X^t)(c' Z^s X^t) = c c' (-1)^{s.t}, so c' = c^-1 (-1)^{s.t}. */
-static inline label_t
-label_inv(label_t l)
-{
-    label_t r = { wgt_div(EVBDD_ONE, l.c), l.s, l.t };
-    if (parity(l.s & l.t)) r.c = neg(r.c);
-    return r;
-}
+/* The labels, the labelled edges, the least point and the conjugation of a
+ * label by a permutation are in qsylvan_bqd_xp_int.h. */
 
 /* --- labelled edges ---------------------------------------------------------- */
-
-static inline BQD
-unit(LIMDD_TARG t)
-{
-    return limdd_bundle(LIMDD_LIM_IDENTITY, t);
-}
-
-/**
- * The labelled edge l on N, normal: an X above the level of N acts on a
- * function that does not depend on that level, so Norm clears it
- * (skip:alg:xpedges). The zero scalar gives the zero edge.
- */
-static inline BQD
-xedge(label_t l, LIMDD_TARG N)
-{
-    if (l.c == EVBDD_ZERO) return limdd_zero_edge();
-    l.t &= ~above(limdd_level(N));
-    return limdd_bundle(label_lim(l), N);
-}
-
-/** The top of (l, N) as a variable: N's level, or the highest qubit with a Z above it. */
-static inline uint32_t
-top_var(LIMDD_TARG N, uint64_t s)
-{
-    const uint32_t v = limdd_level(N);
-    if (s == 0) return v;
-    const uint32_t z = (uint32_t)__builtin_ctzll(s);
-    return z < v ? z : v;
-}
 
 uint32_t
 bqd_xp_top(BQD e)
@@ -134,54 +36,13 @@ bqd_xp_top(BQD e)
     return top_var(limdd_target(e), label_read(limdd_label(e)).s);
 }
 
-/** k . e, which is canonical when e is (skip:lem:xscale). */
-static inline BQD
-xscale(EVBDD_WGT k, BQD e)
-{
-    if (k == EVBDD_ZERO || limdd_edge_is_zero(e)) return limdd_zero_edge();
-    if (k == EVBDD_ONE) return e;
-    label_t l = label_read(limdd_label(e));
-    l.c = wgt_mul(k, l.c);
-    /* on floats a product of two small scalars can merge with zero, and a zero
-     * label on a live node is not the zero edge: a division by it later gives
-     * a NaN (as lim_times_edge in the LIMDD) */
-    if (l.c == EVBDD_ZERO) return limdd_zero_edge();
-    return limdd_bundle(label_lim(l), limdd_target(e));
-}
-
 BQD
 bqd_xp_scale(BQD e, EVBDD_WGT c)
 {
     return xscale(c, e);
 }
 
-/** c on the terminal, the constant c; zero for c = 0. */
-static inline BQD
-constant(EVBDD_WGT c)
-{
-    const label_t l = { c, 0, 0 };
-    return xedge(l, LIMDD_TERMINAL);
-}
-
-/**
- * A labelled edge in a memo key, without its scalar: the index of its label's
- * Pauli word and its node, in one word (bqd_init keeps the Pauli table within
- * 32 bits). Read from the LIM's bucket, so a key interns nothing. The word is
- * the edge's own, before Norm: an X above the node gives a second key for the
- * same function, which costs a miss and not a wrong result, and the edges the
- * recursion makes are normal already. An operation that misses pushes its
- * operands onto the refs stack, since it reads their labels again after a
- * point where a collection can run, and a caller may hand it an edge nothing
- * else holds (the reversed CX of bqd_cgate_either passes one gate's result
- * to the next); that keeps the word of the key as well.
- */
-static inline uint64_t
-key_edge(BQD e)
-{
-    return (limdd_lim_pauli_ref(limdd_label(e)) << 32) | limdd_target(e);
-}
-
-/* --- cofactors and the least point ------------------------------------------- */
+/* --- cofactors --------------------------------------------------------------- */
 
 /**
  * The canonical edge of [N_0] (.) [N_1], memoised on N. Neither family has a
@@ -239,37 +100,6 @@ TASK_IMPL_3(BQD, bqd_xp_cofactor, BQD, e, uint32_t, v, int, b)
     const label_t h = label_mul(label_mul(l, label_read(limdd_label(hi))),
                                 label_read(limdd_label(J)));
     return xedge(h, limdd_target(J));
-}
-
-/**
- * The least point of supp(ext [N]) ^ tau, a mask of qubits (skip:lem:minpoint).
- * The support of a node is {0} x supp[N_0] together with {1} x (supp[N_1] ^ t_1),
- * the support shadow (lem:shadow), so the least point has a 0 at the node's
- * level exactly when the cofactor x = tau there is nonzero, and the walk goes
- * on in the cofactor it takes, moved by the translation that cofactor carries.
- * At a level an edge skips the support is closed under flipping the bit and
- * the least point has a 0 there, which the walk leaves in place. One path,
- * at most one step per level, and no memo.
- */
-static uint64_t
-minpoint(LIMDD_TARG N, uint64_t tau)
-{
-    uint64_t y = 0;
-    while (N != LIMDD_TERMINAL) {
-        const uint64_t bit = UINT64_C(1) << limdd_node_var(N);
-        const LIMDD lo = limdd_node_low(N), hi = limdd_node_high(N);
-        const bool tl = (tau & bit) != 0;
-        const bool up = tl ? !limdd_edge_is_zero(hi) : limdd_edge_is_zero(lo);  /* x = 1 */
-        if (up != tl) y |= bit;
-        tau &= ~bit;
-        if (up) {
-            tau ^= label_read(limdd_label(hi)).t;
-            N = limdd_target(hi);
-        } else {
-            N = limdd_target(lo);
-        }
-    }
-    return y;
 }
 
 /* --- Compose and Canon ------------------------------------------------------- */
@@ -338,19 +168,6 @@ TASK_IMPL_3(BQD, bqd_xp_compose, uint32_t, v, BQD, a, BQD, b)
     }
     const LIMDD_TARG node = limdd_makenode(v, unit(na), xedge(label_mul(xt, lk), limdd_target(k)));
     return limdd_bundle(label_lim(la), node);
-}
-
-/**
- * The result r of an operation on edges with the scalar c taken out of the
- * key, as the memo keeps it: r / c, canonical when r is (skip:lem:xscale).
- * The recursion runs on the edges as they are, scalar and all, and so returns
- * the result to hand back without a scale; the memo pays the one scale
- * instead, and no key interns an edge without its scalar.
- */
-static inline uint64_t
-memo_of(BQD r, EVBDD_WGT c)
-{
-    return (uint64_t)xscale(wgt_div(EVBDD_ONE, c), r);
 }
 
 /**
@@ -501,13 +318,6 @@ TASK_IMPL_3(BQD, bqd_xp_apply_op, int, op, BQD, f, BQD, g)
 }
 
 /* --- restriction, projection and gates --------------------------------------- */
-
-/** The scalar of a labelled edge's label. */
-static inline EVBDD_WGT
-scalar_of(BQD e)
-{
-    return limdd_lim_weight(limdd_label(e));
-}
 
 /**
  * skip:alg:xrestrict, as bqd_restrict does it in the scalar family, at the
@@ -845,21 +655,6 @@ bqd_xp_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t n, uint32_t *visits
  * labelled cofactors, since its two operands carry different high labels.
  */
 
-/** The node of an edge, or 0 for the zero edge. */
-static inline LIMDD_TARG
-node_or_zero(BQD e)
-{
-    return limdd_edge_is_zero(e) ? 0 : limdd_target(e);
-}
-
-/* the label (1, 0, t), the translation X^t */
-static inline label_t
-xlabel(uint64_t t)
-{
-    const label_t l = { EVBDD_ONE, 0, t };
-    return l;
-}
-
 /**
  * Ind of skip:alg:constructors in these families: the indicator of supp [t]
  * has the X parts of t's labels, since the high cofactor's support is the
@@ -1129,45 +924,6 @@ TASK_IMPL_2(BQD, bqd_xp_canon_t, LIMDD_TARG, N, uint64_t, tau)
 }
 
 /* --- permutations of two qubits ------------------------------------------------ */
-
-/** pi on a mask of qubits, (pi m) for the permutation `kind` of qa < qb. */
-static inline uint64_t
-perm_mask(uint32_t kind, uint32_t qa, uint32_t qb, uint64_t m)
-{
-    const uint64_t a = (m >> qa) & 1, b = (m >> qb) & 1;
-    uint64_t na = a, nb = b;
-    switch (kind) {
-    case BQD_PERM_SWAP:    na = b; nb = a; break;
-    case BQD_PERM_CX_DOWN: nb = b ^ a;     break;     /* control qa, target qb */
-    default:               na = a ^ b;     break;     /* control qb, target qa */
-    }
-    m &= ~((UINT64_C(1) << qa) | (UINT64_C(1) << qb));
-    return m | (na << qa) | (nb << qb);
-}
-
-/**
- * The conjugated label l^pi = c Z^{pi^T s} X^{pi t}, pi . (l . g) = l^pi . pi g:
- * s . pi x = pi^T s . x, and pi x xor t = pi (x xor pi t). The swap is its own
- * transpose, and the CX with the control above is the transpose of the one
- * with the control below.
- */
-static inline label_t
-perm_label(uint32_t kind, uint32_t qa, uint32_t qb, label_t l)
-{
-    const uint32_t tk = kind == BQD_PERM_SWAP ? kind
-                      : kind == BQD_PERM_CX_DOWN ? (uint32_t)BQD_PERM_CX_UP : (uint32_t)BQD_PERM_CX_DOWN;
-    l.s = perm_mask(tk, qa, qb, l.s);
-    l.t = perm_mask(kind, qa, qb, l.t);
-    return l;
-}
-
-/** label . e, normal and not canonical: the label product, which Canon makes canonical. */
-static inline BQD
-relabel(label_t l, BQD e)
-{
-    if (limdd_edge_is_zero(e)) return e;
-    return xedge(label_mul(l, label_read(limdd_label(e))), limdd_target(e));
-}
 
 /**
  * Pair of skip:alg:perm on labelled edges: [x_b = 0] A|_{x_b = s} +
