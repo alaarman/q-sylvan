@@ -71,12 +71,13 @@
  *                 after every gate
  *   the two rules a session of bqd_init_rule with the copy rule runs it and
  *                 makes no node with a flag, and bqd_init gives the scalar
- *                 family SM and the other two the copy rule; on every function
- *                 of full support and every coset state the two rules have
- *                 the same number of nodes at every level (skip:cor:smd0); on
- *                 supports that misalign the counts are printed, not checked;
- *                 and bqd_init_rule with SM and the translation or Pauli
- *                 family exits with a message, in a child process
+ *                 family SM; on every function of full support and every
+ *                 coset state the two rules have the same number of nodes at
+ *                 every level (skip:cor:smd0); on supports that misalign the
+ *                 counts are printed, not checked; and bqd_init gives the
+ *                 translation and Pauli families their SM session, not this
+ *                 one, and bqd_init_rule with the copy rule gives them the
+ *                 copy rule
  *   collections   limdd_gc between operations in small tables, on protected
  *                 results on 8 and 6 qubits, each result checked as above, the
  *                 gates, selections and phases among the operations, and
@@ -90,8 +91,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #include <sylvan.h>
 #include <sylvan_int.h>
@@ -1751,9 +1750,16 @@ TASK_0(int, run_rules)
            copy_nodes, other);
     bqd_quit();
     for (int fam = BQD_FAMILY_X; fam <= BQD_FAMILY_PAULI; fam++) {
+        /* SM of those families is qsylvan_bqd_xp_sm.h's, and test_bqd_xp_sm's;
+         * it is their default too */
         bqd_init((bqd_family_t)fam, NQ, 1LL << 16, 1LL << 16, 1LL << 18, 1LL << 16);
-        expect(bqd_zero_rule() == BQD_ZERO_COPY && !bqd_sm(), "the two rules",
-               "bqd_init does not give the translation or Pauli family the copy rule");
+        expect(bqd_zero_rule() == BQD_ZERO_SM && !bqd_sm() && bqd_xp_sm(), "the two rules",
+               "bqd_init does not give the translation or Pauli family its SM");
+        bqd_quit();
+        bqd_init_rule((bqd_family_t)fam, BQD_ZERO_COPY, NQ, 1LL << 16, 1LL << 16, 1LL << 18,
+                      1LL << 16);
+        expect(bqd_zero_rule() == BQD_ZERO_COPY && !bqd_sm() && !bqd_xp_sm(), "the two rules",
+               "bqd_init_rule with the copy rule does not give the translation or Pauli family it");
         bqd_quit();
     }
     free(rs);
@@ -1965,45 +1971,6 @@ TASK_0(int, run_sm)
     return failures != before;
 }
 
-/**
- * bqd_init_rule with SM and the translation or the Pauli family exits with
- * a message before it makes a table, so it runs in a child, outside Lace and
- * Sylvan, and its exit status and stderr are what is checked.
- */
-static int
-sm_refused(void)
-{
-    const int before = failures;
-    for (int fam = BQD_FAMILY_X; fam <= BQD_FAMILY_PAULI; fam++) {
-        int fd[2];
-        if (pipe(fd) != 0) { perror("pipe"); return 1; }
-        fflush(stdout);
-        const pid_t pid = fork();
-        if (pid == 0) {
-            dup2(fd[1], 2);
-            close(fd[0]);
-            bqd_init_rule((bqd_family_t)fam, BQD_ZERO_SM, 4, 1 << 10, 1 << 10, 1 << 10, 1 << 10);
-            _exit(7);                                /* it went on */
-        }
-        close(fd[1]);
-        char msg[256] = { 0 };
-        size_t got = 0;
-        ssize_t k;
-        while (got < sizeof(msg) - 1 && (k = read(fd[0], msg + got, sizeof(msg) - 1 - got)) > 0)
-            got += (size_t)k;
-        close(fd[0]);
-        int status = 0;
-        waitpid(pid, &status, 0);
-        const bool ok = WIFEXITED(status) && WEXITSTATUS(status) == 1
-                     && strstr(msg, "scalar family") != NULL;
-        char what[96];
-        snprintf(what, sizeof(what), "bqd_init_rule(%s, SM) exits with a message",
-                 bqd_family_name((bqd_family_t)fam));
-        report(what, !ok, 1);
-    }
-    return failures != before;
-}
-
 /** A fresh Sylvan package, with 2^cache memo entries. */
 static void
 session_begin(unsigned workers, int cache)
@@ -2038,11 +2005,6 @@ main(void)
      * stale weights, report wrong vectors or crash. The 2^22 entries here are
      * far from half full, which a larger test would reach, so the copy is off. */
     setenv("LIMDD_NO_WGT_GC", "1", 1);
-
-    printf("== BQD, rule SM refused to the translation and Pauli families ==\n");
-    res = sm_refused();
-    printf("  %s\n", res ? "FAILED" : "ok");
-    bad |= res;
 
     printf("== BQD, rule SM, exact weights, %u workers ==\n", workers);
     session_begin(workers, 20);

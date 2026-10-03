@@ -48,9 +48,13 @@
  *
  * Everything but the last is exact, in Q(w_8, sqrt2): coset states have
  * amplitudes that are eighth roots of unity or zero, which is what the
- * paper's prototype stores. The scalar family runs twice, under the copy
- * rule of def:bqd and under rule SM, its default (qsylvan_bqd_sm.h), where
- * the points the copy rule copies are those of S nodes.
+ * paper's prototype stores. Each family runs twice, under the copy rule of
+ * def:bqd and under rule SM, the default (qsylvan_bqd_sm.h, and
+ * qsylvan_bqd_xp_sm.h for the translation and Pauli families), where the
+ * points the copy rule copies are those of S nodes; on a coset state the two
+ * rules are one diagram, so the bounds of thm:coset and thm:pcoset hold under
+ * both, and neither copies or makes an S node there. The float check runs
+ * the Pauli family under its default, SM.
  */
 
 #include <math.h>
@@ -749,8 +753,8 @@ TASK_2(int, runtests, int, fam, int, rule)
     return failures != before;
 }
 
-/* The scalar family under each zero rule, SM and the copy rule of def:bqd,
- * and the other two under the copy rule, theirs. */
+/* Each family under each zero rule, SM, the default, and the copy rule of
+ * def:bqd. */
 static int
 run_family(bqd_family_t fam, bqd_zero_rule_t rule)
 {
@@ -832,7 +836,9 @@ main(void)
     bad |= run_family(BQD_FAMILY_SCALAR, BQD_ZERO_COPY);
     bad |= run_family(BQD_FAMILY_SCALAR, BQD_ZERO_SM);
     bad |= run_family(BQD_FAMILY_X, BQD_ZERO_COPY);
+    bad |= run_family(BQD_FAMILY_X, BQD_ZERO_SM);
     bad |= run_family(BQD_FAMILY_PAULI, BQD_ZERO_COPY);
+    bad |= run_family(BQD_FAMILY_PAULI, BQD_ZERO_SM);
 
     printf("== Pauli-BQD, float weights ==\n");
     lace_start(4, 0);

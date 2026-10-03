@@ -216,6 +216,26 @@ static const uint64_t CACHE_BQD_SM_DIAG              = (168LL<<40);
 static const uint64_t CACHE_BQD_SM_PHASEMUL          = (169LL<<40);
 static const uint64_t CACHE_BQD_SM_EXP               = (170LL<<40);
 static const uint64_t CACHE_BQD_SM_IOTA              = (171LL<<40);
+/* the translation and Pauli families under rule SM, qsylvan_bqd_xp_sm.h
+ * (skip:sec:sm:xp of bqd-skip.tex): keys of labelled edges, as the copy
+ * rule's of those families, under ids of their own */
+static const uint64_t CACHE_BQD_XPSM_MUL             = (172LL<<40);
+static const uint64_t CACHE_BQD_XPSM_RATIO           = (173LL<<40);
+static const uint64_t CACHE_BQD_XPSM_ADD             = (174LL<<40);
+static const uint64_t CACHE_BQD_XPSM_COF1            = (175LL<<40);
+static const uint64_t CACHE_BQD_XPSM_CANON           = (176LL<<40);
+static const uint64_t CACHE_BQD_XPSM_IND             = (177LL<<40);
+static const uint64_t CACHE_BQD_XPSM_SUBSET          = (178LL<<40);
+static const uint64_t CACHE_BQD_XPSM_DEP             = (179LL<<40);
+static const uint64_t CACHE_BQD_XPSM_GATE            = (180LL<<40);
+static const uint64_t CACHE_BQD_XPSM_RESTRICT        = (181LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PROJECT         = (182LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PAIR0           = (183LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PAIR1           = (184LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PERM            = (185LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PHASEMUL        = (186LL<<40);
+static const uint64_t CACHE_BQD_XPSM_PHASEMULP       = (187LL<<40);
+static const uint64_t CACHE_BQD_XPSM_SIDE            = (188LL<<40);
 
 // Operations on EVBDD edge weights
 static const uint64_t CACHE_WGT_ADD                 = (80LL<<40);

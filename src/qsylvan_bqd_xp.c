@@ -25,7 +25,8 @@
 #include "qsylvan_limdd_gc.h"
 
 /* The labels, the labelled edges, the least point and the conjugation of a
- * label by a permutation are in qsylvan_bqd_xp_int.h. */
+ * label by a permutation are in qsylvan_bqd_xp_int.h, which the translation
+ * and Pauli families share with their rule SM. */
 
 /* --- labelled edges ---------------------------------------------------------- */
 
@@ -683,7 +684,7 @@ TASK_IMPL_1(LIMDD_TARG, bqd_xp_ind, LIMDD_TARG, t)
 }
 
 /** iota(t): the indicator of supp [t] as a 0/1 exponent, the high child's translated by t_1. */
-TASK_1(BQD_EXP, bqd_xp_iota, LIMDD_TARG, t)
+TASK_IMPL_1(BQD_EXP, bqd_xp_iota, LIMDD_TARG, t)
 {
     if (t == 0) return mtbdd_int64(0);
     if (t == LIMDD_TERMINAL) return mtbdd_int64(1);

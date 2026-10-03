@@ -68,6 +68,7 @@ target_sources(qsylvan
     qsylvan_bqd_xp.c
     qsylvan_bqd_exp.c
     qsylvan_bqd_sm.c
+    qsylvan_bqd_xp_sm.c
     qsylvan_evdd_ops.c
   PUBLIC
     FILE_SET HEADERS
@@ -113,6 +114,7 @@ target_sources(qsylvan
       qsylvan_bqd_xp.h
       qsylvan_bqd_exp.h
       qsylvan_bqd_sm.h
+      qsylvan_bqd_xp_sm.h
       qsylvan_evdd_ops.h
       qsylvan_limdd_stab.h
       qsylvan_limdd_canon.h

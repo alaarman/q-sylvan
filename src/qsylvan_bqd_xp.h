@@ -17,7 +17,9 @@
 /**
  * The operations of the translation and Pauli families, the X-BQD and the
  * Pauli-BQD, whose labels are c X^t and c Z^s X^t (skip:sec:xp of the note
- * "Binary Quotient Diagrams with Level Skipping", bqd-skip.tex).
+ * "Binary Quotient Diagrams with Level Skipping", bqd-skip.tex), under the
+ * copy rule. A session of rule SM in these families runs qsylvan_bqd_xp_sm.h
+ * instead, to which the public entry points send it.
  *
  * The scheme is the scalar family's (qsylvan_bqd_gates.h): a pointwise
  * operation acts on each cofactor separately, so it recurses on the cofactors
@@ -223,6 +225,13 @@ BQD bqd_xp_diagonal(BQD e, uint64_t A, EVBDD_WGT phase, uint32_t nqubits, uint32
 
 /** Ind in these families: the indicator of supp [t], with the X parts of t's high labels. */
 TASK_DECL_1(LIMDD_TARG, bqd_xp_ind, LIMDD_TARG);
+
+/**
+ * iota(t): the indicator of supp [t] as a 0/1 exponent, t a node, the terminal
+ * or 0. It reads the support shadow and nothing else, which is the same under
+ * either zero rule, so rule SM's MulOff (qsylvan_bqd_xp_sm.h) takes it too.
+ */
+TASK_DECL_1(BQD_EXP, bqd_xp_iota, LIMDD_TARG);
 
 /** Perm of skip:alg:xratio: Canon(l^pi . PermN(N)) for e = (l, N), PermN on the stored edges. */
 TASK_DECL_4(BQD, bqd_xp_perm, BQD, uint32_t, uint32_t, uint32_t);

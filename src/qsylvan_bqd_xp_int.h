@@ -15,17 +15,17 @@
  */
 
 /**
- * The labels and labelled edges of the translation and Pauli families, taken
- * out of the copy rule's operations (qsylvan_bqd_xp.c) so that another file of
- * operations on labelled edges can share them: a label c Z^s X^t read out of
- * its LIM, the label product and inverse of skip:sec:xp:edges, Norm, the top
- * of a labelled edge, a scale, the key word of a labelled edge in a memo, the
- * least point of a support, which reads the support shadow and no stored
- * ratio, and the conjugation of a label by a permutation of two qubits.
- * Private to the files of those families, and none of it reads the zero
- * rule. Every function is static inline but minpoint, which is static and not
- * inline: the copy rule's file called it as a static function before this
- * header took it, and inlining it there would change that rule's object code.
+ * The labels and labelled edges of the translation and Pauli families, which
+ * the copy rule's operations (qsylvan_bqd_xp.c) and rule SM's
+ * (qsylvan_bqd_xp_sm.c) share: a label c Z^s X^t read out of its LIM, the
+ * label product and inverse of skip:sec:xp:edges, Norm, the top of a labelled
+ * edge, a scale, the key word of a labelled edge in a memo, and the least
+ * point of a support, which reads the support shadow and so serves either
+ * rule, and the conjugation of a label by a permutation of two qubits.
+ * Private to those two files, and none of them reads the zero rule. Every
+ * function is static inline but minpoint, which is static and not inline: the
+ * copy rule's file called it as a static function before this header took
+ * it, and inlining it there would change that rule's object code.
  */
 
 #ifndef QSYLVAN_BQD_XP_INT_H
