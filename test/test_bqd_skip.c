@@ -2594,6 +2594,13 @@ main(void)
     checked = calloc(1, sizeof(nodeset_t));
     if (walked == NULL || checked == NULL) { fprintf(stderr, "out of memory\n"); return 1; }
     int bad = 0;
+    /* The collection tests keep weight indices across limdd_gc: the dense
+     * vectors of the kept results, pw[] and isq2. A collection that finds the
+     * weight table more than half full copies the live weights to new
+     * indices, which those do not follow, and the checks would then read
+     * stale weights, report wrong vectors or crash. The 2^22 entries here are
+     * far from half full, which a larger test would reach, so the copy is off. */
+    setenv("LIMDD_NO_WGT_GC", "1", 1);
     for (unsigned r = 0; r < repeat; r++) {
         for (int fam = BQD_FAMILY_SCALAR; fam <= BQD_FAMILY_PAULI; fam++) {
             if (only >= 0 && fam != only) continue;
