@@ -19,10 +19,17 @@
 # 4 October, 'L2' and 'low', on the binary of the LIMDD runs), Figures 6 to 8
 # are also made from those, into final_plots_mm-(in)correct2 as
 # wgt_*_float_l2_vs_algebraic_nw.pdf and wgt_*_float_low_vs_algebraic_nw.pdf,
-# and so is an alternative Figure 9 into limdd2/, with the L2 float EVDD and,
-# when ROOT has amend/out_limdd_l2 (the LIMDD with every node read at norm 1,
-# run_arm.sh limdd_float_l2), the L2 float LIMDD. No rerun is read by any
-# other step.
+# and so are alternatives of Figures 9 and 10 into limdd2/, with the L2 float
+# EVDD and, when ROOT has amend/out_limdd_l2 (the LIMDD with every node read at
+# norm 1, run_arm.sh limdd_float_l2), the L2 float LIMDD. When ROOT also has
+# amend/out_limdd_low (the low float LIMDD rerun on the build of
+# out_limdd_l2), the same alternatives are made with the low floats of the
+# reruns into limdd2_low/. Both folders also get Figure 11's two PDFs, which
+# have no float run, so that either can stand in for the paper's limdd/. Every
+# alternative judges a float run as Figures 6 to 8 do (make_figures.judge): a
+# run whose measurement cannot be checked is grey. The paper's own figures
+# keep the 2026-10-01 revision's rule (--unchecked right). No rerun is read by
+# any other step.
 set -u
 [ $# -eq 2 ] || { echo "usage: $0 ROOT OUTDIR" >&2; exit 2; }
 ROOT=$1; O=$2
@@ -42,7 +49,7 @@ NEW=("$ROOT/ldd/out" "$ROOT/amend/out_rnd" "$ROOT/amend/out")
 mkdir -p "$O"
 fail=()
 step() { local log=$1; shift; "$@" > "$O/$log" 2>&1 || fail+=("$log"); }
-step make_figures.out      "$PY" "$S/make_figures.py" -v "${OLD[@]}" "${Q[@]}" --dump "$O/merged_records.csv" "${NEW[@]}" "$O"
+step make_figures.out      "$PY" "$S/make_figures.py" -v --unchecked right "${OLD[@]}" "${Q[@]}" --dump "$O/merged_records.csv" "${NEW[@]}" "$O"
 step amend_numbers.out     "$PY" "$S/amend_numbers.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step amend_stats.out       "$PY" "$S/amend_stats.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step make_theorem_figs.out "$PY" "$S/make_theorem_figs.py" "$ROOT/amend/trace" "$O"
@@ -59,6 +66,13 @@ if [ -d "$ROOT/amend/out_l2" ] && [ -d "$ROOT/amend/out_low" ]; then
   fi
   step make_figures_l2.out "$PY" "$S/make_figures.py" -v --float-evdd float_l2 ${LLOPT[@]+"${LLOPT[@]}"} \
        "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" ${LLDIR[@]+"${LLDIR[@]}"} "$O/limdd2"
+  step tcount_l2.out cp "$O/width_vs_tcount.pdf" "$O/bits_vs_tcount.pdf" "$O/limdd2/"
+  if [ -d "$ROOT/amend/out_limdd_low" ]; then
+    step make_figures_low.out "$PY" "$S/make_figures.py" -v --low-label --float-evdd float_low \
+         --float-limdd limdd_float "${OLD[@]}" "${Q[@]}" "${NEW[@]}" \
+         "$ROOT/amend/out_low" "$ROOT/amend/out_limdd_low" "$O/limdd2_low"
+    step tcount_low.out cp "$O/width_vs_tcount.pdf" "$O/bits_vs_tcount.pdf" "$O/limdd2_low/"
+  fi
 fi
 # checks behind the 2026-10-01 revision
 step evdd_float_versions.out "$PY" "$V/evdd_float_versions.py" "$ROOT"

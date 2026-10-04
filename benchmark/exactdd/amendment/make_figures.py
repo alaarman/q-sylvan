@@ -42,8 +42,12 @@ the exact one by more than 5%. The exact probability is taken from the panel's
 own exact arm, and from the other exact arm when that one did not finish (the
 two are exact, so they agree wherever both finished; the script checks this).
 When no exact arm finished, or the float record carries no probability (the
-run_gw.sh status lines), the run is judged by its norm alone, and the
-printout says how many points that applies to.
+run_gw.sh status lines), only the norm can be checked: if it is 1, the
+measurement is not checked and the run is drawn grey, as Figures 6 to 8
+(make_section6_figures.py) draw it. Both scripts judge through judge() below.
+--unchecked right counts such a run as correct instead, as the figures of the
+2026-10-01 revision did (regen_amendment.sh passes it for those), and keeps
+that revision's legend.
 
 --rule section6 applies the rule of Section 6 of the paper instead: a float run
 is wrong when its top-qubit probability is more than 5% off the exact one, and
@@ -68,6 +72,8 @@ LIMDD_ARMS = ("limdd_qisq2", "limdd_float", "limdd_float_l2")
 EXACT = ("limdd_qisq2", "qisq2_low")           # either can serve as the truth
 SENTINEL = 1e10
 RULE = "amend"                                 # or "section6" (--rule)
+UNCHECKED = "right"                            # or "grey" (--unchecked; its default); the
+                                               # numbers scripts keep the revision's "right"
 GREY = "0.55"                                  # a float run that was not judged
 UNJUDGED = set()                               # panels with a run that was not judged
 WIDE = 64                                      # one 64-bit Pauli word
@@ -226,22 +232,6 @@ def norm_of(d):
     try: return float(d.get("norm"))
     except (TypeError, ValueError): return None
 
-def wrong(pf, pa, dfloat=None):
-    """The paper's 5% rule on the measurement, AND a check on the norm.
-
-    The 5% rule alone is not enough: on the 30-qubit hidden shift the float
-    run returns norm 0 -- the state has been annihilated -- while its
-    top-qubit probability coincidentally equals the exact one, so the rule
-    calls it correct. A unitary circuit cannot produce an unnormalised state,
-    so a norm away from 1 is a wrong answer whatever the measurement says.
-    """
-    if dfloat is not None:
-        nf = norm_of(dfloat)
-        if nf is None or nf != nf or abs(nf - 1.0) > 1e-3: return True
-    if pf is None or pa is None: return True
-    if pf >= SENTINEL or pf != pf: return True
-    return abs(pf - pa) > 0.05 * max(abs(pa), 1e-12)
-
 def judge_section6(r, judge, ref):
     """Section 6's rule, (bad, how): bad is None when the run is not judged."""
     pf = p(r[judge])
@@ -253,24 +243,42 @@ def judge_section6(r, judge, ref):
             return abs(pf - pa) > 0.05 * max(abs(pa), 1e-12), ("p" if a == ref else "p:" + a)
     return None, "no-exact"
 
-def judge_point(r, judge, ref):
-    """(bad, how). how is 'norm!=1' (wrong on the norm alone), 'sentinel'
-    (the runner's error value for the probability), 'p' (5% rule against the
-    panel's own exact arm), 'p:<arm>' (against the other exact arm, the own
-    one did not finish), or 'norm-only' (norm is 1 and there is nothing to
-    compare the probability with: no exact arm finished, or the float record
-    is a run_gw.sh status line without a probability; counted as correct)."""
-    if RULE == "section6": return judge_section6(r, judge, ref)
-    d = r[judge]
-    nf = norm_of(d)
-    if nf is None or nf != nf or abs(nf - 1.0) > 1e-3: return True, "norm!=1"
-    pf = p(d)
-    if pf is not None and (pf >= SENTINEL or pf != pf): return True, "sentinel"
-    if pf is not None:
-        for a in (ref,) + tuple(e for e in EXACT if e != ref):
-            if a in r and p(r[a]) is not None:
-                return wrong(pf, p(r[a]), d), ("p" if a == ref else "p:" + a)
-    return False, "norm-only"
+def judge(r, arm, ref):
+    """The float run r[arm] by the amendment's rule, as every figure judges it:
+    (verdict, how). verdict is 'meas' when its top-qubit probability is the
+    runner's error value or more than 5% off the exact one (Section 6's rule,
+    judge_section6), 'norm' when its measurement is not wrong but its norm is
+    more than 1e-3 off 1, 'unchecked' when its norm is 1 and there is no exact
+    probability to compare its own with, and 'right' otherwise. how is
+    'norm!=1' whenever the norm is off, else judge_section6's.
+
+    The 5% rule alone is not enough: on the 30-qubit hidden shift the float
+    run returns norm 0 -- the state has been annihilated -- while its
+    top-qubit probability coincidentally equals the exact one, so the rule
+    calls it correct. A unitary circuit cannot produce an unnormalised state,
+    so a norm away from 1 is a wrong answer whatever the measurement says."""
+    meas, how = judge_section6(r, arm, ref)          # True, False or None
+    nf = norm_of(r[arm])
+    normbad = nf is None or nf != nf or abs(nf - 1.0) > 1e-3
+    if meas: v = "meas"
+    elif normbad: v = "norm"
+    elif meas is None: v = "unchecked"
+    else: v = "right"
+    return v, ("norm!=1" if normbad else how)
+
+def judge_point(r, judge_arm, ref):
+    """(bad, how) as the panels take it: bad is True for judge()'s 'meas' and
+    'norm', and for 'unchecked' None (drawn grey) or, with UNCHECKED 'right',
+    False. how is 'norm!=1', 'sentinel' (the runner's error value for the
+    probability), 'p' (5% rule against the panel's own exact arm), 'p:<arm>'
+    (against the other exact arm, the own one did not finish), or 'norm-only'
+    (norm is 1 and there is nothing to compare the probability with: no exact
+    arm finished, or the float record is a run_gw.sh status line without a
+    probability)."""
+    if RULE == "section6": return judge_section6(r, judge_arm, ref)
+    v, how = judge(r, judge_arm, ref)
+    if v == "unchecked": return (None if UNCHECKED == "grey" else False), "norm-only"
+    return v != "right", how
 
 # --------------------------------------------------------------------------
 # plotting
@@ -407,21 +415,26 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
 
 def legend(fname, grey=False):
     """One shared legend, so the panels keep their space. grey adds the runs
-    that were not judged (--rule section6)."""
+    that were not judged (no exact probability to compare with). The labels
+    say what was checked: the measurement alone under --rule section6, the
+    measurement and the norm otherwise (worded as in the 2026-10-01 revision
+    with --unchecked right)."""
     fig = plt.figure(figsize=(6.4, 0.62))
     hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
                       ms=5, label=lab) for _, m, lab in FAMILY]
+    both = RULE != "section6" and UNCHECKED == "grey"
     xlab = ("float EVDD measurement wrong (lower row)" if RULE == "section6"
             else "float EVDD wrong (lower row)")
     hs += [plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:blue",
-                      mew=0.9, ms=5, label="measurement correct"),
+                      mew=0.9, ms=5, label="float correct" if both else "measurement correct"),
            plt.Line2D([], [], ls="", marker="o", mfc="tab:red", mec="tab:red",
-                      ms=5, label="float (LIMDD) measurement wrong"),
+                      ms=5, label="float (LIMDD) wrong" if both else "float (LIMDD) measurement wrong"),
            plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:orange",
                       mew=0.9, ms=5, label=xlab)]
     if grey:
         hs += [plt.Line2D([], [], ls="", marker="o", mfc=GREY, mec=GREY, ms=5,
-                          label="not judged (no exact run finished)")]
+                          label="float measurement not checked" if both
+                          else "not judged (no exact run finished)")]
     hs += [plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
                       label="did not finish (timeout or full table)")]
     fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
@@ -471,7 +484,7 @@ def dump(recs, path):
     print("  wrote", os.path.basename(path))
 
 def main():
-    global OUT, VERBOSE, RULE
+    global OUT, VERBOSE, RULE, UNCHECKED
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("paths", nargs="+", help="NEWDIR... OUTDIR")
     ap.add_argument("--old", action="append", default=[], help="old record: final.log-style file or status/JSON dir")
@@ -485,11 +498,18 @@ def main():
                     help="the float EVDD arm of the lower row and the EVDD panels")
     ap.add_argument("--float-limdd", choices=("limdd_float", "limdd_float_l2"), default="limdd_float",
                     help="the float LIMDD arm of the lower row and the LIMDD panels")
+    ap.add_argument("--unchecked", choices=("grey", "right"), default="grey",
+                    help="a float run with norm 1 and no exact probability to compare with: "
+                         "drawn grey, as Figures 6 to 8 draw it, or counted as correct "
+                         "(the 2026-10-01 revision)")
+    ap.add_argument("--low-label", action="store_true",
+                    help="'(low)' after a low float arm in the axis labels, as '(L2)' after an L2 one")
     a = ap.parse_args()
-    RULE = a.rule
+    RULE, UNCHECKED = a.rule, a.unchecked
     FE, FL = a.float_evdd, a.float_limdd
-    fl = " (L2)" if FE == "float_l2" else ""   # the default labels stay as the paper has them
-    ll = " (L2)" if FL == "limdd_float_l2" else ""
+    low = " (low)" if a.low_label else ""     # without it the labels stay as the paper has them
+    fl = " (L2)" if FE == "float_l2" else low
+    ll = " (L2)" if FL == "limdd_float_l2" else low
     if len(a.paths) < 1: ap.error("need OUTDIR")
     OUT, new = a.paths[-1], a.paths[:-1]
     VERBOSE = a.verbose

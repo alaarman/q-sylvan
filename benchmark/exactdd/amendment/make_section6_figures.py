@@ -57,17 +57,16 @@ COL_OK, COL_BAD, COL_NA = "royalblue", "darkorange", "0.55"   # as the originals
 COL_NORM = "darkviolet"
 
 def category(r):
-    """The float run's marker: 'bad' when its measurement is wrong (Section 6's
-    5% rule, or the runner's error value), 'norm' when its norm is more than
-    1e-3 off 1 and its measurement is not wrong (not with --rule section6),
-    'nj' when its measurement could not be checked (no exact probability to
-    compare with), else 'ok'."""
-    meas = mf.judge_section6(r, FLOAT, EXACT)[0]           # True, False or None
-    if meas: return "bad"
-    if mf.RULE != "section6":
-        nf = mf.norm_of(r[FLOAT])
-        if nf is None or nf != nf or abs(nf - 1.0) > 1e-3: return "norm"
-    return "nj" if meas is None else "ok"
+    """The float run's marker, by make_figures.judge(), the rule of every
+    figure: 'bad' when its measurement is wrong (Section 6's 5% rule, or the
+    runner's error value), 'norm' when its norm is more than 1e-3 off 1 and its
+    measurement is not wrong (not with --rule section6), 'nj' when its
+    measurement could not be checked (no exact probability to compare with),
+    else 'ok'."""
+    if mf.RULE == "section6":
+        meas = mf.judge_section6(r, FLOAT, EXACT)[0]       # True, False or None
+        return "bad" if meas else ("nj" if meas is None else "ok")
+    return {"meas": "bad", "norm": "norm", "unchecked": "nj", "right": "ok"}[mf.judge(r, FLOAT, EXACT)[0]]
 
 def panel(rows, fails, fam, field, lab, path):
     pts = {"ok": ([], []), "bad": ([], []), "norm": ([], []), "nj": ([], []), "na": ([], [])}
