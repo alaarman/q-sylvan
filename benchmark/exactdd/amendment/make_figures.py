@@ -52,7 +52,9 @@ every probability, so it is wrong without an exact run to compare with; any
 other run with no exact probability to compare with is not judged and is drawn
 grey. --float-evdd picks the float EVDD arm of the lower row and of the EVDD
 panels: float_low (the default) or float_l2, the 'L2' normalisation that
-Section 6 calls float.
+Section 6 calls float. --float-limdd likewise picks the float LIMDD arm of the
+lower row and of the LIMDD panels: limdd_float (the default, low) or
+limdd_float_l2, the LIMDD with every node read at norm 1 (limdd_set_l2).
 """
 import argparse, json, math, os, re, sys, glob
 import matplotlib
@@ -61,8 +63,8 @@ import matplotlib.pyplot as plt
 
 OUT  = None                                    # set in main
 VERBOSE = False
-ARMS = ["qisq2_low", "limdd_qisq2", "float_low", "float_l2", "limdd_float"]
-LIMDD_ARMS = ("limdd_qisq2", "limdd_float")
+ARMS = ["qisq2_low", "limdd_qisq2", "float_low", "float_l2", "limdd_float", "limdd_float_l2"]
+LIMDD_ARMS = ("limdd_qisq2", "limdd_float", "limdd_float_l2")
 EXACT = ("limdd_qisq2", "qisq2_low")           # either can serve as the truth
 SENTINEL = 1e10
 RULE = "amend"                                 # or "section6" (--rule)
@@ -481,10 +483,13 @@ def main():
                     help="correctness rule: the amendment's (norm and 5%%) or Section 6's (5%% alone)")
     ap.add_argument("--float-evdd", choices=("float_low", "float_l2"), default="float_low",
                     help="the float EVDD arm of the lower row and the EVDD panels")
+    ap.add_argument("--float-limdd", choices=("limdd_float", "limdd_float_l2"), default="limdd_float",
+                    help="the float LIMDD arm of the lower row and the LIMDD panels")
     a = ap.parse_args()
     RULE = a.rule
-    FE = a.float_evdd
+    FE, FL = a.float_evdd, a.float_limdd
     fl = " (L2)" if FE == "float_l2" else ""   # the default labels stay as the paper has them
+    ll = " (L2)" if FL == "limdd_float_l2" else ""
     if len(a.paths) < 1: ap.error("need OUTDIR")
     OUT, new = a.paths[-1], a.paths[:-1]
     VERBOSE = a.verbose
@@ -505,16 +510,16 @@ def main():
         scatter(rows, "qisq2_low", "limdd_qisq2", field,
                 f"{lab} algebraic EVDD", f"{lab} algebraic LIMDD",
                 f"limdd_vs_evdd_{field}.pdf", fails=fails)
-        scatter(rows, FE, "limdd_float", field,
-                f"{lab} float EVDD{fl}", f"{lab} float LIMDD",
+        scatter(rows, FE, FL, field,
+                f"{lab} float EVDD{fl}", f"{lab} float LIMDD{ll}",
                 f"limdd_vs_evdd_float_{field}.pdf",
-                judge="limdd_float", truth="limdd_qisq2", fails=fails, xjudge=FE)
+                judge=FL, truth="limdd_qisq2", fails=fails, xjudge=FE)
         scatter(rows, FE, "qisq2_low", field,
                 f"{lab} float{fl}", f"{lab} algebraic",
                 f"evdd_float_vs_algebraic_{field}.pdf", judge=FE, fails=fails)
-        scatter(rows, "limdd_float", "limdd_qisq2", field,
-                f"{lab} float LIMDD", f"{lab} algebraic LIMDD",
-                f"limdd_float_vs_algebraic_{field}.pdf", judge="limdd_float", fails=fails)
+        scatter(rows, FL, "limdd_qisq2", field,
+                f"{lab} float LIMDD{ll}", f"{lab} algebraic LIMDD",
+                f"limdd_float_vs_algebraic_{field}.pdf", judge=FL, fails=fails)
     legend("panel_legend.pdf", grey=any(f.startswith("limdd_vs_evdd") for f in UNJUDGED))
     if a.dump: dump(recs, a.dump)
 

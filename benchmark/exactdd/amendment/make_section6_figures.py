@@ -18,10 +18,13 @@ the Grover and W-state circuits are those of ../gen_grover.py,
 ../gen_wstate_ancilla.py and ../gen_wstate_clifford.py (12 and 11, against the
 99 and 7 points of the originals), and the runs are those of an Apple M1.
 By default the float arm is the September 'low' run (the September sweep has no
-'L2' run) and the correctness rule is make_figures.py's: a norm more than 1e-3
-off 1, the runner's error value, or a top-qubit probability more than 5% off
-the exact one. The September Grover and W-state records carry no probability,
-so those float runs are judged by their norm.
+'L2' run), and a float run counts as wrong by make_figures.py's rule: a norm
+more than 1e-3 off 1, the runner's error value, or a top-qubit probability more
+than 5% off the exact one. The two kinds are drawn apart: an orange circle when
+the measurement is wrong (the originals' marker), a violet diamond when only the
+norm is. A float run whose measurement cannot be checked (no exact probability
+to compare with; the September Grover and W-state records carry none) is a
+hollow grey triangle unless its norm is wrong.
 
 A run that did not finish (a timeout or a full table) sits on a dashed line:
 on the right when the float run failed, on top when the algebraic one did, in
@@ -33,10 +36,9 @@ drawn.
 it (run_arm.sh float_l2; its directory goes among the NEWDIRs, as does that of a
 float_low rerun, which then overrides the September records). --rule section6
 judges by Section 6's rule alone, a top-qubit probability more than 5% off the
-exact one, with no look at the norm (make_figures.py --rule); a float run with
-no exact probability to compare with is then not judged, and drawn as a hollow
-grey triangle. --tag puts TAG into the file names, float_TAG_vs_algebraic, so
-that versions can sit side by side.
+exact one, with no look at the norm (make_figures.py --rule). --tag puts TAG
+into the file names, float_TAG_vs_algebraic, and the x label, so that versions
+can sit side by side.
 """
 import argparse, math, os
 import matplotlib
@@ -52,9 +54,23 @@ QUANT = [("wgt_type_runtime_float_vs_algebraic_nw.pdf", "simulation_time", "runt
          ("wgt_final_nodecount_float_vs_algebraic_nw.pdf", "final_nodes", "final # of nodes"),
          ("wgt_nodecount_float_vs_algebraic_nw.pdf", "max_nodes", "peak # of nodes")]
 COL_OK, COL_BAD, COL_NA = "royalblue", "darkorange", "0.55"   # as the originals, plus grey
+COL_NORM = "darkviolet"
+
+def category(r):
+    """The float run's marker: 'bad' when its measurement is wrong (Section 6's
+    5% rule, or the runner's error value), 'norm' when its norm is more than
+    1e-3 off 1 and its measurement is not wrong (not with --rule section6),
+    'nj' when its measurement could not be checked (no exact probability to
+    compare with), else 'ok'."""
+    meas = mf.judge_section6(r, FLOAT, EXACT)[0]           # True, False or None
+    if meas: return "bad"
+    if mf.RULE != "section6":
+        nf = mf.norm_of(r[FLOAT])
+        if nf is None or nf != nf or abs(nf - 1.0) > 1e-3: return "norm"
+    return "nj" if meas is None else "ok"
 
 def panel(rows, fails, fam, field, lab, path):
-    pts = {"ok": ([], []), "bad": ([], []), "nj": ([], []), "na": ([], [])}
+    pts = {"ok": ([], []), "bad": ([], []), "norm": ([], []), "nj": ([], []), "na": ([], [])}
     nfail = {"float": 0, "algebraic": 0, "both": 0}
     circs = {c for c in rows if rows[c]["_fam"] == fam} | \
             {c for (c, a) in fails if a in (FLOAT, EXACT) and mf.family_of(c) == fam}
@@ -70,10 +86,7 @@ def panel(rows, fails, fam, field, lab, path):
         if x is None and y is None: nfail["both"] += 1
         elif x is None: nfail["float"] += 1
         elif y is None: nfail["algebraic"] += 1
-        if not fok: k = "na"
-        else:
-            bad = mf.judge_point(r, FLOAT, EXACT)[0]
-            k = "nj" if bad is None else ("bad" if bad else "ok")
+        k = category(r) if fok else "na"
         pts[k][0].append(x); pts[k][1].append(y)
     vals = [v for xs, ys in pts.values() for v in xs + ys if v is not None and v > 0]
     if not vals: print(f"  {path}: no data"); return
@@ -87,18 +100,19 @@ def panel(rows, fails, fam, field, lab, path):
     ax.plot([lo, hi], [lo, hi], ls="--", color="0.45", lw=1.2, zorder=1)
     if anyfail:
         mf.band(ax, lo, F, gap, top, nfail["both"], 6.5)
-    style = {"ok": ("^", COL_OK, "float measurement correct"),
+    style = {"ok": ("^", COL_OK, "float measurement correct" if mf.RULE == "section6" else "float correct"),
              "bad": ("o", COL_BAD, "float measurement wrong"),
-             "nj": ("^", COL_NA, "float measurement not judged"),
+             "norm": ("D", COL_NORM, "float norm wrong"),
+             "nj": ("^", COL_NA, "float measurement not checked"),
              "na": ("s", COL_NA, "float run did not finish")}
-    for k in ("ok", "bad", "nj", "na"):
+    for k in ("ok", "bad", "norm", "nj", "na"):
         xs, ys = pts[k]
         if not xs: continue
         m, col, label = style[k]
         kw = dict(facecolors="none", edgecolors=col, linewidths=0.9) if k == "nj" else dict(color=col)
         ax.scatter([F if v is None else max(v, floor) for v in xs],
                    [F if v is None else max(v, floor) for v in ys],
-                   marker=m, s=18, zorder=3, label=label, **kw)
+                   marker=m, s=13 if m == "D" else 18, zorder=3, label=label, **kw)
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlim(lo, top); ax.set_ylim(lo, top)
     if anyfail:
@@ -115,7 +129,8 @@ def panel(rows, fails, fam, field, lab, path):
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight"); plt.close(fig)
     print(f"  {os.path.relpath(path)}: {sum(len(v[0]) for v in pts.values())} points, "
-          f"{len(pts['bad'][0])} wrong{', %d not judged' % len(pts['nj'][0]) if pts['nj'][0] else ''}, "
+          f"{len(pts['bad'][0])} measurement wrong, {len(pts['norm'][0])} norm wrong, "
+          f"{len(pts['nj'][0])} not checked, "
           f"did not finish: float {nfail['float']}, "
           f"algebraic {nfail['algebraic']}, both {nfail['both']}")
 

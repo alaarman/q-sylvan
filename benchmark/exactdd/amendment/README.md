@@ -76,6 +76,7 @@ by record, as listed in `regen_amendment.sh`.
 | `exactdd/final.log` | the September records of the random circuits, all four arms, one status line per run (`arm circuit status time final peak norm p_top`), later lines win | the 25-26 September sweep, same EVDD flags as `run_arm.sh` |
 | `gw/out/`, `gw/out2/` | the September records of the other families, `<circ>_<arm>.status` with `circuit arm status time final peak norm t_count final_width` (no top-qubit probability) | the 25-26 September sweep |
 | `amend/out_l2/`, `amend/out_low/` (optional) | the float EVDD rerun of 4 October on the 72 circuits of Figures 6 to 9 (49 random, 12 Grover, 11 W state): `float_l2` ('L2' normalisation, Section 6's float) and `float_low`, both with `-m`, on the binary of the LIMDD runs | `run_arm.sh` |
+| `amend/out_limdd_l2/` (optional) | `limdd_float_l2` on the same 72 circuits: the float LIMDD with every node read at norm 1 (`-s l2`, `limdd_set_l2`), on a build of the working tree on top of `2d070f4` that is kept with the data, with its patch | `run_arm.sh` |
 
 Only the EVDD arms (`qisq2_low`, `float_low`) are taken from the September
 records; their LIMDD records there are superseded by the October runs, and
@@ -118,26 +119,33 @@ against the 12 and 11 circuits here; only the 49 random circuits are the same.
 
 `make_section6_figures.py` remakes Figures 6 to 8 of the paper (EVDD, float
 against algebraic, one panel per family and quantity) into
-`OUTDIR/final_plots_mm-(in)correct2/`. When ROOT has `amend/out_l2` and
-`amend/out_low`, it makes them twice from that rerun, both by Section 6's rule
-(a top-qubit probability more than 5% off the exact one, the norm not looked
-at): with 'L2' floats under the file names of the paper's
-`figures/final_plots_mm-(in)correct/`, and with 'low' floats under
-`wgt_*_float_low_vs_algebraic_nw.pdf`. Without that rerun it makes them once,
-from the September records ('low', under the original names, by the rule of
-`make_figures.py`, which judges the Grover and W-state floats by their norm,
-since those records carry no probability). Either way they differ from the
-originals in ways the text has to say: the Grover and W-state circuits are
-ours, the runs are those of the Apple M1, and the algebraic runs come from the
-September code while the rerun's floats come from the October binary.
+`OUTDIR/final_plots_mm-(in)correct2/`, under the file names of the paper's
+`figures/final_plots_mm-(in)correct/`, from the September records ('low'
+floats; the September sweep has no 'L2' run). When ROOT has `amend/out_l2` and
+`amend/out_low`, it also makes them from that rerun, as
+`wgt_*_float_l2_vs_algebraic_nw.pdf` and `wgt_*_float_low_vs_algebraic_nw.pdf`.
+A float run counts as wrong by the rule of `make_figures.py`, and the two kinds
+of error are drawn apart: an orange circle when the measurement is more than 5%
+off (the originals' marker), a violet diamond when only the norm is more than
+1e-3 off 1. A float run whose measurement cannot be checked, for want of an
+exact probability, is a hollow grey triangle unless its norm is wrong; the
+September Grover and W-state records carry no probability, the rerun does.
+These figures differ from the originals in ways the text has to say: the
+Grover and W-state circuits are ours, the runs are those of the Apple M1, the
+rule includes the norm, and the algebraic runs come from the September code
+while the rerun's floats come from the October binary. (The paper's copies of
+the files under the original names were written by 723240c, before the norm
+and the measurement were drawn apart and the legend was moved.)
 
-With the rerun, `make_figures.py --rule section6 --float-evdd float_l2` also
-writes an alternative of `fig:limdd-vs-evdd` into `OUTDIR/limdd2/`: the same
-panels and file names, with the 'L2' float EVDD in the lower row and both
-float diagrams judged by Section 6's rule. A float run with no exact
-probability to compare with is not judged and drawn grey; the runner's error
-value (the zero state) is wrong without one. The paper's `figures/limdd2/` is
-its six `limdd_vs_evdd_*` panels and `panel_legend.pdf`.
+With the rerun, `make_figures.py --float-evdd float_l2` also writes an
+alternative of `fig:limdd-vs-evdd` into `OUTDIR/limdd2/`: the same panels,
+rule and file names, with the 'L2' float EVDD in the lower row, and with
+`--float-limdd limdd_float_l2`, when ROOT has `amend/out_limdd_l2`, the 'L2'
+float LIMDD as well. The paper's
+`figures/limdd2/` is its six `limdd_vs_evdd_*` panels and `panel_legend.pdf`.
+`make_figures.py --rule section6` judges by Section 6's rule alone (the
+norm not looked at; a run with no exact probability to compare with is drawn
+grey), for both of these scripts.
 
 In every scatter panel a run that did not finish (a timeout or a full table)
 sits on a dashed line in a shaded band beyond the data: on the right when the
@@ -181,10 +189,10 @@ except its `/CreationDate`. Set `SOURCE_DATE_EPOCH` (e.g. to 0) to fix that
 date and make two runs byte-identical.
 
 Every text output is identical to the one in `ROOT/amend/regen_out/` except
-in these four files (and, when ROOT has the October float EVDD rerun,
-`make_section6_figures.out` is replaced by `make_section6_figures_l2.out`,
-`make_section6_figures_low.out` and `make_figures_l2.out`, which the stored
-outputs predate):
+in these four files (`make_section6_figures.out` and, when ROOT has the
+October float EVDD rerun, `make_section6_figures_l2.out`,
+`make_section6_figures_low.out` and `make_figures_l2.out` are newer than the
+stored outputs):
 
 - `make_figures.out`: the line that names `merged_records.csv`, which the
   stored file gives with its absolute path and this script by name only.
@@ -268,7 +276,12 @@ for f in "${C[@]}"; do ./run_arm.sh float_l2 "$f" "$ROOT/amend/out_l2"; done
 for f in "${C[@]}"; do ./run_arm.sh float_low "$f" "$ROOT/amend/out_low"; done
 ```
 
-(two at a time). Its fifth argument, `limtab` (after `timeout_s`),
+(two at a time), and the float LIMDD under L2 the same way with the arm
+`limdd_float_l2` into `$ROOT/amend/out_limdd_l2`, with `QSY_W1` and `QSY_W2`
+built from a tree that has `limdd_set_l2`. A LIMDD reads `-s l2` only on
+complex weights and only when it is given: without `-s` it keeps the low
+normalisation, although the runner's default strategy is L2, and on qisq2
+weights `-s l2` falls back to low. Its fifth argument, `limtab` (after `timeout_s`),
 sets `--lim-tab-size` on the LIMDD arms; no run of this revision needed it.
 
 ### Circuits

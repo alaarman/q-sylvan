@@ -17,9 +17,12 @@
 # records of the 25-26 September sweep: exactdd/final.log, gw/out, gw/out2.
 # When ROOT has amend/out_l2 and amend/out_low (the float EVDD rerun of
 # 4 October, 'L2' and 'low', on the binary of the LIMDD runs), Figures 6 to 8
-# are made from those, by Section 6's rule, into final_plots_mm-(in)correct2
-# (L2 under the original names, low as float_low), and so is an alternative
-# Figure 9 into limdd2/. Neither rerun is read by any other step.
+# are also made from those, into final_plots_mm-(in)correct2 as
+# wgt_*_float_l2_vs_algebraic_nw.pdf and wgt_*_float_low_vs_algebraic_nw.pdf,
+# and so is an alternative Figure 9 into limdd2/, with the L2 float EVDD and,
+# when ROOT has amend/out_limdd_l2 (the LIMDD with every node read at norm 1,
+# run_arm.sh limdd_float_l2), the L2 float LIMDD. No rerun is read by any
+# other step.
 set -u
 [ $# -eq 2 ] || { echo "usage: $0 ROOT OUTDIR" >&2; exit 2; }
 ROOT=$1; O=$2
@@ -44,15 +47,18 @@ step amend_numbers.out     "$PY" "$S/amend_numbers.py" "${OLD[@]}" "${Q[@]}" "${
 step amend_stats.out       "$PY" "$S/amend_stats.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step make_theorem_figs.out "$PY" "$S/make_theorem_figs.py" "$ROOT/amend/trace" "$O"
 S6=$O/'final_plots_mm-(in)correct2'
+step make_section6_figures.out "$PY" "$S/make_section6_figures.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$S6"
 if [ -d "$ROOT/amend/out_l2" ] && [ -d "$ROOT/amend/out_low" ]; then
-  step make_section6_figures_l2.out  "$PY" "$S/make_section6_figures.py" --float float_l2 --rule section6 \
+  step make_section6_figures_l2.out  "$PY" "$S/make_section6_figures.py" --float float_l2 --tag l2 \
        "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" "$S6"
-  step make_section6_figures_low.out "$PY" "$S/make_section6_figures.py" --float float_low --rule section6 --tag low \
+  step make_section6_figures_low.out "$PY" "$S/make_section6_figures.py" --float float_low --tag low \
        "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_low" "$S6"
-  step make_figures_l2.out "$PY" "$S/make_figures.py" -v --rule section6 --float-evdd float_l2 \
-       "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" "$O/limdd2"
-else
-  step make_section6_figures.out "$PY" "$S/make_section6_figures.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$S6"
+  LLOPT=(); LLDIR=()
+  if [ -d "$ROOT/amend/out_limdd_l2" ]; then
+    LLOPT=(--float-limdd limdd_float_l2); LLDIR=("$ROOT/amend/out_limdd_l2")
+  fi
+  step make_figures_l2.out "$PY" "$S/make_figures.py" -v --float-evdd float_l2 ${LLOPT[@]+"${LLOPT[@]}"} \
+       "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" ${LLDIR[@]+"${LLDIR[@]}"} "$O/limdd2"
 fi
 # checks behind the 2026-10-01 revision
 step evdd_float_versions.out "$PY" "$V/evdd_float_versions.py" "$ROOT"

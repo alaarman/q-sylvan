@@ -6,6 +6,7 @@
 # float_l2    = EVDD  float L2  --merging=abs -t 1e-14   (paper "float", Section 6)
 # limdd_qisq2 = LIMDD qisq2 low
 # limdd_float = LIMDD float low --merging=abs -t 1e-14
+# limdd_float_l2 = LIMDD float L2 --merging=abs -t 1e-14 (every node read at norm 1)
 # Every arm adds -c -m -w 1 --node-tab-size=25 --wgt-tab-size=24; the timeout
 # defaults to 30 minutes. limtab adds --lim-tab-size=<limtab> to the LIMDD arms
 # (no run of the 2026-10-01 revision used it).
@@ -43,6 +44,7 @@ case $arm in
   float_l2)    F="--dd=qmdd -e float -s l2 --merging=abs -t 1e-14" ;;
   qisq2_low)   F="--dd=qmdd -e qisq2 -s low" ;;
   limdd_float) F="--dd=limdd -e float -s low --merging=abs -t 1e-14"; [ "$nq" -gt 64 ] && A=$(W2) ;;
+  limdd_float_l2) F="--dd=limdd -e float -s l2 --merging=abs -t 1e-14"; [ "$nq" -gt 64 ] && A=$(W2) ;;
   limdd_qisq2) F="--dd=limdd -e qisq2 -s low";              [ "$nq" -gt 64 ] && A=$(W2) ;;
   *) echo "unknown arm $arm" >&2; exit 2 ;;
 esac
