@@ -60,6 +60,7 @@ static const char *canon_name = "always";
 static double rel_tolerance = -1;
 static double zero_tolerance = 1e-14;
 static bool zero_tolerance_set = false;   /* did the user ask for one? */
+static bool norm_strat_set = false;       /* did the user give -s? */
 static bool force_absolute = false;       /* --merging=abs: keep the historical rule */
 static bool node_tab_size_set = false;    /* was --node-tab-size given? */
 static int  lim_tab_size_log2  = 0;       /* --lim-tab-size; 0 = derive from the node table */
@@ -133,6 +134,7 @@ parse_opt(int key, char *arg, struct argp_state *state)
         else if (strcmp(arg, "min")==0) wgt_norm_strat = NORM_MIN;
         else if (strcasecmp(arg, "l2")==0) wgt_norm_strat = NORM_L2;
         else argp_usage(state);
+        norm_strat_set = true;
         break;
     case 'e':
         if (strcmp(arg, "float")==0) wgt_table_type = COMP_HASHMAP;
@@ -1152,6 +1154,7 @@ VOID_TASK_1(run_simulation, quantum_circuit_t*, circuit)
             bqd_quit();
         } else {
             limdd_nodes_init(circuit->qreg_size, lt, lt, lim_t, lt);
+            limdd_set_l2(wgt_norm_strat == NORM_L2);
             if (CALL(limdd_simulate_circuit, circuit) != 0) {
                 limdd_nodes_quit();
                 exit(1);
@@ -1285,12 +1288,19 @@ int main(int argc, char *argv[])
 
     /*
      * The normalisation strategy is a QMDD notion: which of a node's two
-     * weights is divided out. A LIMDD has no such choice -- the low edge
-     * carries the identity and all scale goes up -- so the strategy is unused,
-     * and demanding one the backend supports would refuse exact weights for no
-     * reason. qisq2 has no absolute value and so rejects max, min and L2.
+     * weights is divided out. A LIMDD's low edge carries the identity and all
+     * scale goes up, except that L2 can be had on complex weights, by
+     * reading every node at norm 1 (limdd_set_l2, in run_simulation) -- when
+     * asked for with -s l2, not by the QMDD's default. Max and min are
+     * unused, and demanding a strategy the backend supports would refuse
+     * exact weights for no reason. qisq2 has no absolute value and so rejects
+     * max, min and L2, which fall back to low.
      */
     if (dd_kind != DD_QMDD && !qsylvan_norm_supported(wgt_table_type, wgt_norm_strat)) {
+        wgt_norm_strat = NORM_LOW;
+    }
+    /* and the JSON then says what the diagram did */
+    if (dd_kind != DD_QMDD && wgt_norm_strat == NORM_L2 && !norm_strat_set) {
         wgt_norm_strat = NORM_LOW;
     }
 
