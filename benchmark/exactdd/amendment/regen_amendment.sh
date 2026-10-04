@@ -15,6 +15,11 @@
 # uncorrected build), amend/out_rnd (random circuits up to 64 qubits on the
 # corrected build), amend/out (the other families). EVDD from the surviving
 # records of the 25-26 September sweep: exactdd/final.log, gw/out, gw/out2.
+# When ROOT has amend/out_l2 and amend/out_low (the float EVDD rerun of
+# 4 October, 'L2' and 'low', on the binary of the LIMDD runs), Figures 6 to 8
+# are made from those, by Section 6's rule, into final_plots_mm-(in)correct2
+# (L2 under the original names, low as float_low), and so is an alternative
+# Figure 9 into limdd2/. Neither rerun is read by any other step.
 set -u
 [ $# -eq 2 ] || { echo "usage: $0 ROOT OUTDIR" >&2; exit 2; }
 ROOT=$1; O=$2
@@ -38,7 +43,17 @@ step make_figures.out      "$PY" "$S/make_figures.py" -v "${OLD[@]}" "${Q[@]}" -
 step amend_numbers.out     "$PY" "$S/amend_numbers.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step amend_stats.out       "$PY" "$S/amend_stats.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step make_theorem_figs.out "$PY" "$S/make_theorem_figs.py" "$ROOT/amend/trace" "$O"
-step make_section6_figures.out "$PY" "$S/make_section6_figures.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$O/final_plots_mm-(in)correct2"
+S6=$O/'final_plots_mm-(in)correct2'
+if [ -d "$ROOT/amend/out_l2" ] && [ -d "$ROOT/amend/out_low" ]; then
+  step make_section6_figures_l2.out  "$PY" "$S/make_section6_figures.py" --float float_l2 --rule section6 \
+       "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" "$S6"
+  step make_section6_figures_low.out "$PY" "$S/make_section6_figures.py" --float float_low --rule section6 --tag low \
+       "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_low" "$S6"
+  step make_figures_l2.out "$PY" "$S/make_figures.py" -v --rule section6 --float-evdd float_l2 \
+       "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$ROOT/amend/out_l2" "$O/limdd2"
+else
+  step make_section6_figures.out "$PY" "$S/make_section6_figures.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$S6"
+fi
 # checks behind the 2026-10-01 revision
 step evdd_float_versions.out "$PY" "$V/evdd_float_versions.py" "$ROOT"
 step wide_old_new.out        "$PY" "$V/wide_old_new.py" "$ROOT"

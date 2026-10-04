@@ -2,7 +2,8 @@
 # Run one arm of the LIMDD amendment on one circuit.
 #   ./run_arm.sh <arm> <circuit.qasm> <outdir> [timeout_s] [limtab]
 # qisq2_low   = EVDD  qisq2 low                          (paper "algebraic")
-# float_low   = EVDD  float low --merging=abs -t 1e-14   (paper "float")
+# float_low   = EVDD  float low --merging=abs -t 1e-14   (the amendment's float EVDD)
+# float_l2    = EVDD  float L2  --merging=abs -t 1e-14   (paper "float", Section 6)
 # limdd_qisq2 = LIMDD qisq2 low
 # limdd_float = LIMDD float low --merging=abs -t 1e-14
 # Every arm adds -c -m -w 1 --node-tab-size=25 --wgt-tab-size=24; the timeout
@@ -39,6 +40,7 @@ A=${QSY_W1:?set QSY_W1 to run_qasm_on_qmdd of the LIMDD_PAULI_WORDS=1 build}
 W2() { echo "${QSY_W2:?set QSY_W2 to run_qasm_on_qmdd of the LIMDD_PAULI_WORDS=2 build}"; }
 case $arm in
   float_low)   F="--dd=qmdd -e float -s low --merging=abs -t 1e-14" ;;
+  float_l2)    F="--dd=qmdd -e float -s l2 --merging=abs -t 1e-14" ;;
   qisq2_low)   F="--dd=qmdd -e qisq2 -s low" ;;
   limdd_float) F="--dd=limdd -e float -s low --merging=abs -t 1e-14"; [ "$nq" -gt 64 ] && A=$(W2) ;;
   limdd_qisq2) F="--dd=limdd -e qisq2 -s low";              [ "$nq" -gt 64 ] && A=$(W2) ;;

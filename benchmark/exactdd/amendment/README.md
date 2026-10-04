@@ -75,6 +75,7 @@ by record, as listed in `regen_amendment.sh`.
 | `amend/span/out2/` | `qmdd_float_*_w24.json`, the float EVDD rerun on ten random circuits with the code of the LIMDD runs (read by `evdd_float_versions.py`); with `amend/span/out/`, the coefficient ranges | the instrumented build, flags as `run_arm.sh float_low` |
 | `exactdd/final.log` | the September records of the random circuits, all four arms, one status line per run (`arm circuit status time final peak norm p_top`), later lines win | the 25-26 September sweep, same EVDD flags as `run_arm.sh` |
 | `gw/out/`, `gw/out2/` | the September records of the other families, `<circ>_<arm>.status` with `circuit arm status time final peak norm t_count final_width` (no top-qubit probability) | the 25-26 September sweep |
+| `amend/out_l2/`, `amend/out_low/` (optional) | the float EVDD rerun of 4 October on the 72 circuits of Figures 6 to 9 (49 random, 12 Grover, 11 W state): `float_l2` ('L2' normalisation, Section 6's float) and `float_low`, both with `-m`, on the binary of the LIMDD runs | `run_arm.sh` |
 
 Only the EVDD arms (`qisq2_low`, `float_low`) are taken from the September
 records; their LIMDD records there are superseded by the October runs, and
@@ -82,6 +83,10 @@ those above 64 qubits are wrong (64-bit qubit masks). To use EVDD runs made
 with `run_arm.sh` instead, add their directory to `NEW` in
 `regen_amendment.sh`: a directory there overrides every September record of
 the same circuit and arm.
+
+The October float EVDD rerun is read only by the steps that make the
+L2 and low versions of Figures 6 to 8 and the alternative Figure 9 (below).
+None of the amendment's own figures and numbers use it.
 
 `ROOT/amend/regen_out/` holds the outputs of the regeneration of 2026-10-01,
 the reference for the next section. It is not an input.
@@ -112,14 +117,27 @@ Grover and W-state circuits of Section 6, whose panels have 99 and 7 points
 against the 12 and 11 circuits here; only the 49 random circuits are the same.
 
 `make_section6_figures.py` remakes Figures 6 to 8 of the paper (EVDD, float
-against algebraic, one panel per family and quantity) from the same September
-EVDD records, into `OUTDIR/final_plots_mm-(in)correct2/` with the file names of
-the paper's `figures/final_plots_mm-(in)correct/`. They differ from the
-originals in ways the text has to say: the float arm is 'low' (the September
-sweep has no 'L2' run), the Grover and W-state circuits are ours, the runs are
-those of the Apple M1, and the correctness rule is that of `make_figures.py`
-(the Grover and W-state records carry no probability, so those float runs are
-judged by their norm).
+against algebraic, one panel per family and quantity) into
+`OUTDIR/final_plots_mm-(in)correct2/`. When ROOT has `amend/out_l2` and
+`amend/out_low`, it makes them twice from that rerun, both by Section 6's rule
+(a top-qubit probability more than 5% off the exact one, the norm not looked
+at): with 'L2' floats under the file names of the paper's
+`figures/final_plots_mm-(in)correct/`, and with 'low' floats under
+`wgt_*_float_low_vs_algebraic_nw.pdf`. Without that rerun it makes them once,
+from the September records ('low', under the original names, by the rule of
+`make_figures.py`, which judges the Grover and W-state floats by their norm,
+since those records carry no probability). Either way they differ from the
+originals in ways the text has to say: the Grover and W-state circuits are
+ours, the runs are those of the Apple M1, and the algebraic runs come from the
+September code while the rerun's floats come from the October binary.
+
+With the rerun, `make_figures.py --rule section6 --float-evdd float_l2` also
+writes an alternative of `fig:limdd-vs-evdd` into `OUTDIR/limdd2/`: the same
+panels and file names, with the 'L2' float EVDD in the lower row and both
+float diagrams judged by Section 6's rule. A float run with no exact
+probability to compare with is not judged and drawn grey; the runner's error
+value (the zero state) is wrong without one. The paper's `figures/limdd2/` is
+its six `limdd_vs_evdd_*` panels and `panel_legend.pdf`.
 
 In every scatter panel a run that did not finish (a timeout or a full table)
 sits on a dashed line in a shaded band beyond the data: on the right when the
@@ -163,7 +181,10 @@ except its `/CreationDate`. Set `SOURCE_DATE_EPOCH` (e.g. to 0) to fix that
 date and make two runs byte-identical.
 
 Every text output is identical to the one in `ROOT/amend/regen_out/` except
-in these four files:
+in these four files (and, when ROOT has the October float EVDD rerun,
+`make_section6_figures.out` is replaced by `make_section6_figures_l2.out`,
+`make_section6_figures_low.out` and `make_figures_l2.out`, which the stored
+outputs predate):
 
 - `make_figures.out`: the line that names `merged_records.csv`, which the
   stored file gives with its absolute path and this script by name only.
@@ -237,7 +258,17 @@ done
 ```
 
 `run_arm.sh` also runs the EVDD arms with the flags of the September sweep
-(`qisq2_low`, `float_low`). Its fifth argument, `limtab` (after `timeout_s`),
+(`qisq2_low`, `float_low`), and `float_l2`, the float of Section 6. The
+October float EVDD rerun was
+
+```
+# the binary of the LIMDD runs; the EVDD arms never use QSY_W2
+C=("$ROOT"/ldd/qasm/clifford_T_circuit_*.qasm "$ROOT"/amend/qasm/{grover_n*_it1,w-state_*,wclif_*}.qasm)
+for f in "${C[@]}"; do ./run_arm.sh float_l2 "$f" "$ROOT/amend/out_l2"; done
+for f in "${C[@]}"; do ./run_arm.sh float_low "$f" "$ROOT/amend/out_low"; done
+```
+
+(two at a time). Its fifth argument, `limtab` (after `timeout_s`),
 sets `--lim-tab-size` on the LIMDD arms; no run of this revision needed it.
 
 ### Circuits

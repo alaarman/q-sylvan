@@ -1,31 +1,42 @@
 #!/usr/bin/env python3
 """Figures 6 to 8 of the paper (EVDD, float against algebraic, one panel per
-family and quantity) remade from the EVDD runs of the 25-26 September sweep,
-in the look of the originals, with the runs that did not finish added.
+family and quantity) remade from our EVDD runs, in the look of the originals,
+with the runs that did not finish added.
 
-  make_section6_figures.py [--old SRC]... [--qasm DIR]... [NEWDIR]... OUTDIR
+  make_section6_figures.py [--float ARM] [--rule RULE] [--tag TAG]
+                           [--old SRC]... [--qasm DIR]... [NEWDIR]... OUTDIR
 
 Writes OUTDIR/{Grover,w-state,random_circuits}/ with the file names of
 figures/final_plots_mm-(in)correct/, so that the folder can stand in for that
 one. The sources are those of make_figures.py: --old the September records
 (exactdd/final.log, gw/out), NEWDIR the October LIMDD runs, which are read only
-to judge a float run whose exact EVDD run did not finish.
+to judge a float run whose exact EVDD run did not finish, and the float EVDD
+rerun of 4 October (amend/out_l2, amend/out_low) where it is given.
 
 What differs from the originals, and has to be said wherever these are used:
-the float arm is 'low' normalisation (the September sweep has no 'L2' run), the
-Grover and W-state circuits are those of ../gen_grover.py,
+the Grover and W-state circuits are those of ../gen_grover.py,
 ../gen_wstate_ancilla.py and ../gen_wstate_clifford.py (12 and 11, against the
-99 and 7 points of the originals), and the runs are those of the Apple M1 sweep.
-The correctness rule is make_figures.py's: a norm more than 1e-3 off 1, the
-runner's error value, or a top-qubit probability more than 5% off the exact one.
-The September Grover and W-state records carry no probability, so those float
-runs are judged by their norm.
+99 and 7 points of the originals), and the runs are those of an Apple M1.
+By default the float arm is the September 'low' run (the September sweep has no
+'L2' run) and the correctness rule is make_figures.py's: a norm more than 1e-3
+off 1, the runner's error value, or a top-qubit probability more than 5% off
+the exact one. The September Grover and W-state records carry no probability,
+so those float runs are judged by their norm.
 
 A run that did not finish (a timeout or a full table) sits on a dashed line:
 on the right when the float run failed, on top when the algebraic one did, in
 the corner when both did; its marker is grey when the float run is the one that
 failed, since its correctness is then undefined. A run that was not made is not
 drawn.
+
+--float float_l2 takes the float arm with 'L2' normalisation, as Section 6 has
+it (run_arm.sh float_l2; its directory goes among the NEWDIRs, as does that of a
+float_low rerun, which then overrides the September records). --rule section6
+judges by Section 6's rule alone, a top-qubit probability more than 5% off the
+exact one, with no look at the norm (make_figures.py --rule); a float run with
+no exact probability to compare with is then not judged, and drawn as a hollow
+grey triangle. --tag puts TAG into the file names, float_TAG_vs_algebraic, so
+that versions can sit side by side.
 """
 import argparse, math, os
 import matplotlib
@@ -34,7 +45,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FixedLocator, LogLocator, NullFormatter
 import make_figures as mf
 
-FLOAT, EXACT = "float_low", "qisq2_low"
+FLOAT, EXACT = "float_low", "qisq2_low"         # FLOAT: --float
+TAGLAB = ""                                     # " (TAG)" after "float" in the x label, with --tag
 PANELS = [("Grover", "grover"), ("w-state", "wstate"), ("random_circuits", "random")]
 QUANT = [("wgt_type_runtime_float_vs_algebraic_nw.pdf", "simulation_time", "runtime (s)"),
          ("wgt_final_nodecount_float_vs_algebraic_nw.pdf", "final_nodes", "final # of nodes"),
@@ -42,7 +54,7 @@ QUANT = [("wgt_type_runtime_float_vs_algebraic_nw.pdf", "simulation_time", "runt
 COL_OK, COL_BAD, COL_NA = "royalblue", "darkorange", "0.55"   # as the originals, plus grey
 
 def panel(rows, fails, fam, field, lab, path):
-    pts = {"ok": ([], []), "bad": ([], []), "na": ([], [])}
+    pts = {"ok": ([], []), "bad": ([], []), "nj": ([], []), "na": ([], [])}
     nfail = {"float": 0, "algebraic": 0, "both": 0}
     circs = {c for c in rows if rows[c]["_fam"] == fam} | \
             {c for (c, a) in fails if a in (FLOAT, EXACT) and mf.family_of(c) == fam}
@@ -59,7 +71,9 @@ def panel(rows, fails, fam, field, lab, path):
         elif x is None: nfail["float"] += 1
         elif y is None: nfail["algebraic"] += 1
         if not fok: k = "na"
-        else: k = "bad" if mf.judge_point(r, FLOAT, EXACT)[0] else "ok"
+        else:
+            bad = mf.judge_point(r, FLOAT, EXACT)[0]
+            k = "nj" if bad is None else ("bad" if bad else "ok")
         pts[k][0].append(x); pts[k][1].append(y)
     vals = [v for xs, ys in pts.values() for v in xs + ys if v is not None and v > 0]
     if not vals: print(f"  {path}: no data"); return
@@ -75,14 +89,16 @@ def panel(rows, fails, fam, field, lab, path):
         mf.band(ax, lo, F, gap, top, nfail["both"], 6.5)
     style = {"ok": ("^", COL_OK, "float measurement correct"),
              "bad": ("o", COL_BAD, "float measurement wrong"),
+             "nj": ("^", COL_NA, "float measurement not judged"),
              "na": ("s", COL_NA, "float run did not finish")}
-    for k in ("ok", "bad", "na"):
+    for k in ("ok", "bad", "nj", "na"):
         xs, ys = pts[k]
         if not xs: continue
         m, col, label = style[k]
+        kw = dict(facecolors="none", edgecolors=col, linewidths=0.9) if k == "nj" else dict(color=col)
         ax.scatter([F if v is None else max(v, floor) for v in xs],
                    [F if v is None else max(v, floor) for v in ys],
-                   marker=m, color=col, s=18, zorder=3, label=label)
+                   marker=m, s=18, zorder=3, label=label, **kw)
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlim(lo, top); ax.set_ylim(lo, top)
     if anyfail:
@@ -91,30 +107,39 @@ def panel(rows, fails, fam, field, lab, path):
             axis.set_minor_locator(FixedLocator(
                 [t for t in LogLocator(subs=range(2, 10)).tick_values(lo, hi) if lo <= t <= hi]))
             axis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel(f"{lab} float"); ax.set_ylabel(f"{lab} algebraic")
+    ax.set_xlabel(f"{lab} float{TAGLAB}"); ax.set_ylabel(f"{lab} algebraic")
     edge = 1.0                                 # keep the legend out of the band
     if anyfail: edge = math.log(F / gap ** 0.5 / lo) / math.log(top / lo)
-    ax.legend(loc="lower right", bbox_to_anchor=(edge, 0.0), prop={"family": "monospace", "size": 8.5})
+    ax.legend(loc="best", bbox_to_anchor=(0.0, 0.0, edge, edge),   # where it hides the fewest points
+              prop={"family": "monospace", "size": 7}, borderpad=0.3, handletextpad=0.3)
     fig.tight_layout()
     fig.savefig(path, bbox_inches="tight"); plt.close(fig)
     print(f"  {os.path.relpath(path)}: {sum(len(v[0]) for v in pts.values())} points, "
-          f"{len(pts['bad'][0])} wrong, did not finish: float {nfail['float']}, "
+          f"{len(pts['bad'][0])} wrong{', %d not judged' % len(pts['nj'][0]) if pts['nj'][0] else ''}, "
+          f"did not finish: float {nfail['float']}, "
           f"algebraic {nfail['algebraic']}, both {nfail['both']}")
 
 def main():
+    global FLOAT, TAGLAB
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("paths", nargs="+", help="[NEWDIR...] OUTDIR")
     ap.add_argument("--old", action="append", default=[])
     ap.add_argument("--qasm", action="append", default=[])
+    ap.add_argument("--float", dest="float_arm", choices=("float_low", "float_l2"), default=FLOAT)
+    ap.add_argument("--rule", choices=("amend", "section6"), default="amend")
+    ap.add_argument("--tag", default="", help="file names float_TAG_vs_algebraic")
     a = ap.parse_args()
+    FLOAT, mf.RULE = a.float_arm, a.rule
     out, new = a.paths[-1], a.paths[:-1]
     for d in a.qasm: mf.count_qasm(d)
     recs, rows, _ = mf.load(new, a.old, {FLOAT, EXACT})
+    tag = f"float_{a.tag}_vs" if a.tag else "float_vs"
+    TAGLAB = f" ({a.tag})" if a.tag else ""
     fails = mf.failures(recs)
     for sub, fam in PANELS:
         os.makedirs(os.path.join(out, sub), exist_ok=True)
         for fname, field, lab in QUANT:
-            panel(rows, fails, fam, field, lab, os.path.join(out, sub, fname))
+            panel(rows, fails, fam, field, lab, os.path.join(out, sub, fname.replace("float_vs", tag)))
 
 if __name__ == "__main__":
     main()
