@@ -669,9 +669,12 @@ test_deferred_canonization(void)
     return 0;
 }
 
+static bool l2 = false;      /* run the suite under L2 normalisation */
+
 TASK_0(int, runtests)
 {
     limdd_nodes_init(NQUBITS, 1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
+    limdd_set_l2(l2);
 
     if (test_basis_state()) return 1;
     printf("limdd all-zero state:                    ok\n");
@@ -695,14 +698,17 @@ TASK_0(int, runtests)
     printf("every op on hand-built skipping diagrams: ok\n");
 
     printf("(%zu nodes, %zu LIMs)\n", limdd_node_table_count(), limdd_lim_table_count());
+    limdd_set_l2(false);
     limdd_nodes_quit();
     return 0;
 }
 
 static int
-run_with(int backend, const char *name)
+run_with(int backend, const char *name, bool with_l2)
 {
-    printf("== LIMDD operations with %s edge weights ==\n", name);
+    printf("== LIMDD operations with %s edge weights%s ==\n", name,
+           with_l2 ? ", L2 normalisation" : "");
+    l2 = with_l2;
     lace_start(1, 0);
     sylvan_set_sizes(1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
     sylvan_init_package();
@@ -719,9 +725,13 @@ run_with(int backend, const char *name)
 int
 main(void)
 {
-    if (run_with(COMP_HASHMAP, "complex")) return 1;
+    if (run_with(COMP_HASHMAP, "complex", false)) return 1;
+    /* Every node read at norm 1: the same checks against the same dense
+     * simulation, so the scaling of cofactors, makeedge, eval, the norm and
+     * the probabilities must all agree with each other. */
+    if (run_with(COMP_HASHMAP, "complex", true)) return 1;
     /* The same circuits with exact coefficients: T is a pi/4 rotation, so
      * Clifford+T stays inside Q[i,sqrt2]. */
-    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])")) return 1;
+    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])", false)) return 1;
     return 0;
 }

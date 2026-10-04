@@ -15,6 +15,7 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 
@@ -23,6 +24,7 @@
 
 #include "qsylvan_limdd_node.h"
 #include "qsylvan_limdd_stab.h"
+#include "sylvan_edge_weights_complex.h"
 
 /*
  * Written once by limdd_nodes_init and read-only afterwards, so there is no
@@ -36,6 +38,58 @@ static _Atomic(uint64_t) *node_stab = NULL;
 
 static LIMDD zero_edge = 0;
 static LIMDD one_edge  = 0;
+
+/* Set at configuration time, before anything is built, and only read after;
+ * see limdd_set_l2. */
+bool limdd_l2_on = false;
+
+void
+limdd_set_l2(bool on)
+{
+    if (on && sylvan_get_edge_weight_type() != WGT_COMPLEX_128) {
+        fprintf(stderr, "limdd: L2 normalisation needs complex edge weights; "
+                        "the exact backend cannot take the square root\n");
+        exit(1);
+    }
+    limdd_l2_on = on;
+}
+
+bool
+limdd_get_l2(void)
+{
+    return limdd_l2_on;
+}
+
+double
+limdd_l2_node_factor(LIMDD_TARG p)
+{
+    const LIMDD_LIM h = limdd_label(limdd_node_high(p));
+    if (limdd_lim_is_zero(h)) return 1.0;
+    const complex_t b = weight_as_complex(limdd_lim_weight(h));
+    /* hypot twice rather than sqrt(1 + re^2 + im^2): no squares to overflow
+     * for a huge |b|, and for a tiny one the factor rounds to exactly 1,
+     * which limdd_scale_real then skips. */
+    return 1.0 / hypot(1.0, hypot((double)b.r, (double)b.i));
+}
+
+/** `w` times the real `f`, interned; only the product enters the table. */
+static EVBDD_WGT
+wgt_times_real(EVBDD_WGT w, double f)
+{
+    if (f == 1.0 || w == EVBDD_ZERO) return w;
+    const complex_t c = weight_as_complex(w);
+    return complex_lookup(c.r * f, c.i * f);
+}
+
+LIMDD
+limdd_scale_real(LIMDD e, double f)
+{
+    if (f == 1.0 || limdd_edge_is_zero(e)) return e;
+    const LIMDD_LIM l = limdd_label(e);
+    const EVBDD_WGT w = wgt_times_real(limdd_lim_weight(l), f);
+    if (w == EVBDD_ZERO) return zero_edge;      /* a float underflow merged with zero */
+    return limdd_bundle(limdd_lim_make(limdd_lim_pauli(l), w), limdd_target(e));
+}
 
 /*
  * Field masks, for the layout in the header (NODES). The variable field,
@@ -317,14 +371,21 @@ eval_edge(LIMDD e, const uint64_t b[LIMDD_PAULI_WORDS], uint32_t level)
     const LIMDD_TARG t = limdd_target(e);
     const uint32_t lev = limdd_level(t);
     assert(lev >= level && "an edge may skip levels, never climb them");
-    (void)level;   /* only the assertions consult it */
+    if (limdd_l2_on) {
+        /* 1/sqrt(2) per skipped level, and the node's own factor, which
+         * scales both its children alike */
+        double f = (t == LIMDD_TERMINAL) ? 1.0 : limdd_l2_node_factor(t);
+        for (uint32_t j = level; j < lev; j++) f *= M_SQRT1_2;
+        w = wgt_times_real(w, f);
+    }
     if (t == LIMDD_TERMINAL) return w;
 
     /*
      * Levels level..lev-1 are skipped. Each holds |0>+|1>, whose amplitude is
      * 1 on either branch, so beyond the phase already folded into k above --
      * (-1)^c_j for a Z there, -i(-1)^c_j for a Y, nothing for I or X -- they
-     * contribute nothing, and the walk resumes at the target's own level.
+     * contribute nothing (1/sqrt(2) each under L2, folded in above), and the
+     * walk resumes at the target's own level.
      */
     const LIMDD child = (c[LIMDD_PAULI_LANE(lev)] & LIMDD_PAULI_BIT(lev))
                       ? limdd_node_high(t) : limdd_node_low(t);

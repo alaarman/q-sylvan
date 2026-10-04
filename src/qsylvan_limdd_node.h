@@ -71,7 +71,8 @@
  * root edge is at level 0, a node's child edges are at the node's level plus
  * one, and the terminal counts as level nqubits (see limdd_level). An edge
  * read at level k that points at a node of level k' > k SKIPS levels k..k'-1,
- * and each skipped level denotes the unnormalised |0>+|1>: the edge means
+ * and each skipped level denotes the unnormalised |0>+|1> (or (|0>+|1>)/sqrt(2)
+ * under L2 normalisation, see below): the edge means
  *
  *     L ( (|0>+|1>)_k (x) ... (x) (|0>+|1>)_{k'-1} (x) |v> )
  *
@@ -328,6 +329,52 @@ void limdd_gc_rehash_nodes(void);
  * would then be read as the new occupant's.
  */
 void limdd_gc_purge_stab_cache(void);
+
+/* --- L2 normalisation -----------------------------------------------------
+ *
+ * By default a node (var, I->v0, B->v1) denotes |0>(x)|v0> + |1>(x)B|v1>: its
+ * low weight is 1, all scale sits on the edges above it, and a skipped level
+ * denotes the unnormalised |0>+|1>. With L2 normalisation the same node
+ * denotes that vector divided by sqrt(1 + |b|^2), b the scalar of B, and a
+ * skipped level denotes (|0>+|1>)/sqrt(2). Since its children have norm 1 as
+ * well, every node then has norm 1, the condition the LIMDD paper keeps, and
+ * the scalar on the root is the norm of the state.
+ *
+ * The node stores the same label either way: the ratio b of its two weights,
+ * not the weights 1/sqrt(1+|b|^2) and b/sqrt(1+|b|^2) themselves. Storing the
+ * high weight and deriving the low one as sqrt(1 - |high|^2) would lose the
+ * low weight to cancellation once it falls below about 1e-8. Nor does the
+ * canonical form change, in exact arithmetic: the coset minimisation and the
+ * sign rule move b by a power of i, the child swap inverts it, and the factor
+ * depends on |b| alone. On floats see qsylvan_limdd_canon.h.
+ *
+ * What changes is how a node is read -- limdd_cofactors, limdd_eval, the norm
+ * and probability walks and limdd_canonize scale its children by
+ * limdd_l2_node_factor -- and what limdd_makeedge puts on the edge it returns,
+ * which carries sqrt(1 + |b|^2) more, or sqrt(2) when it skips the level.
+ *
+ * Complex weights only: the factor needs a square root, which the exact
+ * backend cannot take. Set once, before anything is built, and with the
+ * operation cache clear: a diagram built under one setting means something
+ * else under the other.
+ */
+void limdd_set_l2(bool on);
+bool limdd_get_l2(void);
+
+/** Read-mostly: written by limdd_set_l2 only, read on every cofactor. */
+extern bool limdd_l2_on;
+
+/**
+ * 1/sqrt(1 + |b|^2), b the scalar of node `p`'s high label (0 for a zero high
+ * edge): the factor by which L2 normalisation scales both of `p`'s children.
+ */
+double limdd_l2_node_factor(LIMDD_TARG p);
+
+/**
+ * `e` with the scalar of its label multiplied by the real `f`, or the zero
+ * edge if the product merges with zero. Complex weights only.
+ */
+LIMDD limdd_scale_real(LIMDD e, double f);
 
 /**
  * The amplitude that `e` assigns to the basis state `bits`, where bits[k] is

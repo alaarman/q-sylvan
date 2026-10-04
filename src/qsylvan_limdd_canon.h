@@ -81,10 +81,16 @@
  * Weight normalisation follows from the rules above rather than being a rule
  * of its own: the low edge carries the identity, so the node's weights are
  * (1, scalar of the high label) and all scale sits on the parent. The LIMDD
- * paper instead keeps |a0|^2 + |a1|^2 = 1, which needs a weight and a Pauli
- * stored separately per edge; here the two are fused into one interned LIM so
- * that an edge is 64 bits, and there is no room for a second weight. Both are
- * canonical; theirs is the better conditioned.
+ * paper instead keeps |a0|^2 + |a1|^2 = 1, which would need a weight and a
+ * Pauli stored separately per edge; here the two are fused into one interned
+ * LIM so that an edge is 64 bits, and there is no room for a second weight.
+ * limdd_set_l2 gets the paper's condition without one: the same nodes are
+ * read at norm 1, and makeedge puts the norm on the edge it returns (see
+ * qsylvan_limdd_node.h). Both are canonical in exact arithmetic. On floats,
+ * low normalisation lets scale pile up along a path (on the random Clifford+T
+ * circuits the scalars spanned up to 85 decades), while L2's factors are
+ * irrational, so two routes to one state round apart more often and merge a
+ * little less often: test_limdd_canon counts the cases.
  *
  * CONCURRENCY
  *

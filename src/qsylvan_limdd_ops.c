@@ -85,8 +85,15 @@ limdd_cofactors(LIMDD e, uint32_t var, LIMDD *low, LIMDD *high)
      * Y gives (-iV, iV) -- so the skipped case needs no code of its own.
      */
     const bool skip = lev > var;
-    const LIMDD x0 = skip ? limdd_bundle(rest, t) : lim_times_edge(rest, limdd_node_low(t));
-    const LIMDD x1 = skip ? x0                    : lim_times_edge(rest, limdd_node_high(t));
+    LIMDD x0 = skip ? limdd_bundle(rest, t) : lim_times_edge(rest, limdd_node_low(t));
+    LIMDD x1 = skip ? x0                    : lim_times_edge(rest, limdd_node_high(t));
+    if (limdd_l2_on) {
+        /* A unit-norm node, or a skipped (|0>+|1>)/sqrt(2): both branches are
+         * scaled alike, so the dispatch below is unaffected. */
+        const double f = skip ? M_SQRT1_2 : limdd_l2_node_factor(t);
+        x0 = limdd_scale_real(x0, f);
+        x1 = skip ? x0 : limdd_scale_real(x1, f);
+    }
 
     if (!px && !pz) {            /* I */
         *low = x0;
@@ -961,12 +968,13 @@ norm_sq(LIMDD e, uint32_t var, uint32_t nqubits)
      * Every level the edge skips holds |0>+|1>, of squared norm 2, whatever
      * Pauli the label puts there -- all four send it to a vector of squared
      * norm 2. So the skipped levels contribute a power of two and nothing
-     * else, and the walk resumes at the target's own level.
+     * else, and the walk resumes at the target's own level. Under L2 a
+     * skipped level is (|0>+|1>)/sqrt(2), of squared norm 1.
      */
     const LIMDD_TARG t = limdd_target(e);
     const uint32_t lev = limdd_level(t);
     assert(lev >= var && lev <= nqubits);
-    const double skipped = ldexp(1.0, (int)(lev - var));
+    const double skipped = limdd_l2_on ? 1.0 : ldexp(1.0, (int)(lev - var));
     const complex_t w = weight_as_complex(limdd_lim_weight(limdd_label(e)));
     return skipped * (w.r * w.r + w.i * w.i) * node_norm_sq(t, nqubits);
 }
@@ -1014,7 +1022,7 @@ prob_one(LIMDD e, uint32_t var, uint32_t qubit, uint32_t nqubits)
      */
     if (qubit < lev) return 0.5 * norm_sq(e, var, nqubits);
 
-    const double skipped = ldexp(1.0, (int)(lev - var));
+    const double skipped = limdd_l2_on ? 1.0 : ldexp(1.0, (int)(lev - var));
     LIMDD lo, hi;
     limdd_cofactors(e, lev, &lo, &hi);
 

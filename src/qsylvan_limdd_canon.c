@@ -15,6 +15,7 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <stdlib.h>
 
 #include <sylvan_int.h>
@@ -235,10 +236,17 @@ canonize_node(LIMDD_TARG t)
 
     /* Children first: makeedge needs canonical children, and this is what
      * makes that true rather than assumed. */
-    const LIMDD lo = limdd_edge_is_zero(low) ? limdd_zero_edge()
+    LIMDD lo = limdd_edge_is_zero(low) ? limdd_zero_edge()
         : lim_times_edge(limdd_label(low), canonize_node(limdd_target(low)));
-    const LIMDD hi = limdd_edge_is_zero(high) ? limdd_zero_edge()
+    LIMDD hi = limdd_edge_is_zero(high) ? limdd_zero_edge()
         : lim_times_edge(limdd_label(high), canonize_node(limdd_target(high)));
+    if (limdd_l2_on) {
+        /* the node is read as its children scaled to norm 1, as limdd_cofactors
+         * reads it; makeedge puts the factor back on the edge it returns */
+        const double f = limdd_l2_node_factor(t);
+        lo = limdd_scale_real(lo, f);
+        hi = limdd_scale_real(hi, f);
+    }
 
     res = limdd_makeedge(limdd_node_var(t), lo, hi);
     cache_put3(CACHE_LIMDD_CANONIZE, 0, t, 0, res);
@@ -428,8 +436,31 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
     return t;
 }
 
+static LIMDD makeedge_canonical(uint32_t var, LIMDD low, LIMDD high);
+
 LIMDD
 limdd_makeedge(uint32_t var, LIMDD low, LIMDD high)
+{
+    const LIMDD e = makeedge_canonical(var, low, high);
+    if (!limdd_l2_on || limdd_edge_is_zero(e)) return e;
+
+    /*
+     * The node denotes its vector at norm 1 under L2 (see qsylvan_limdd_node.h),
+     * so the edge carries the norm that was divided out: sqrt(1 + |b|^2) for
+     * the node made at `var`, b the scalar of its high label, or sqrt(2) when
+     * the level was skipped and the edge points below `var`. The canonical
+     * form chose the node and the label's Pauli word, and a positive factor
+     * changes neither, so the edge is still reduced.
+     */
+    const LIMDD_TARG t = limdd_target(e);
+    const double f = limdd_level(t) > var ? M_SQRT2 : 1.0 / limdd_l2_node_factor(t);
+    return limdd_scale_real(e, f);
+}
+
+/** limdd_makeedge without the L2 factor: the canonical node, and the label
+ *  that makes up the difference with the low-factored node. */
+static LIMDD
+makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
 {
     /* One unit of work. Counted here rather than per gate, so the trigger
      * measures what the circuit actually costs instead of how many gates it
