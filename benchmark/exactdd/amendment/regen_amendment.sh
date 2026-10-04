@@ -38,6 +38,7 @@ step make_figures.out      "$PY" "$S/make_figures.py" -v "${OLD[@]}" "${Q[@]}" -
 step amend_numbers.out     "$PY" "$S/amend_numbers.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step amend_stats.out       "$PY" "$S/amend_stats.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step make_theorem_figs.out "$PY" "$S/make_theorem_figs.py" "$ROOT/amend/trace" "$O"
+step make_section6_figures.out "$PY" "$S/make_section6_figures.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}" "$O/final_plots_mm-(in)correct2"
 # checks behind the 2026-10-01 revision
 step evdd_float_versions.out "$PY" "$V/evdd_float_versions.py" "$ROOT"
 step wide_old_new.out        "$PY" "$V/wide_old_new.py" "$ROOT"

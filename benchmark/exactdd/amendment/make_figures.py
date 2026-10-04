@@ -45,7 +45,7 @@ When no exact arm finished, or the float record carries no probability (the
 run_gw.sh status lines), the run is judged by its norm alone, and the
 printout says how many points that applies to.
 """
-import argparse, json, os, re, sys, glob
+import argparse, json, math, os, re, sys, glob
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -247,67 +247,133 @@ def judge_point(r, judge, ref):
     return False, "norm-only"
 
 # --------------------------------------------------------------------------
-# plotting (unchanged look)
+# plotting
 # --------------------------------------------------------------------------
-def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=None):
-    pts = {}          # (family, bad) -> ([x],[y])
+# A run that did not finish (a timeout or a full table) is drawn on a dashed
+# line beyond the data: on the right when the x arm failed, on top when the y
+# arm failed, and in the corner when both did. A run that was not made
+# (SKIPPED_PREDICTED) is not drawn.
+NOT_RUN = ("SKIPPED_PREDICTED", "EMPTY", "BADLINE")
+
+def failures(recs):
+    """(circ, arm) -> status, for every plotted family's run that did not finish."""
+    return {k: rec["status"] for k, rec in recs.items()
+            if rec["status"] != "OK" and rec["status"] not in NOT_RUN
+            and family_of(k[0]) is not None}
+
+def colours(bad, xbad):
+    """Fill red: the judged float run (the y arm's, or the only float arm) is
+    wrong. Edge orange: the float run of the x arm is wrong (lower row only)."""
+    face = "tab:red" if bad else "none"
+    edge = "tab:orange" if xbad else ("tab:red" if bad else "tab:blue")
+    return face, edge
+
+def band(ax, lo, F, gap, top, nboth, fs):
+    """The shaded band beyond the data, its dashed lines and their labels."""
+    ax.axvspan(F / gap ** 0.5, top, color="0.94", lw=0, zorder=0)
+    ax.axhspan(F / gap ** 0.5, top, color="0.94", lw=0, zorder=0)
+    ax.axvline(F, ls=(0, (3, 2)), color="0.45", lw=0.7, zorder=1)
+    ax.axhline(F, ls=(0, (3, 2)), color="0.45", lw=0.7, zorder=1)
+    ax.text(lo * 1.2, F * gap ** 0.18, "did not finish", fontsize=fs, color="0.35", va="bottom")
+    ax.text(F * gap ** 0.18, lo * 1.2, "did not finish", fontsize=fs, color="0.35",
+            rotation=90, ha="left", va="bottom")
+    if nboth:
+        ax.text(F / gap ** 0.35, F * gap ** 0.18, f"{nboth}", fontsize=fs, color="0.35",
+                ha="right", va="bottom")
+
+def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=None,
+            fails=None, xjudge=None):
+    fails = fails or {}
+    pts = {}          # (family, face, edge) -> ([x],[y]); None for a failed arm
     nfloor = 0
     how = {}          # how each judged point was judged
     perfam = {}       # family -> [points, wrong]
     detail = []       # (circuit, how) of every point drawn red, for -v
-    for circ, r in rows.items():
-        if xarm not in r or yarm not in r: continue
-        try: x, y = float(r[xarm][field]), float(r[yarm][field])
-        except (KeyError, TypeError, ValueError): continue
+    nfail = {"x": 0, "y": 0, "both": 0}
+    short = lambda c: c[19:] if c.startswith("clifford_T_circuit_") else c
+    circs = set(rows) | {c for (c, a) in fails if a in (xarm, yarm)}
+    for circ in sorted(circs):                 # sorted: a set's order varies run to run
+        r = rows.get(circ, {"_fam": family_of(circ)})
+        xok, yok = xarm in r, yarm in r
+        xf, yf = (circ, xarm) in fails, (circ, yarm) in fails
+        if not (xok or xf) or not (yok or yf): continue        # an arm not run
+        if not xok and not yok: x = y = None; nfail["both"] += 1
+        else:
+            try:
+                x = float(r[xarm][field]) if xok else None
+                y = float(r[yarm][field]) if yok else None
+            except (KeyError, TypeError, ValueError): continue
+            if x is None: nfail["x"] += 1
+            if y is None: nfail["y"] += 1
         ref = truth if truth else yarm
-        bad, h = judge_point(r, judge, ref) if judge else (False, None)
-        if x <= 0 or y <= 0:
+        bad, h = judge_point(r, judge, ref) if judge and judge in r else (False, None)
+        xbad, xh = judge_point(r, xjudge, EXACT[1]) if xjudge and xjudge in r else (False, None)
+        if (x is not None and x <= 0) or (y is not None and y <= 0):
             if not judge: continue
             bad = True; nfloor += 1; h = (h or "") + "+floored"
         if h: how[h] = how.get(h, 0) + 1
-        if bad: detail.append(f"{circ[19:] if circ.startswith('clifford_T_circuit_') else circ}:{h}")
+        if bad: detail.append(f"{short(circ)}:{h}")
+        if xbad: detail.append(f"{short(circ)}:x:{xh}")
         pf = perfam.setdefault(r["_fam"], [0, 0]); pf[0] += 1; pf[1] += bad
-        pts.setdefault((r["_fam"], bad), ([], []))
-        pts[(r["_fam"], bad)][0].append(x); pts[(r["_fam"], bad)][1].append(y)
-    allv = [v for (xs, ys) in pts.values() for v in xs + ys if v > 0]
+        face, edge = colours(bad, xbad)
+        pts.setdefault((r["_fam"], face, edge), ([], []))
+        pts[(r["_fam"], face, edge)][0].append(x); pts[(r["_fam"], face, edge)][1].append(y)
+    allv = [v for (xs, ys) in pts.values() for v in xs + ys if v is not None and v > 0]
     if not allv: print(f"  {fname}: no data"); return
     floor = min(allv) * 0.35
     lo, hi = min(allv) * 0.5, max(allv) * 2.0
+    anyfail = any(nfail.values())
+    gap = 10 ** (0.08 * math.log10(hi / lo))  # the band of the runs that did not finish: 8% of an axis
+    F = hi * gap                               # its dashed line
+    top = F * gap if anyfail else hi
 
     fig, ax = plt.subplots(figsize=(2.9, 2.6))
     ax.plot([lo, hi], [lo, hi], color="0.6", lw=0.8, zorder=1)
-    for (fam, bad), (xs, ys) in sorted(pts.items()):
-        xs = [v if v > 0 else floor for v in xs]
-        ys = [v if v > 0 else floor for v in ys]
-        ax.scatter(xs, ys, s=20, marker=MARK[fam],
-                   facecolors="none" if not bad else "tab:red",
-                   edgecolors="tab:blue" if not bad else "tab:red",
-                   linewidths=0.9, zorder=3 + bad)
+    if anyfail:
+        band(ax, lo, F, gap, top, nfail["both"], 5.5)
+    for (fam, face, edge), (xs, ys) in sorted(pts.items()):
+        xs = [F if v is None else (v if v > 0 else floor) for v in xs]
+        ys = [F if v is None else (v if v > 0 else floor) for v in ys]
+        ax.scatter(xs, ys, s=20, marker=MARK[fam], facecolors=face, edgecolors=edge,
+                   linewidths=0.9, zorder=3 + (face != "none") + (edge == "tab:orange"))
     ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
+    ax.set_xlim(lo, top); ax.set_ylim(lo, top)
+    if anyfail:                                # no tick labels in the band of the dashed lines
+        from matplotlib.ticker import FixedLocator, LogLocator, NullFormatter
+        for axis in (ax.xaxis, ax.yaxis):
+            axis.set_major_locator(FixedLocator([t for t in LogLocator().tick_values(lo, hi) if lo <= t <= hi]))
+            axis.set_minor_locator(FixedLocator(
+                [t for t in LogLocator(subs=range(2, 10)).tick_values(lo, hi) if lo <= t <= hi]))
+            axis.set_minor_formatter(NullFormatter())
     ax.set_xlabel(xlabel, fontsize=7.5, labelpad=1.5)
     ax.set_ylabel(ylabel, fontsize=7.5, labelpad=1.5)
     ax.tick_params(labelsize=6.5, pad=1.5)
     fig.tight_layout(pad=0.25)
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
     n = sum(len(v[0]) for v in pts.values())
-    nb = sum(len(v[0]) for k, v in pts.items() if k[1])
+    nb = sum(len(v[0]) for k, v in pts.items() if k[1] != "none")
+    nxb = sum(len(v[0]) for k, v in pts.items() if k[2] == "tab:orange")
     fams = " ".join(f"{k}={v[0]}/{v[1]}w" for k, v in sorted(perfam.items()))
     hw = ", judged by " + " ".join(f"{k}={v}" for k, v in sorted(how.items())) if how else ""
-    print(f"  {fname}: {n} points ({nb} wrong{', %d floored' % nfloor if nfloor else ''})"
-          f"  [{fams}{hw}]")
-    if VERBOSE and detail: print("      red: " + " ".join(sorted(detail)))
+    fl = (f"; did not finish: x {nfail['x']}, y {nfail['y']}, both {nfail['both']}" if anyfail else "")
+    print(f"  {fname}: {n} points ({nb} wrong{', %d x wrong' % nxb if xjudge else ''}"
+          f"{', %d floored' % nfloor if nfloor else ''}{fl})  [{fams}{hw}]")
+    if VERBOSE and detail: print("      red/orange: " + " ".join(sorted(detail)))
 
 def legend(fname):
     """One shared legend, so the panels keep their space."""
-    fig = plt.figure(figsize=(6.4, 0.42))
+    fig = plt.figure(figsize=(6.4, 0.62))
     hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
                       ms=5, label=lab) for _, m, lab in FAMILY]
     hs += [plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:blue",
                       mew=0.9, ms=5, label="measurement correct"),
            plt.Line2D([], [], ls="", marker="o", mfc="tab:red", mec="tab:red",
-                      ms=5, label="float measurement wrong")]
-    fig.legend(handles=hs, loc="center", ncol=6, fontsize=7, frameon=False,
+                      ms=5, label="float (LIMDD) measurement wrong"),
+           plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:orange",
+                      mew=0.9, ms=5, label="float EVDD wrong (lower row)"),
+           plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
+                      label="did not finish (timeout or full table)")]
+    fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
                handletextpad=0.35, columnspacing=1.1)
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
     print("  wrote", fname)
@@ -374,23 +440,24 @@ def main():
     fams = {}
     for r in rows.values(): fams[r["_fam"]] = fams.get(r["_fam"], 0) + 1
     print(f"{len(rows)} circuits: " + ", ".join(f"{k}={v}" for k, v in sorted(fams.items())))
+    fails = failures(recs)
     print("panel: points (wrong, floored)  [family=points/wrong, how the float run was judged]")
     for field, lab in [("simulation_time", "runtime (s)"),
                        ("final_nodes", "final # of nodes"),
                        ("max_nodes", "peak # of nodes")]:
         scatter(rows, "qisq2_low", "limdd_qisq2", field,
                 f"{lab} algebraic EVDD", f"{lab} algebraic LIMDD",
-                f"limdd_vs_evdd_{field}.pdf")
+                f"limdd_vs_evdd_{field}.pdf", fails=fails)
         scatter(rows, "float_low", "limdd_float", field,
                 f"{lab} float EVDD", f"{lab} float LIMDD",
                 f"limdd_vs_evdd_float_{field}.pdf",
-                judge="limdd_float", truth="limdd_qisq2")
+                judge="limdd_float", truth="limdd_qisq2", fails=fails, xjudge="float_low")
         scatter(rows, "float_low", "qisq2_low", field,
                 f"{lab} float", f"{lab} algebraic",
-                f"evdd_float_vs_algebraic_{field}.pdf", judge="float_low")
+                f"evdd_float_vs_algebraic_{field}.pdf", judge="float_low", fails=fails)
         scatter(rows, "limdd_float", "limdd_qisq2", field,
                 f"{lab} float LIMDD", f"{lab} algebraic LIMDD",
-                f"limdd_float_vs_algebraic_{field}.pdf", judge="limdd_float")
+                f"limdd_float_vs_algebraic_{field}.pdf", judge="limdd_float", fails=fails)
     legend("panel_legend.pdf")
     if a.dump: dump(recs, a.dump)
 
