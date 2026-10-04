@@ -67,14 +67,23 @@ FAMILY = [
     ("wstate",  "^", "W state"),
     ("hshift",  "D", "hidden shift"),
 ]
+# AMEND_FAMILIES=random,grover,wstate keeps only those families, in the figures,
+# the legend and every number the other scripts take from family_of. Unset, all
+# four are kept.
+ONLY = [f for f in os.environ.get("AMEND_FAMILIES", "").split(",") if f]
+if ONLY:
+    unknown = sorted(set(ONLY) - {k for k, _, _ in FAMILY})
+    if unknown: sys.exit(f"AMEND_FAMILIES: unknown families {unknown}")
+    FAMILY = [f for f in FAMILY if f[0] in ONLY]
 MARK = {k: m for k, m, _ in FAMILY}
 
 def family_of(name):
-    if name.startswith("clifford_T_circuit"): return "random"
-    if name.startswith("grover"):             return "grover"
-    if name.startswith(("w-state", "wclif")): return "wstate"
-    if name.startswith("hidden-shift"):       return "hshift"
-    return None                                # adder, ising: text only
+    if name.startswith("clifford_T_circuit"): fam = "random"
+    elif name.startswith("grover"):           fam = "grover"
+    elif name.startswith(("w-state", "wclif")): fam = "wstate"
+    elif name.startswith("hidden-shift"):     fam = "hshift"
+    else: return None                          # adder, ising: text only
+    return fam if fam in MARK else None
 
 # --------------------------------------------------------------------------
 # qubit counts, needed to drop the old LIMDD runs past one Pauli word

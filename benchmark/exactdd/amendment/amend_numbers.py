@@ -55,7 +55,7 @@ def show(label, cs, x, y):
 
 show("upper row, random", rnd, E, L)
 show("upper row, structured", struct, E, L)
-for fam in ("grover", "wstate", "hshift"):
+for fam in [f for f in ("grover", "wstate", "hshift") if f in mf.MARK]:   # AMEND_FAMILIES
     show(f"upper row, {fam}", [c for c in struct if mf.family_of(c) == fam], E, L)
 show("lower row, random", rnd, EF, LF)
 show("lower row, structured", struct, EF, LF)

@@ -7,6 +7,9 @@
 # Python from $PY, else python3; it needs matplotlib (README.md has the
 # versions that wrote the paper's PDFs):
 #   PY=/path/to/venv/bin/python ./regen_amendment.sh ROOT OUTDIR
+# AMEND_FAMILIES restricts the figures and the numbers to some of the families
+# random, grover, wstate and hshift, e.g. the families of Section 6:
+#   AMEND_FAMILIES=random,grover,wstate ./regen_amendment.sh ROOT OUTDIR
 # Sources, later overriding earlier: LIMDD from ldd/out (random circuits,
 # 70/80 qubits on the corrected build, and the six exact timeouts of the
 # uncorrected build), amend/out_rnd (random circuits up to 64 qubits on the
