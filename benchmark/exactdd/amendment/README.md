@@ -35,6 +35,7 @@ All four arms: `qisq2_low` (EVDD, algebraic), `float_low` (EVDD, float),
 | | `limdd_vs_evdd_float_{...}.pdf` | `fig:limdd-vs-evdd`, bottom row |
 | | `panel_legend.pdf` | the legend of `fig:limdd-vs-evdd` |
 | | `limdd_float_vs_algebraic_{...}.pdf` | `fig:limdd-float-vs-algebraic` |
+| | `limdd_float_vs_algebraic_legend.pdf` | its legend (not with `--unchecked right`, the revision's look) |
 | | `evdd_float_vs_algebraic_{...}.pdf` | not typeset; its point counts are in open item 1 |
 | | `merged_records.csv` | every merged record with its source. The values quoted for single circuits are rows of it: `tab:limdd-representative`, 4.4 s against 97.4 s, 443264 nodes against 411, the 32068 and 3628 node maxima, the Ising norms 0.84 and 0.68 |
 | | `make_figures.out` | points and red points per panel (62; 57 with 5 wrong; 56 with 2 wrong; 60 with 15 wrong), and the agreement of the exact arms on 33 of 33 (Setup) |
@@ -138,6 +139,17 @@ while the rerun's floats come from the October binary. (The paper's copies of
 the files under the original names were first written by 723240c, which drew
 a September Grover or W-state run without a probability as correct. They were
 replaced on 4 October by the current rule's.)
+
+Since 5 October the paper typesets the three quantities as one figure,
+`fig:qisq-vs-float_plots`, in the format of `fig:limdd-float-vs-algebraic`:
+families pooled, the family the marker shape, the colour the float run's
+verdict. `make_section6_figures.py` writes these panels next to the per-family
+ones, as `pooled_wgt_*_float[_TAG]_vs_algebraic_nw.pdf`, with their legend
+`pooled_legend_float[_TAG]_vs_algebraic_nw.pdf`. They draw what the per-family
+panels draw: red for a wrong measurement, violet for a norm alone off 1, grey
+for a measurement not checked, and hollow grey for a float run that did not
+finish. The paper's TeX picks the low or the L2 version with `\floatnorm`.
+The per-family panels are still written but no longer typeset.
 
 With the rerun, `make_figures.py --float-evdd float_l2` also writes
 alternatives of `fig:limdd-vs-evdd` and `fig:limdd-float-vs-algebraic` into

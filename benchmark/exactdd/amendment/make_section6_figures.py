@@ -39,6 +39,12 @@ judges by Section 6's rule alone, a top-qubit probability more than 5% off the
 exact one, with no look at the norm (make_figures.py --rule). --tag puts TAG
 into the file names, float_TAG_vs_algebraic, and the x label, so that versions
 can sit side by side.
+
+OUTDIR also gets the three quantities with the families pooled, one panel each,
+in the format of Figure 9 (make_figures.scatter: the family is the marker, the
+colour the float run's verdict), as pooled_<name of the panels above>, and
+their legend, pooled_legend_float[_TAG]_vs_algebraic_nw.pdf: the merged Figure
+6 of the paper.
 """
 import argparse, math, os
 import matplotlib
@@ -144,6 +150,7 @@ def main():
     ap.add_argument("--tag", default="", help="file names float_TAG_vs_algebraic")
     a = ap.parse_args()
     FLOAT, mf.RULE = a.float_arm, a.rule
+    mf.UNCHECKED = "grey"                     # as category() draws it, in the pooled panels too
     out, new = a.paths[-1], a.paths[:-1]
     for d in a.qasm: mf.count_qasm(d)
     recs, rows, _ = mf.load(new, a.old, {FLOAT, EXACT})
@@ -154,6 +161,13 @@ def main():
         os.makedirs(os.path.join(out, sub), exist_ok=True)
         for fname, field, lab in QUANT:
             panel(rows, fails, fam, field, lab, os.path.join(out, sub, fname.replace("float_vs", tag)))
+    mf.OUT = out                                # the pooled panels, in the format of Figure 9
+    pooled = []
+    for fname, field, lab in QUANT:
+        pooled.append("pooled_" + fname.replace("float_vs", tag))
+        mf.scatter(rows, FLOAT, EXACT, field, f"{lab} float{TAGLAB}", f"{lab} algebraic", pooled[-1],
+                   judge=FLOAT, fails=fails, fams={fam for _, fam in PANELS}, split=True)
+    mf.split_legend("pooled_legend_" + "float_vs_algebraic_nw.pdf".replace("float_vs", tag), pooled)
 
 if __name__ == "__main__":
     main()

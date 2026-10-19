@@ -306,6 +306,22 @@ bool limdd_node_stab_is_trivial(LIMDD_TARG p);
 uint64_t limdd_node_stab_raw(LIMDD_TARG p);
 void limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v);
 
+/**
+ * One machine word per node for the lazy canonical form (--canon=lazy, see
+ * qsylvan_limdd_class.h): zero while the node's class is unresolved, else the
+ * edge (map, rep) with |node> = map |rep>, which is (I, node) itself when the
+ * node is its class's member. Allocated only when the lazy form is turned on;
+ * written, like the stabiliser cache, with a relaxed store of a value every
+ * racing worker computes the same.
+ */
+void limdd_node_class_alloc(void);
+
+/** Creates the class table and the array above if the lazy form was asked for
+ *  and the node table exists; a no-op otherwise or when done already. */
+void limdd_nodes_attach_class(void);
+uint64_t limdd_node_class_raw(LIMDD_TARG p);
+void limdd_node_set_class_raw(LIMDD_TARG p, uint64_t v);
+
 /* --- garbage collection ---------------------------------------------------
  *
  * These are the node table's half of limdd_gc; see qsylvan_limdd_gc.h for what
@@ -318,6 +334,9 @@ int limdd_gc_mark_node(LIMDD_TARG p);
 
 /** Forget which buckets are occupied, so marking can rebuild the set. */
 void limdd_gc_clear_nodes(void);
+
+/** Whether marking reached bucket `p` (between marking and the next lookup). */
+bool limdd_gc_node_is_marked(LIMDD_TARG p);
 
 /** Rebuild the hash array over the marked buckets. */
 void limdd_gc_rehash_nodes(void);

@@ -37,6 +37,7 @@
  */
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@
 #include <sylvan.h>
 
 #include "qsylvan_limdd_canon.h"
+#include "qsylvan_limdd_class.h"
 #include "qsylvan_limdd_ops.h"
 #include "sylvan_edge_weights_complex.h"
 #include "sylvan_edge_weights_qisq2.h"
@@ -966,7 +968,269 @@ test_concurrent(void)
     return 0;
 }
 
+/* --- the lazy canonical form (LIMDD_CANON_LAZY) -------------------------- */
+
+/*
+ * The lazy form keeps one node per class of LIM-related states, as the eager
+ * one does, but not the minimal one, and leaves root labels unreduced. So what
+ * it must satisfy is weaker than the edge equality above and is tested on its
+ * own: equal states share their target; a fixed set of states needs exactly as
+ * many nodes as the eager form needs for it; the groups it computes on demand
+ * are right; and workers racing on DIFFERENT presentations of one class all
+ * end at the same node.
+ */
+
+/** The distinct nodes below `n` roots: one per class in either form. */
+static size_t
+count_below(const LIMDD *roots, size_t n)
+{
+    const size_t cap = (size_t)1 << 20;
+    uint64_t *set = calloc(cap, sizeof(uint64_t));
+    LIMDD_TARG *stack = malloc(cap * sizeof(LIMDD_TARG));
+    if (set == NULL || stack == NULL) { fprintf(stderr, "out of memory\n"); exit(1); }
+    size_t count = 0, sp = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (!limdd_edge_is_zero(roots[i])) stack[sp++] = limdd_target(roots[i]);
+    }
+    while (sp > 0) {
+        const LIMDD_TARG t = stack[--sp];
+        if (t == LIMDD_TERMINAL) continue;
+        size_t h = (size_t)(t * UINT64_C(0x9E3779B97F4A7C15)) & (cap - 1);
+        while (set[h] != 0 && set[h] != t) h = (h + 1) & (cap - 1);
+        if (set[h] == t) continue;
+        set[h] = t;
+        count++;
+        const LIMDD lo = limdd_node_low(t), hi = limdd_node_high(t);
+        if (!limdd_edge_is_zero(lo)) stack[sp++] = limdd_target(lo);
+        if (!limdd_edge_is_zero(hi)) stack[sp++] = limdd_target(hi);
+    }
+    free(set);
+    free(stack);
+    return count;
+}
+
+/* The eager form's count for the same states, per weight type. */
+static size_t eager_pool_nodes[2];
+static int backend_slot = 0;          /* 0 complex, 1 exact */
+
+#define NCOUNT 400
+/** The nodes a fixed set of random states needs. The stream is reseeded, so
+ *  both forms build the same states, from the same random choices. */
+static size_t
+pool_nodes(void)
+{
+    static LIMDD pool[NCOUNT];
+    const uint64_t saved = rng_state;
+    rng_state = UINT64_C(0x5DEECE66D1234567);
+    for (size_t i = 0; i < NCOUNT; i++) pool[i] = random_edge(0);
+    rng_state = saved;
+    return count_below(pool, NCOUNT);
+}
+
+int
+test_lazy_equal_states_same_target(void)
+{
+    static LIMDD pool[NPOOL];
+    static cx vecs[NPOOL][NBASIS];
+    size_t n = 0, coincidences = 0;
+    for (int trial = 0; trial < NPOOL; trial++) {
+        const LIMDD e = random_edge(0);
+        if (limdd_edge_is_zero(e)) continue;
+        pool[n] = e;
+        vector_of(e, 0, vecs[n]);
+        n++;
+    }
+    for (size_t i = 0; i < n; i++) {
+        for (size_t j = i + 1; j < n; j++) {
+            bool same_state = true;
+            for (unsigned b = 0; b < NBASIS && same_state; b++) {
+                if (!cx_eq(vecs[i][b], vecs[j][b])) same_state = false;
+            }
+            if (!same_state) continue;
+            coincidences++;
+            if (!same_node(limdd_target(pool[i]), limdd_target(pool[j]))) {
+                fprintf(stderr, "diagrams %zu and %zu: equal states, targets %llu and %llu\n",
+                        i, j, (unsigned long long)limdd_target(pool[i]),
+                        (unsigned long long)limdd_target(pool[j]));
+                return 1;
+            }
+        }
+    }
+    if (coincidences == 0) {
+        fprintf(stderr, "no two diagrams denoted the same state -- the test proved nothing\n");
+        return 1;
+    }
+    printf("  (%zu coinciding pairs among %zu diagrams)\n", coincidences, n);
+    return 0;
+}
+
+int
+test_lazy_node_counts(void)
+{
+    const size_t got = pool_nodes(), want = eager_pool_nodes[backend_slot];
+    if (want == 0) { fprintf(stderr, "no eager count to compare with\n"); return 1; }
+    printf("  (%zu nodes for %d random states, eager %zu)\n", got, NCOUNT, want);
+    if (got != want) {
+        fprintf(stderr, "the lazy form needs %zu nodes, the eager one %zu\n", got, want);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * The scalar part of the class key: the same for a scalar and its multiples by
+ * the units +-1, +-i, on which the members of a class differ at most; apart
+ * for the scalars here that are not unit multiples of each other; and 0 on
+ * floats, where rounding could break it.
+ */
+int
+test_lazy_scalar_key(void)
+{
+    const bool exact = sylvan_get_edge_weight_type() == WGT_QISQ2;
+    const EVBDD_WGT unit[4] = { EVBDD_ONE, limdd_wgt_i_pow(1), limdd_wgt_i_pow(2), limdd_wgt_i_pow(3) };
+    uint64_t keys[64];
+    size_t nkeys = 0;
+    for (int trial = 0; trial < 64; trial++) {
+        /* products of up to three scalars, so the rationals are not all trivial */
+        EVBDD_WGT w = random_scalar();
+        for (int f = rnd() % 3; f > 0; f--) w = wgt_mul(w, random_scalar());
+        if (rnd() % 2) w = wgt_add(w, random_scalar());
+        if (w == EVBDD_ZERO) continue;
+        const limdd_pauli_t p = random_word_above(0);
+        const uint64_t k = limdd_class_scalar_key(limdd_lim_make(p, w));
+        if (!exact) { test_assert(k == 0); continue; }
+        for (int u = 1; u < 4; u++) {
+            const uint64_t ku = limdd_class_scalar_key(limdd_lim_make(p, wgt_mul(w, unit[u])));
+            if (ku != k) {
+                fprintf(stderr, "scalar key changes under the unit i^%d\n", u);
+                return 1;
+            }
+        }
+        if (nkeys < 64) keys[nkeys++] = k;
+    }
+    if (!exact) return 0;
+    /* 1, 1/2 and (1/2)sqrt2 are not unit multiples of one another */
+    const uint64_t k1 = limdd_class_scalar_key(limdd_lim_make(limdd_pauli_identity(), EVBDD_ONE));
+    const uint64_t kh = limdd_class_scalar_key(limdd_lim_make(limdd_pauli_identity(), qisq2_lookup(1,2, 0,1, 0,1, 0,1)));
+    const uint64_t kr = limdd_class_scalar_key(limdd_lim_make(limdd_pauli_identity(), qisq2_lookup(0,1, 1,2, 0,1, 0,1)));
+    test_assert(k1 != kh && k1 != kr && kh != kr);
+    (void)keys;
+    return 0;
+}
+
+/*
+ * On floats a high branch whose scalar is within the weight table's tolerance
+ * of 0 relative to the low one is dead: makeedge builds the dead-branch node,
+ * whose zero edge points at the terminal. Before, a high branch 1e-16 times the
+ * low one gave the zero map as the node's label, on an edge to a live node, and
+ * the coset search asserted on it. The other way round the low branch stays,
+ * and the swapped form, whose label would be merged with 0, is not used.
+ */
+int
+test_negligible_branch(void)
+{
+    if (sylvan_get_edge_weight_type() != WGT_COMPLEX_128) return 0;
+    const LIMDD_LIM huge = limdd_lim_make(limdd_pauli_identity(), complex_lookup(1e16, 0.0));
+    size_t n = 0;
+    for (int trial = 0; trial < 200 && n < 50; trial++) {
+        const LIMDD lo = random_edge(1), hi = random_edge(1);
+        if (limdd_edge_is_zero(lo) || limdd_edge_is_zero(hi)) continue;
+        n++;
+        const LIMDD big_lo = relabel(lo, huge), big_hi = relabel(hi, huge);
+        const LIMDD e1 = limdd_makeedge(0, big_lo, hi);
+        test_assert(e1 == limdd_makeedge(0, big_lo, limdd_zero_edge()));
+        test_assert(limdd_node_high(limdd_target(e1)) == limdd_zero_edge());
+        const LIMDD e2 = limdd_makeedge(0, lo, big_hi);
+        test_assert(!limdd_edge_is_zero(limdd_node_low(limdd_target(e2))));
+        test_assert(!limdd_edge_is_zero(limdd_node_high(limdd_target(e2))));
+    }
+    test_assert(n > 0);
+    return 0;
+}
+
+#define NRACE 128
+static LIMDD race_lo[NRACE], race_hi[NRACE];
+static _Atomic(LIMDD_TARG) race_seen[NRACE];
+
+/* Each item in three presentations: as given, with the children exchanged
+ * (an X at qubit 0) and with the high branch negated (a Z). Three different
+ * factored nodes of one class, so three different stored candidates. */
+VOID_TASK_3(race_build, size_t, lo, size_t, hi, int, round)
+{
+    if (hi - lo > 8) {
+        size_t mid = lo + (hi - lo) / 2;
+        SPAWN(race_build, lo, mid, round);
+        CALL(race_build, mid, hi, round);
+        SYNC(race_build);
+        return;
+    }
+    for (size_t i = lo; i < hi; i++) {
+        LIMDD e;
+        switch ((round + (int)i) % 3) {
+        case 0:  e = limdd_makeedge(0, race_lo[i], race_hi[i]); break;
+        case 1:  e = limdd_makeedge(0, race_hi[i], race_lo[i]); break;
+        default: e = limdd_makeedge(0, race_lo[i], relabel(race_hi[i],
+                        limdd_lim_make(limdd_pauli_identity(), EVBDD_MIN_ONE)));
+        }
+        if (limdd_edge_is_zero(e)) continue;
+        LIMDD_TARG expect = 0;
+        const LIMDD_TARG t = limdd_target(e);
+        if (!atomic_compare_exchange_strong(&race_seen[i], &expect, t) && expect != t) {
+            fprintf(stderr, "item %zu: presentations reached %llu and %llu\n",
+                    i, (unsigned long long)expect, (unsigned long long)t);
+            exit(1);
+        }
+    }
+}
+
+int
+test_lazy_concurrent_isomorphic(void)
+{
+    for (size_t i = 0; i < NRACE; i++) {
+        race_lo[i] = random_edge(1);
+        race_hi[i] = random_edge(1);
+        race_seen[i] = 0;
+    }
+    for (int round = 0; round < 9; round++) RUN(race_build, 0, NRACE, round);
+    return 0;
+}
+
 static bool l2 = false;      /* run the suite under L2 normalisation */
+
+TASK_0(int, runtests_lazy)
+{
+    limdd_set_canon_policy(LIMDD_CANON_LAZY, 0);
+    limdd_nodes_init(NQUBITS, 1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
+    limdd_set_l2(l2);
+    test_assert(limdd_canon_is_lazy());
+
+    if (test_soundness()) return 1;
+    printf("makeedge preserves the state (3000 cases):   ok\n");
+    if (test_lazy_equal_states_same_target()) return 1;
+    printf("equal states share their target:             ok\n");
+    if (!l2) {
+        if (test_lazy_node_counts()) return 1;
+        printf("as many nodes as the eager form:             ok\n");
+    }
+    if (test_stab_of_canonical_nodes()) return 1;
+    printf("groups computed on demand fix their states:  ok\n");
+    if (test_concurrent()) return 1;
+    printf("makeedge agrees across workers:              ok\n");
+    if (test_lazy_concurrent_isomorphic()) return 1;
+    printf("isomorphic presentations race to one node:   ok\n");
+    if (test_lazy_scalar_key()) return 1;
+    printf("the class key's scalar ignores units:        ok\n");
+    if (test_negligible_branch()) return 1;
+    printf("a negligible high branch is a dead branch:  ok\n");
+    printf("(%zu nodes, %zu LIMs, %zu generator cells)\n",
+           limdd_node_table_count(), limdd_lim_table_count(), limdd_stab_table_count());
+
+    limdd_set_l2(false);
+    limdd_nodes_quit();
+    limdd_set_canon_policy(LIMDD_CANON_ALWAYS, 0);
+    test_assert(!limdd_canon_is_lazy());
+    return 0;
+}
 
 TASK_0(int, runtests)
 {
@@ -979,6 +1243,8 @@ TASK_0(int, runtests)
     printf("a common LIM on both children keeps the node: ok\n");
     if (test_canonical_under_swap()) return 1;
     printf("exchanging the children keeps the node:       ok\n");
+    if (test_negligible_branch()) return 1;
+    printf("a negligible high branch is a dead branch:  ok\n");
     if (test_canonical_under_stabiliser()) return 1;
     printf("a stabiliser on a label keeps the node:       ok\n");
     if (test_zero_branch_merges()) return 1;
@@ -997,6 +1263,7 @@ TASK_0(int, runtests)
     printf("cached groups match the states they fix:      ok\n");
     if (test_concurrent()) return 1;
     printf("makeedge agrees across workers:               ok\n");
+    if (!l2) eager_pool_nodes[backend_slot] = pool_nodes();
 
     if (l2) printf("(%zu canonical choices decided by rounding, the same state)\n", ties);
     printf("(%zu nodes, %zu LIMs, %zu generator cells)\n",
@@ -1009,16 +1276,18 @@ TASK_0(int, runtests)
 
 static int
 run_with(edge_weight_type_t type, wgt_storage_backend_t backend, const char *name,
-         bool with_l2)
+         bool with_l2, bool with_lazy)
 {
-    printf("== LIMDD with %s edge weights%s ==\n", name, with_l2 ? ", L2 normalisation" : "");
+    printf("== LIMDD with %s edge weights%s%s ==\n", name, with_l2 ? ", L2 normalisation" : "",
+           with_lazy ? ", lazy canonical form" : "");
     l2 = with_l2;
+    backend_slot = type == WGT_QISQ2;
     lace_start(8, 0);
     sylvan_set_sizes(1LL << 16, 1LL << 16, 1LL << 16, 1LL << 16);
     sylvan_init_package();
     sylvan_init_edge_weights(1LL << 18, 1LL << 18, 1e-14, type, backend);
 
-    int res = RUN(runtests);
+    int res = with_lazy ? RUN(runtests_lazy) : RUN(runtests);
 
     sylvan_edge_weights_free();
     sylvan_quit();
@@ -1029,8 +1298,12 @@ run_with(edge_weight_type_t type, wgt_storage_backend_t backend, const char *nam
 int
 main(void)
 {
-    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", false)) return 1;
-    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", true)) return 1;
-    if (run_with(WGT_QISQ2, QISQ2_MAP, "exact (Q[i,sqrt2])", false)) return 1;
+    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", false, false)) return 1;
+    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", true, false)) return 1;
+    if (run_with(WGT_QISQ2, QISQ2_MAP, "exact (Q[i,sqrt2])", false, false)) return 1;
+    /* after the eager runs, whose node counts the lazy ones are held to */
+    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", false, true)) return 1;
+    if (run_with(WGT_COMPLEX_128, COMP_HASHMAP, "complex", true, true)) return 1;
+    if (run_with(WGT_QISQ2, QISQ2_MAP, "exact (Q[i,sqrt2])", false, true)) return 1;
     return 0;
 }

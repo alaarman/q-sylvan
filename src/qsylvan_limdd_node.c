@@ -23,6 +23,7 @@
 #include <sylvan_platform.h>
 
 #include "qsylvan_limdd_node.h"
+#include "qsylvan_limdd_class.h"
 #include "qsylvan_limdd_stab.h"
 #include "sylvan_edge_weights_complex.h"
 
@@ -153,6 +154,10 @@ limdd_node_stab_is_trivial(LIMDD_TARG p)
  * skips no level: a skipped level adds an X_j generator (see
  * limdd_stab_extend_skipped), which would survive the intersection.
  *
+ * The same holds when the targets are equal and that one child's group is
+ * trivial, except that the anti-diagonal representative can now exist: it
+ * does exactly when the high scalar squares to +-1.
+ *
  * Conservative in one direction only -- when both children have non-trivial
  * groups this answers false and the caller computes properly -- and it is a
  * pure function of the node's contents, so every caller that builds the same
@@ -165,7 +170,21 @@ stab_trivially_trivial(uint32_t var, LIMDD low, LIMDD high)
         limdd_lim_is_zero(limdd_label(high))) return false;   /* a dead branch adds Z */
 
     const LIMDD_TARG lt = limdd_target(low), ht = limdd_target(high);
-    if (lt == ht) return false;                               /* anti-diagonal may fire */
+    if (lt == ht) {
+        /*
+         * One child twice. With its group trivial (the terminal's is) and no
+         * level skipped, the diagonal part is empty as above, and the
+         * anti-diagonal representative exists exactly when the high scalar
+         * squares to +-1: limdd_stab_of_node makes that very test, on the same
+         * interned weights. Without this case no node could ever get the bit,
+         * since every node at the bottom level has the terminal twice (or a
+         * dead branch), and the rule below only passes the bit upwards.
+         */
+        if (!limdd_node_stab_is_trivial(lt) || limdd_level(lt) != var + 1) return false;
+        const EVBDD_WGT beta = limdd_lim_weight(limdd_label(high));
+        const EVBDD_WGT beta_sq = wgt_mul(beta, beta);
+        return beta_sq != EVBDD_ONE && beta_sq != EVBDD_MIN_ONE;
+    }
 
     return (limdd_node_stab_is_trivial(lt) && limdd_level(lt) == var + 1)
         || (limdd_node_stab_is_trivial(ht) && limdd_level(ht) == var + 1);
@@ -183,6 +202,41 @@ limdd_node_set_stab_raw(LIMDD_TARG p, uint64_t v)
 {
     assert(node_stab != NULL);
     atomic_store_explicit(&node_stab[p], v, memory_order_relaxed);
+}
+
+static _Atomic(uint64_t) *node_class = NULL;
+
+void
+limdd_node_class_alloc(void)
+{
+    if (node_class != NULL) return;
+    node_class = calloc(limdd_nodes->max_size, sizeof(_Atomic(uint64_t)));
+    if (node_class == NULL) {
+        fprintf(stderr, "sylvan: could not allocate the LIMDD class array\n");
+        exit(1);
+    }
+}
+
+void
+limdd_nodes_attach_class(void)
+{
+    if (!limdd_class_requested() || limdd_nodes == NULL) return;
+    limdd_class_init(limdd_nodes->max_size);
+    limdd_node_class_alloc();
+}
+
+uint64_t
+limdd_node_class_raw(LIMDD_TARG p)
+{
+    assert(node_class != NULL);
+    return atomic_load_explicit(&node_class[p], memory_order_relaxed);
+}
+
+void
+limdd_node_set_class_raw(LIMDD_TARG p, uint64_t v)
+{
+    assert(node_class != NULL);
+    atomic_store_explicit(&node_class[p], v, memory_order_relaxed);
 }
 
 LIMDD
@@ -421,6 +475,12 @@ limdd_gc_clear_nodes(void)
     llmsset_clear_data(limdd_nodes);
 }
 
+bool
+limdd_gc_node_is_marked(LIMDD_TARG p)
+{
+    return llmsset_is_marked(limdd_nodes, p) != 0;
+}
+
 void
 limdd_gc_rehash_nodes(void)
 {
@@ -437,7 +497,11 @@ limdd_gc_purge_stab_cache(void)
     for (uint64_t b = 2; b < limdd_nodes->table_size; b++) {
         const uint64_t word = limdd_nodes->bitmap2[b / 64];
         const uint64_t mask = UINT64_C(0x8000000000000000) >> (b & 63);
-        if (!(word & mask)) atomic_store_explicit(&node_stab[b], 0, memory_order_relaxed);
+        if (word & mask) continue;
+        atomic_store_explicit(&node_stab[b], 0, memory_order_relaxed);
+        /* A node that lost its class to another is never handed out, so it
+         * is never marked and its alias goes with it. */
+        if (node_class != NULL) atomic_store_explicit(&node_class[b], 0, memory_order_relaxed);
     }
 }
 
@@ -473,6 +537,9 @@ limdd_nodes_init(size_t nqubits, size_t node_tablesize,
      */
     evbdd_set_auto_gc_wgt_table(false);
 
+    /* The lazy canonical form's class table, if it was asked for. */
+    limdd_nodes_attach_class();
+
     /* One reference stack per worker, so operations can be interrupted by a
      * collection without losing what they are holding. Declared here rather
      * than included: qsylvan_limdd_gc.h reaches this header through canon.h,
@@ -506,6 +573,9 @@ limdd_nodes_quit(void)
     }
     free(node_stab);
     node_stab = NULL;
+    free(node_class);
+    node_class = NULL;
+    limdd_class_quit();
     limdd_nqubits = 0;
     zero_edge = 0;
     one_edge = 0;

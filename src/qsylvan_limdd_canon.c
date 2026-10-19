@@ -17,10 +17,14 @@
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_canon.h"
+#include "qsylvan_limdd_profile.h"
+#include "qsylvan_limdd_class.h"
+#include "sylvan_edge_weights_complex.h"
 
 /* Declared in qsylvan_limdd_ops.h, which includes this module's header, so it
  * cannot be included from here. */
@@ -32,7 +36,10 @@ lim_times_edge(LIMDD_LIM l, LIMDD e)
 {
     if (limdd_lim_is_identity(l)) return e;
     if (limdd_edge_is_zero(e) || limdd_lim_is_zero(l)) return limdd_zero_edge();
-    return limdd_bundle(limdd_lim_mul(l, limdd_label(e)), limdd_target(e));
+    /* On floats a product within the tolerance of 0 is the zero map, and the
+     * zero edge points at the terminal, not at e's target. */
+    const LIMDD_LIM m = limdd_lim_mul(l, limdd_label(e));
+    return limdd_lim_is_zero(m) ? limdd_zero_edge() : limdd_bundle(m, limdd_target(e));
 }
 
 /* Read-mostly: set once at configuration time, then only read. */
@@ -96,8 +103,20 @@ limdd_set_canon_policy(limdd_canon_policy_t policy, uint64_t interval)
         }
     }
     canon_counters_reset();
-    /* Deferring means operations run without the orbit search. */
-    high_determinism = (policy == LIMDD_CANON_ALWAYS);
+    limdd_prof_init();
+    /* Deferring means operations run without the orbit search; the lazy form
+     * runs it where a comparison needs it, so it keeps it on. */
+    high_determinism = (policy == LIMDD_CANON_ALWAYS || policy == LIMDD_CANON_LAZY);
+    /* The lazy form's tables come with the node table, or now if that
+     * exists; switching it off takes effect with the next session. */
+    limdd_class_request(policy == LIMDD_CANON_LAZY);
+    limdd_nodes_attach_class();
+}
+
+bool
+limdd_canon_is_lazy(void)
+{
+    return limdd_class_on();
 }
 
 void
@@ -110,7 +129,7 @@ limdd_canon_last(uint64_t *before, uint64_t *after)
 bool
 limdd_canon_due(void)
 {
-    if (canon_policy == LIMDD_CANON_ALWAYS ||
+    if (canon_policy == LIMDD_CANON_ALWAYS || canon_policy == LIMDD_CANON_LAZY ||
         canon_policy == LIMDD_CANON_MANUAL) return false;
 
     uint64_t total = 0;
@@ -129,6 +148,110 @@ limdd_get_high_determinism(void)
 {
     return high_determinism;
 }
+
+#ifdef LIMDD_PROFILE
+
+limdd_prof_line_t *limdd_prof = NULL;
+static unsigned prof_nworkers = 0;
+
+/*
+ * Fingerprint sets for the lazy estimate: open addressing over 64-bit
+ * fingerprints, 0 meaning empty. Kept only with one worker (prof_sets_on), so
+ * nothing here is shared; when one fills past 3/4 the estimate stops and the
+ * report says so.
+ */
+#define PROF_SET_LOG 23
+typedef struct { uint64_t *slot; uint64_t n; } prof_set_t;
+static prof_set_t prof_tuples, prof_classes;
+static bool prof_sets_on = false, prof_sets_full = false;
+
+static uint64_t
+prof_mix(uint64_t x)
+{
+    x ^= x >> 30; x *= UINT64_C(0xbf58476d1ce4e5b9);
+    x ^= x >> 27; x *= UINT64_C(0x94d049bb133111eb);
+    x ^= x >> 31;
+    return x ? x : 1;
+}
+
+/** Inserts fp; returns whether it was there already. */
+static bool
+prof_set_seen(prof_set_t *s, uint64_t fp)
+{
+    const uint64_t mask = (UINT64_C(1) << PROF_SET_LOG) - 1;
+    for (uint64_t i = fp & mask;; i = (i + 1) & mask) {
+        if (s->slot[i] == fp) return true;
+        if (s->slot[i] == 0) {
+            if (s->n >= (mask + 1) / 4 * 3) { prof_sets_full = true; return false; }
+            s->slot[i] = fp; s->n++;
+            return false;
+        }
+    }
+}
+
+void
+limdd_prof_init(void)
+{
+    if (limdd_prof != NULL) return;
+    prof_nworkers = (unsigned)lace_workers();
+    if (prof_nworkers == 0) prof_nworkers = 1;
+    limdd_prof = (limdd_prof_line_t *)sylvan_alloc_padded(prof_nworkers * sizeof(limdd_prof_line_t));
+    if (limdd_prof == NULL) { fprintf(stderr, "sylvan: out of memory for the LIMDD profile\n"); exit(1); }
+    memset(limdd_prof, 0, prof_nworkers * sizeof(limdd_prof_line_t));
+    if (prof_nworkers == 1) {
+        prof_tuples.slot  = (uint64_t *)calloc(UINT64_C(1) << PROF_SET_LOG, sizeof(uint64_t));
+        prof_classes.slot = (uint64_t *)calloc(UINT64_C(1) << PROF_SET_LOG, sizeof(uint64_t));
+        prof_sets_on = prof_tuples.slot != NULL && prof_classes.slot != NULL;
+    }
+}
+
+void
+limdd_prof_report(FILE *out)
+{
+    if (limdd_prof == NULL) return;
+    static const char *name[LP_N] = {
+        "calls", "zero", "dead", "eq", "same", "gen", "gen_triv", "gen_created",
+        "gen_exact", "gen_merged", "lz_tseen", "lz_classnew", "lz_collide",
+        "lz_collide_found", "mincoset", "mincoset_hit", "zassenhaus", "stab_of_node",
+        "lazy_known", "lazy_resolve", "lazy_member", "lazy_filtered", "lazy_alias"
+    };
+    for (int k = 0; k < LP_N; k++) {
+        uint64_t t = 0;
+        for (unsigned i = 0; i < prof_nworkers; i++) t += limdd_prof[i].c[k];
+        fprintf(out, "LIMPROF %s %llu\n", name[k], (unsigned long long)t);
+    }
+    fprintf(out, "LIMPROF lazy_estimate %s\n", !prof_sets_on ? "off (more than one worker)"
+                                             : prof_sets_full ? "stopped (a set filled)" : "complete");
+}
+
+/*
+ * The lazy estimate for a node with two different children: whether this
+ * factored node (var, v0, bp, v1) was asked for before (a lazy makeedge would
+ * find it in the node table), else whether any node with its class key
+ * (var, {v0, v1}) was (it would have to be compared), else neither (it would be
+ * stored without its canonical form). Returns whether it was a collision.
+ */
+static bool
+prof_lazy(uint32_t var, LIMDD_TARG v0, LIMDD_LIM bp, LIMDD_TARG v1)
+{
+    if (!prof_sets_on || prof_sets_full) return false;
+    const uint64_t lo = v0 < v1 ? v0 : v1, hi = v0 < v1 ? v1 : v0;
+    const uint64_t cls = prof_mix(((uint64_t)var << 48) ^ prof_mix(lo << 32 | hi));
+    const uint64_t tup = prof_mix(cls ^ prof_mix((uint64_t)bp << 32 | v0));
+    const bool tseen = prof_set_seen(&prof_tuples, tup);
+    const bool cseen = prof_set_seen(&prof_classes, cls);
+    if (tseen) { LIMDD_PROF(LP_LZ_TSEEN); return false; }
+    if (!cseen) { LIMDD_PROF(LP_LZ_CLASSNEW); return false; }
+    LIMDD_PROF(LP_LZ_COLLIDE);
+    return true;
+}
+
+#else
+
+void limdd_prof_init(void) {}
+void limdd_prof_report(FILE *out) { (void)out; }
+
+#endif
 
 /**
  * The group of what `t` denotes when reached by an edge read at `level`: the
@@ -156,7 +279,17 @@ limdd_node_stab(LIMDD_TARG p)
 
     /* The common case, answered from the node itself: no cache line outside
      * this node is touched, so it costs nothing and contends with nobody. */
-    if (limdd_node_stab_is_trivial(p)) return LIMDD_STAB_TRIVIAL;
+    if (limdd_node_stab_is_trivial(p)) {
+#ifndef NDEBUG
+        /* The bit must say what the group computation says. */
+        const uint32_t v = limdd_node_var(p);
+        const LIMDD lo = limdd_node_low(p), hi = limdd_node_high(p);
+        assert(limdd_stab_of_node(v, lo, hi, stab_at_level(v + 1, limdd_target(lo)),
+                                  stab_at_level(v + 1, limdd_target(hi))) == LIMDD_STAB_TRIVIAL
+               && "a node's trivial-group bit disagrees with its group");
+#endif
+        return LIMDD_STAB_TRIVIAL;
+    }
 
     const uint64_t cached = limdd_node_stab_raw(p);
     if (cached != 0) return cached;
@@ -350,7 +483,7 @@ lim_with_pauli_at(LIMDD_LIM a, uint32_t var, bool x, bool z)
 }
 
 /**
- * A total order on LIMs, by VALUE.
+ * An order on LIMs, by VALUE.
  *
  * Comparing interned indices instead would be cheaper and wrong. An index
  * records when a label was first seen, not what it is, so the same two labels
@@ -358,6 +491,16 @@ lim_with_pauli_at(LIMDD_LIM a, uint32_t var, bool x, bool z)
  * a collection that sweeps one of them and hands back a different index when
  * it reappears changes the answer outright. The order below depends on nothing
  * but the label.
+ *
+ * On float weights a component decides only when it differs by more than the
+ * weight table's tolerance; within it the next one does. Rounding leaves
+ * residues such as 1e-17 where the exact value is 0, and compared exactly
+ * their sign would pick the candidate: one class then gets two canonical
+ * nodes, and the weight table cannot merge the two labels either, since its
+ * grid has a cell boundary at 0. Near such ties the order is not transitive,
+ * but makeedge only ever compares its two candidates. Only the lazy form does
+ * this (with exact weights it compares exactly too), so the eager form keeps
+ * every choice it made before.
  */
 static int
 lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
@@ -373,8 +516,14 @@ lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
      * stays a deterministic function of the value. */
     const complex_t ca = weight_as_complex(limdd_lim_weight(a));
     const complex_t cb = weight_as_complex(limdd_lim_weight(b));
-    if (ca.r != cb.r) return ca.r < cb.r ? -1 : 1;
-    if (ca.i != cb.i) return ca.i < cb.i ? -1 : 1;
+    double tol = 0.0;
+    if (limdd_class_on() && sylvan_get_edge_weight_type() == WGT_COMPLEX_128) {
+        /* relative to the larger modulus, see labels_match */
+        tol = sylvan_edge_weights_tolerance() * fmax(hypot((double)ca.r, (double)ca.i),
+                                                     hypot((double)cb.r, (double)cb.i));
+    }
+    if (fabs((double)ca.r - (double)cb.r) > tol) return ca.r < cb.r ? -1 : 1;
+    if (fabs((double)ca.i - (double)cb.i) > tol) return ca.i < cb.i ? -1 : 1;
     return 0;
 }
 
@@ -403,16 +552,19 @@ node_less(LIMDD_TARG lo_a, LIMDD_TARG hi_a, LIMDD_LIM lab_a,
 /** Intern (var, I->lo, lab->hi) and make sure its group is cached. */
 static LIMDD_TARG
 intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
-       LIMDD_STAB s_lo, LIMDD_STAB s_hi)
+       LIMDD_STAB s_lo, LIMDD_STAB s_hi, int *created_out)
 {
     const LIMDD low = limdd_bundle(LIMDD_LIM_IDENTITY, lo);
     const LIMDD high = limdd_bundle(lab, hi);
     int created;
     const LIMDD_TARG t = limdd_makenode_ex(var, low, high, &created);
+    if (created_out != NULL) *created_out = created;
 
     /* Without high determinism no group was needed to build this node, and
-     * computing one here would cost exactly what that mode exists to avoid. */
-    if (!high_determinism) return t;
+     * computing one here would cost exactly what that mode exists to avoid.
+     * The lazy form computes groups only where a comparison asks for them
+     * (limdd_node_stab, on demand). */
+    if (!high_determinism || limdd_class_on()) return t;
 
     /*
      * Nothing to record when the node already says its group is trivial: the
@@ -434,6 +586,331 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
         limdd_node_set_stab_raw(t, limdd_stab_of_node(var, low, high, s_lo, s_hi));
     }
     return t;
+}
+
+/**
+ * In the lazy form on float weights, a canonical label with the components
+ * that are within the weight tolerance of 0 (relative to its modulus) set to
+ * +0: rounding leaves residues such as 1e-17 or -0 where the exact value is 0,
+ * and the weight table, whose grid has a cell boundary at 0, would intern
+ * them apart, so the canonical node of one class would come out twice. The
+ * label moves by less than the tolerance, which is what the table merges by.
+ * The eager form keeps its labels as they were.
+ */
+static LIMDD_LIM
+lim_clean(LIMDD_LIM l)
+{
+    if (!limdd_class_on() || sylvan_get_edge_weight_type() != WGT_COMPLEX_128) return l;
+    const complex_t c = weight_as_complex(limdd_lim_weight(l));
+    const double tol = sylvan_edge_weights_tolerance() * hypot((double)c.r, (double)c.i);
+    const bool zr = fabs((double)c.r) <= tol, zi = fabs((double)c.i) <= tol;
+    if ((!zr || ((double)c.r == 0.0 && !signbit((double)c.r))) &&
+        (!zi || ((double)c.i == 0.0 && !signbit((double)c.i)))) return l;
+    return limdd_lim_make(limdd_lim_pauli(l),
+                          complex_lookup(zr ? 0.0 : (double)c.r, zi ? 0.0 : (double)c.i));
+}
+
+/*
+ * THE CANONICAL NODE of the factored node (var, I->v0, bp->v1): which child goes
+ * low, the minimal label, and what undoes them, as canon_root assembles it.
+ * Shared by the eager form, which interns the result, and the lazy one, which
+ * only compares it; both need the children's groups.
+ */
+typedef struct {
+    LIMDD_TARG lo, hi;      /* the canonical node (var, I->lo, lab->hi) */
+    LIMDD_LIM  lab;
+    LIMDD_STAB s_lo, s_hi;  /* the groups of lo and hi as read at var+1 */
+    LIMDD_LIM  g;           /* the minimisation's witness */
+    bool       neg;         /* the sign rule flipped the label */
+    bool       swapped;     /* lo is v1: the branches were swapped */
+    bool       skip;        /* v0 == v1 and the level is not stored at all */
+} canon_key_t;
+
+static void
+canon_key(uint32_t var, LIMDD_TARG v0, LIMDD_LIM bp, LIMDD_TARG v1, canon_key_t *k)
+{
+    /* The children as read at var+1, over whatever levels they skip. */
+    const LIMDD_STAB s0 = stab_at_level(var + 1, v0);
+    const LIMDD_STAB s1 = stab_at_level(var + 1, v1);
+
+    /* Candidate as given. */
+    LIMDD_LIM g1; bool neg1;
+    const LIMDD_LIM lab1 = lim_clean(limdd_stab_min_coset(bp, s0, s1, &g1, &neg1));
+
+    /*
+     * THE SKIP RULE, the half that needs the groups. lab1 == I with one
+     * target means bp lies in +-Stab(v0): the high branch is +- the low one,
+     * the node is (|0> +- |1>)(x)w, and this level is not stored. The sign
+     * rule has already resolved the +- to +, recording the flip in neg1, and
+     * that flip is exactly a Z at this level -- so this is the unswapped
+     * branch's own label formula with the intern() left out. |0>w + i|1>w,
+     * a product state but no Pauli image of |0>+|1>, gives lab1 = iI and
+     * correctly falls through.
+     *
+     * It must come BEFORE the swapped candidate: on this input lab1 and lab2
+     * tie, node_less then takes the swapped branch, and that deposits XZ at
+     * this level rather than Z. Same state, another label, and only the
+     * reduction against X_var would bring the two together again.
+     */
+    k->skip = v0 == v1 && lab1 == LIMDD_LIM_IDENTITY;
+    if (k->skip) {
+        k->lo = k->hi = v0; k->lab = lab1; k->s_lo = s0; k->s_hi = s1;
+        k->g = g1; k->neg = neg1; k->swapped = false;
+        return;
+    }
+
+    /*
+     * Candidate with the branches swapped. Applying X at this level gives
+     * |0>(x)B'|v1> + |1>(x)|v0>; dividing B' out in turn leaves the node
+     * (v1, B'^-1, v0), so the swap costs one inverse and a second minimisation
+     * over the same two groups in the other order.
+     */
+    /*
+     * Computed only when it can matter. node_less compares the two targets
+     * first and reaches the label only when they are equal, so with v0 < v1
+     * the unswapped candidate wins on the targets alone and this second
+     * minimisation is never read. Measured over five million calls, the two
+     * always agree on the Pauli WORD anyway -- a Pauli is its own inverse and
+     * both reduce by the same pivot set -- and differ only in the scalar,
+     * which is exactly what the label comparison looks at when v0 == v1.
+     */
+    LIMDD_LIM g2 = LIMDD_LIM_IDENTITY; bool neg2 = false;
+    LIMDD_LIM lab2 = LIMDD_LIM_IDENTITY;
+    /*
+     * On floats the inverse of a label above 1/tolerance is merged with 0, and
+     * the swapped node would then have the zero map on a live branch, which
+     * the table cannot tell from a dead one. Such a node is kept in the order
+     * it came in. Dropping the low branch instead would be wrong: the children
+     * are not unit vectors under low normalisation, so a large label does not
+     * make the low branch small.
+     */
+    bool can_swap = true;
+    if (v0 >= v1) {
+        const LIMDD_LIM bpinv = limdd_lim_inverse(bp);
+        if (limdd_lim_is_zero(bpinv)) can_swap = false;
+        else lab2 = lim_clean(limdd_stab_min_coset(bpinv, s1, s0, &g2, &neg2));
+    }
+
+    if (!can_swap || node_less(v0, v1, lab1, v1, v0, lab2)) {
+        k->lo = v0; k->hi = v1; k->lab = lab1; k->s_lo = s0; k->s_hi = s1;
+        k->g = g1; k->neg = neg1; k->swapped = false;
+    } else {
+        k->lo = v1; k->hi = v0; k->lab = lab2; k->s_lo = s1; k->s_hi = s0;
+        k->g = g2; k->neg = neg2; k->swapped = true;
+    }
+}
+
+/**
+ * The root label r with  a|node> = r |canonical node>, where `node` is the
+ * factored node (var, I->v0, bp->v1) that `k` came from and `a` the low label
+ * that was divided out of it.
+ */
+static LIMDD_LIM
+canon_root(uint32_t var, LIMDD_LIM a, LIMDD_LIM bp, const canon_key_t *k)
+{
+    if (!k->swapped) {
+        /*
+         * Undoing the minimisation costs G on the branches above and, when the
+         * sign rule flipped the label, a Z at this level -- which is exactly
+         * the operator that negates the high branch and leaves the low one.
+         */
+        const LIMDD_LIM r = limdd_lim_mul(a, k->g);
+        return lim_with_pauli_at(r, var, false, k->neg);
+    }
+    LIMDD_LIM r = limdd_lim_mul(limdd_lim_mul(a, bp), k->g);
+    if (k->neg) {
+        /* X here from the swap, Z from the sign rule, and XZ = -iY: the
+         * factor cannot be dropped, it is part of the map. */
+        r = lim_with_pauli_at(r, var, true, true);
+        r = limdd_lim_make(limdd_lim_pauli(r),
+                           wgt_mul(limdd_lim_weight(r), limdd_wgt_i_pow(3)));
+    } else {
+        r = lim_with_pauli_at(r, var, true, false);
+    }
+    return r;
+}
+
+/*
+ * THE LAZY FORM (LIMDD_CANON_LAZY; qsylvan_limdd_class.h has the design).
+ */
+
+/** The canonical node of stored node m, memoised on m (cleared by a collection). */
+static void
+member_key(uint32_t var, LIMDD_TARG m, canon_key_t *k)
+{
+    const LIMDD low = limdd_node_low(m), high = limdd_node_high(m);
+    const LIMDD_TARG v0 = limdd_target(low), v1 = limdd_target(high);
+    uint64_t r1, r2;
+    if (cache_get6(CACHE_LIMDD_CLASSKEY, m, 0, 0, 0, 0, &r1, &r2)) {
+        k->swapped = (r1 >> 32) & 1;
+        k->lab = (LIMDD_LIM)(r1 & 0xffffffff);
+        k->g = (LIMDD_LIM)(r2 & 0xffffffff);
+        k->neg = (r2 >> 32) & 1;
+        k->lo = k->swapped ? v1 : v0;
+        k->hi = k->swapped ? v0 : v1;
+        k->skip = false;
+        k->s_lo = k->s_hi = LIMDD_STAB_TRIVIAL;   /* not read by the comparison */
+        return;
+    }
+    canon_key(var, v0, limdd_label(high), v1, k);
+    cache_put6(CACHE_LIMDD_CLASSKEY, m, 0, 0, 0, 0,
+               (uint64_t)k->lab | (uint64_t)k->swapped << 32,
+               (uint64_t)k->g | (uint64_t)k->neg << 32);
+}
+
+static double
+lim_modulus(LIMDD_LIM l)
+{
+    const complex_t c = weight_as_complex(limdd_lim_weight(l));
+    return hypot((double)c.r, (double)c.i);
+}
+
+/**
+ * Whether two canonical labels name one LIM. Interned labels are equal when
+ * their indices are, and on exact weights only then. On floats the canonical
+ * labels of two members of a class are computed from different inputs and can
+ * round a few ulps apart; the weight table merges such values, unless they
+ * fall either side of a cell of its grid. So floats compare the Pauli word
+ * exactly and the scalar within the table's tolerance: the lazy form then
+ * merges what the table would, boundary or not.
+ */
+static bool
+labels_match(LIMDD_LIM x, LIMDD_LIM y)
+{
+    if (x == y) return true;
+    if (sylvan_get_edge_weight_type() != WGT_COMPLEX_128) return false;
+    if (limdd_lim_pauli_ref(x) != limdd_lim_pauli_ref(y)) return false;
+    const complex_t a = weight_as_complex(limdd_lim_weight(x));
+    const complex_t b = weight_as_complex(limdd_lim_weight(y));
+    /* Relative: under low normalisation labels span many decades, and an
+     * absolute tolerance would call any two small ones equal. */
+    const double scale = fmax(hypot((double)a.r, (double)a.i), hypot((double)b.r, (double)b.i));
+    return hypot((double)a.r - (double)b.r, (double)a.i - (double)b.i)
+           <= sylvan_edge_weights_tolerance() * scale;
+}
+
+/**
+ * The class of the stored factored node t = (var, I->v0, bp->v1), v0 != v1:
+ * (I, t) if t is its class's member, else (map, m) with |t> = map |m>. Every
+ * worker that asks gets the same answer, so it is recorded with a plain store.
+ */
+static LIMDD
+class_resolve(uint32_t var, LIMDD_TARG t, LIMDD_TARG v0, LIMDD_LIM bp, LIMDD_TARG v1)
+{
+    LIMDD_PROF(LP_LZ_RESOLVE);
+    const LIMDD_TARG lo = v0 < v1 ? v0 : v1, hi = v0 < v1 ? v1 : v0;
+    /* The filter needs the scalars as doubles, which on exact weights is a
+     * conversion of rationals each time; there the canonical keys compare in
+     * one step anyway, so it is used on floats only. */
+    const bool filter = sylvan_get_edge_weight_type() == WGT_COMPLEX_128;
+    const double mt = filter ? lim_modulus(bp) : 0.0;
+    /* On exact weights the scalar up to units: where the scan starts, and an
+     * exact filter, since every member of the class has the same one. */
+    const uint64_t ut = limdd_class_scalar_key(bp);
+    canon_key_t kt;
+    bool have_kt = false;
+    LIMDD res = 0;
+    for (uint32_t j = 0;; j++) {
+        int claimed;
+        const LIMDD_TARG m = limdd_class_slot(var, lo, hi, ut, j, t, &claimed);
+        if (m == t) { res = limdd_bundle(LIMDD_LIM_IDENTITY, t); break; }
+        LIMDD_PROF(LP_LZ_MEMBER);
+
+        /*
+         * The modulus of the high scalar is shared by the class, inverted when
+         * the member has its children the other way round; a LIM image only
+         * multiplies it by scalars of modulus 1. The tolerance is far wider
+         * than any rounding, so the filter never parts two members of a class.
+         */
+        const LIMDD mhigh = limdd_node_high(m);
+        if (ut != 0 && limdd_target(limdd_node_low(m)) == v0 &&
+            limdd_class_scalar_key(limdd_label(mhigh)) != ut) {
+            LIMDD_PROF(LP_LZ_FILTERED); continue;
+        }
+        if (filter) {
+            const double mm = lim_modulus(limdd_label(mhigh));
+            const double want = limdd_target(limdd_node_low(m)) == v0 ? mm : 1.0 / mm;
+            if (fabs(mt - want) > 1e-6 * fmax(mt, want)) { LIMDD_PROF(LP_LZ_FILTERED); continue; }
+        }
+
+        if (!have_kt) { canon_key(var, v0, bp, v1, &kt); have_kt = true; }
+        canon_key_t km;
+        member_key(var, m, &km);
+        if (kt.lo != km.lo || kt.hi != km.hi || !labels_match(kt.lab, km.lab)) continue;
+
+        /* |t> = rt |C> and |m> = rm |C>, so |t> = rt rm^-1 |m>. */
+        const LIMDD_LIM rt = canon_root(var, LIMDD_LIM_IDENTITY, bp, &kt);
+        const LIMDD_LIM rm = canon_root(var, LIMDD_LIM_IDENTITY, limdd_label(mhigh), &km);
+        const LIMDD_LIM rminv = limdd_lim_inverse(rm);   /* see bp in makeedge_canonical */
+        res = limdd_bundle(limdd_lim_is_zero(rminv) ? limdd_lim_rdiv(rt, rm)
+                                                    : limdd_lim_mul(rt, rminv), m);
+        LIMDD_PROF(LP_LZ_ALIAS);
+        break;
+    }
+    limdd_node_set_class_raw(t, (uint64_t)res);
+    return res;
+}
+
+/**
+ * The factored node (var, I->v0, bp->v1), v0 != v1, in the form it is stored in
+ * lazily: canon_key with both children's groups taken as trivial, so with no
+ * group computed. The children go in index order and the sign rule fixes the
+ * label's sign; canon_root undoes both, as for the canonical node. When both
+ * groups are trivial this IS the canonical node: a LIM between two such nodes
+ * with the same children in the same order is then +-1 at the top and the
+ * identity below (qsylvan_limdd_class.h), so the class is {(v0, +-b, v1),
+ * (v1, +-b^-1, v0)} and this picks one of the four. Isomorphic presentations
+ * then meet in the node table, without a comparison and without a node for
+ * each of them. Otherwise it only fixes the order and the sign, and the class
+ * table does the rest; members are stored this way, which is what lets the
+ * class key use the scalar.
+ */
+static void
+lazy_key(LIMDD_TARG v0, LIMDD_LIM bp, LIMDD_TARG v1, canon_key_t *k)
+{
+    assert(v0 != v1);
+    k->skip = false;
+    k->s_lo = k->s_hi = LIMDD_STAB_TRIVIAL;
+    k->swapped = v0 > v1;
+    k->lo = k->swapped ? v1 : v0;
+    k->hi = k->swapped ? v0 : v1;
+    const LIMDD_LIM b = k->swapped ? limdd_lim_inverse(bp) : bp;
+    k->lab = lim_clean(limdd_stab_min_coset(b, LIMDD_STAB_TRIVIAL, LIMDD_STAB_TRIVIAL,
+                                            &k->g, &k->neg));
+}
+
+/**
+ * makeedge for two different children, lazily: the factored node is interned
+ * in the order and sign of lazy_key, and handed out if it is its class's
+ * member. Only when another node may share its class is anything canonical
+ * computed, and then only to compare.
+ *
+ * On floats the factored node is interned as it comes. Ordering it costs the
+ * swapped half an inverse, and its edge a product with the label, each of
+ * which rounds; on the 79 amendment circuits that drift kept more members of
+ * a class apart than the normal form brought together (60_950: a peak of
+ * 903672 nodes against 17077, grover_n30 filling its table), and the scalar
+ * key that the order serves is exact-only anyway.
+ */
+static LIMDD
+makeedge_lazy(uint32_t var, LIMDD_LIM a, LIMDD_TARG v0, LIMDD_LIM bp, LIMDD_TARG v1)
+{
+    if (sylvan_get_edge_weight_type() != WGT_QISQ2) {
+        int created;
+        const LIMDD_TARG t = intern(var, v0, bp, v1, LIMDD_STAB_TRIVIAL, LIMDD_STAB_TRIVIAL, &created);
+        uint64_t st = created ? 0 : limdd_node_class_raw(t);
+        if (st == 0) st = (uint64_t)class_resolve(var, t, v0, bp, v1);
+        else LIMDD_PROF(LP_LZ_KNOWN);
+        return lim_times_edge(a, (LIMDD)st);
+    }
+    canon_key_t k;
+    lazy_key(v0, bp, v1, &k);
+    int created;
+    const LIMDD_TARG t = intern(var, k.lo, k.lab, k.hi, LIMDD_STAB_TRIVIAL, LIMDD_STAB_TRIVIAL, &created);
+    uint64_t st = created ? 0 : limdd_node_class_raw(t);
+    if (st == 0) st = (uint64_t)class_resolve(var, t, k.lo, k.lab, k.hi);
+    else LIMDD_PROF(LP_LZ_KNOWN);
+    return lim_times_edge(canon_root(var, a, bp, &k), (LIMDD)st);
 }
 
 static LIMDD makeedge_canonical(uint32_t var, LIMDD low, LIMDD high);
@@ -467,10 +944,12 @@ makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
      * happens to contain. This runs inside the parallel recursions, which is
      * why the counter is per worker. */
     limdd_canon_count();
+    LIMDD_PROF(LP_CALLS);
+    const bool lazy = limdd_class_on();
 
     const bool lz = limdd_edge_is_zero(low);
     const bool hz = limdd_edge_is_zero(high);
-    if (lz && hz) return limdd_zero_edge();
+    if (lz && hz) { LIMDD_PROF(LP_ZERO); return limdd_zero_edge(); }
 
     /*
      * One dead branch. |0>(x)v and |1>(x)v differ by X at this level, so they
@@ -478,15 +957,17 @@ makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
      * what makes |0..0> and |10..0> share every node they can.
      */
     if (lz || hz) {
+        LIMDD_PROF(LP_DEAD);
         const LIMDD live = lz ? high : low;
         const LIMDD_TARG v = limdd_target(live);
         const LIMDD_TARG t = intern(var, v, LIMDD_LIM_ZERO, LIMDD_TERMINAL,
-                                    high_determinism ? stab_at_level(var + 1, v)
-                                                     : LIMDD_STAB_TRIVIAL,
-                                    LIMDD_STAB_TRIVIAL);
+                                    high_determinism && !lazy ? stab_at_level(var + 1, v)
+                                                              : LIMDD_STAB_TRIVIAL,
+                                    LIMDD_STAB_TRIVIAL, NULL);
         const LIMDD e = limdd_bundle(
             lim_with_pauli_at(limdd_label(live), var, lz, false), t);
-        return high_determinism ? limdd_edge_canonical(var, e) : e;
+        /* Lazily the root label is not reduced; the node is unique anyway. */
+        return high_determinism && !lazy ? limdd_edge_canonical(var, e) : e;
     }
 
     const LIMDD_TARG v0 = limdd_target(low);
@@ -502,10 +983,31 @@ makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
      * `var`, and `low` is already reduced at `var`, since extending its group
      * by X_var only adds a pivot in a column no reduced label has set.
      */
-    if (low == high) return low;
+    if (low == high) { LIMDD_PROF(LP_EQ); return low; }
 
-    /* Divide the low label out; what is left is all the node keeps. */
-    const LIMDD_LIM bp = limdd_lim_mul(limdd_lim_inverse(a), limdd_label(high));
+    /*
+     * Divide the low label out; what is left is all the node keeps. Through the
+     * inverse, as every other quotient of the canonical form is taken: on
+     * floats a single division rounds differently, and that alone kept
+     * isomorphic nodes apart (on 40_700 eager float 18383 nodes against 593).
+     * Only when the inverse is merged with 0 -- a label above 1/tolerance --
+     * is the quotient taken in one division, which is then the only way to
+     * get it.
+     */
+    const LIMDD_LIM ainv = limdd_lim_inverse(a);
+    const LIMDD_LIM bp = limdd_lim_is_zero(ainv) ? limdd_lim_ldiv(a, limdd_label(high))
+                                                 : limdd_lim_mul(ainv, limdd_label(high));
+
+    /*
+     * On floats the quotient is the zero map when it is within the weight
+     * table's tolerance of 0: the table has merged the high branch's scalar,
+     * relative to the low one, with 0, as an EVDD's low normalisation does, so
+     * the node already has a dead high branch. Built as one, it is the
+     * canonical dead-branch node. With the zero label kept, the high edge would
+     * point at a node rather than the terminal, a second form of one node,
+     * and the coset search would be handed the zero map.
+     */
+    if (limdd_lim_is_zero(bp)) return makeedge_canonical(var, low, limdd_zero_edge());
 
     if (!high_determinism) {
         /*
@@ -518,82 +1020,43 @@ makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
             return limdd_bundle(lim_with_pauli_at(a, var, false, true), v0);
         }
         const LIMDD_TARG t = intern(var, v0, bp, v1, LIMDD_STAB_TRIVIAL,
-                                    LIMDD_STAB_TRIVIAL);
+                                    LIMDD_STAB_TRIVIAL, NULL);
         return limdd_bundle(a, t);
     }
 
-    /* The children as read at var+1, over whatever levels they skip. */
-    const LIMDD_STAB s0 = stab_at_level(var + 1, v0);
-    const LIMDD_STAB s1 = stab_at_level(var + 1, v1);
+    if (lazy && v0 != v1 && limdd_class_wanted(var, v0, v1)) return makeedge_lazy(var, a, v0, bp, v1);
 
-    /* Candidate as given. */
-    LIMDD_LIM g1; bool neg1;
-    const LIMDD_LIM lab1 = limdd_stab_min_coset(bp, s0, s1, &g1, &neg1);
+    canon_key_t k;
+    canon_key(var, v0, bp, v1, &k);
 
-    /*
-     * THE SKIP RULE, the half that needs the groups. lab1 == I with one
-     * target means bp lies in +-Stab(v0): the high branch is +- the low one,
-     * the node is (|0> +- |1>)(x)w, and this level is not stored. The sign
-     * rule has already resolved the +- to +, recording the flip in neg1, and
-     * that flip is exactly a Z at this level -- so this is the unswapped
-     * branch's own label formula with the intern() left out. |0>w + i|1>w,
-     * a product state but no Pauli image of |0>+|1>, gives lab1 = iI and
-     * correctly falls through.
-     *
-     * It must come BEFORE the swapped candidate: on this input lab1 and lab2
-     * tie, node_less then takes the swapped branch, and that deposits XZ at
-     * this level rather than Z. Same state, another label, and only the
-     * reduction against X_var would bring the two together again.
-     */
-    if (v0 == v1 && lab1 == LIMDD_LIM_IDENTITY) {
-        const LIMDD_LIM r = limdd_lim_mul(a, g1);
-        return limdd_edge_canonical(var,
-            limdd_bundle(lim_with_pauli_at(r, var, false, neg1), v0));
-    }
-
-    /*
-     * Candidate with the branches swapped. Applying X at this level gives
-     * |0>(x)B'|v1> + |1>(x)|v0>; dividing B' out in turn leaves the node
-     * (v1, B'^-1, v0), so the swap costs one inverse and a second minimisation
-     * over the same two groups in the other order.
-     */
-    /*
-     * Computed only when it can matter. node_less compares the two targets
-     * first and reaches the label only when they are equal, so with v0 < v1
-     * the unswapped candidate wins on the targets alone and this second
-     * minimisation is never read. Measured over five million calls, the two
-     * always agree on the Pauli WORD anyway -- a Pauli is its own inverse and
-     * both reduce by the same pivot set -- and differ only in the scalar,
-     * which is exactly what the label comparison looks at when v0 == v1.
-     */
-    LIMDD_LIM g2 = LIMDD_LIM_IDENTITY; bool neg2 = false;
-    LIMDD_LIM lab2 = LIMDD_LIM_IDENTITY;
-    if (v0 >= v1) {
-        lab2 = limdd_stab_min_coset(limdd_lim_inverse(bp), s1, s0, &g2, &neg2);
-    }
-
-    if (node_less(v0, v1, lab1, v1, v0, lab2)) {
-        const LIMDD_TARG t = intern(var, v0, lab1, v1, s0, s1);
-        /*
-         * Undoing the minimisation costs G on the branches above and, when the
-         * sign rule flipped the label, a Z at this level -- which is exactly
-         * the operator that negates the high branch and leaves the low one.
-         */
-        const LIMDD_LIM r = limdd_lim_mul(a, g1);
-        return limdd_edge_canonical(var, limdd_bundle(lim_with_pauli_at(r, var, false, neg1), t));
+#ifdef LIMDD_PROFILE
+    bool prof_collide = false;
+    if (v0 == v1) {
+        LIMDD_PROF(LP_SAME);
     } else {
-        const LIMDD_TARG t = intern(var, v1, lab2, v0, s1, s0);
-
-        LIMDD_LIM r = limdd_lim_mul(limdd_lim_mul(a, bp), g2);
-        if (neg2) {
-            /* X here from the swap, Z from the sign rule, and XZ = -iY: the
-             * factor cannot be dropped, it is part of the map. */
-            r = lim_with_pauli_at(r, var, true, true);
-            r = limdd_lim_make(limdd_lim_pauli(r),
-                               wgt_mul(limdd_lim_weight(r), limdd_wgt_i_pow(3)));
-        } else {
-            r = lim_with_pauli_at(r, var, true, false);
-        }
-        return limdd_edge_canonical(var, limdd_bundle(r, t));
+        LIMDD_PROF(LP_GEN);
+        if (k.s_lo == LIMDD_STAB_TRIVIAL && k.s_hi == LIMDD_STAB_TRIVIAL) LIMDD_PROF(LP_GEN_TRIV);
+        prof_collide = prof_lazy(var, v0, bp, v1);
     }
+#endif
+
+    /* The skip rule (see canon_key): the level is not stored. */
+    if (k.skip) {
+        const LIMDD_LIM r = limdd_lim_mul(a, k.g);
+        const LIMDD e = limdd_bundle(lim_with_pauli_at(r, var, false, k.neg), v0);
+        return lazy ? e : limdd_edge_canonical(var, e);
+    }
+
+    int created;
+    const LIMDD_TARG t = intern(var, k.lo, k.lab, k.hi, k.s_lo, k.s_hi, &created);
+#ifdef LIMDD_PROFILE
+    if (v0 != v1) {
+        LIMDD_PROF(created ? LP_GEN_CREATED : (!k.swapped && k.lab == bp) ? LP_GEN_EXACT : LP_GEN_MERGED);
+        if (prof_collide && !created) LIMDD_PROF(LP_LZ_COLLIDE_FOUND);
+    }
+#else
+    (void)created;
+#endif
+    const LIMDD e = limdd_bundle(canon_root(var, a, bp, &k), t);
+    return lazy ? e : limdd_edge_canonical(var, e);
 }

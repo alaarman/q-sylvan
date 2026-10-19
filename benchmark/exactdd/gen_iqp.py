@@ -8,6 +8,18 @@ state is a phase state.  The closing layer is left out on purpose: the binary
 quotient diagram has no Hadamard algorithm, and the three arms (EVDD, LIMDD,
 BQD) are compared on the same file, so the file stops where all three can go.
 
+--close appends that closing layer, a Hadamard on every qubit, after the
+diagonal gates (family iqp_close; the files are then named iqp_close_<n>_<g>
+unless --name says otherwise).  The draw and the seed are unchanged, so
+iqp_close_<n>_<g> is iqp_<n>_<g> plus n Hadamards.  The output amplitude of y
+is then 2^-n sum_x (-1)^(x.y) w^f(x), with w = exp(i pi/4) and f the level-3
+phase polynomial over Z_8: a Gauss-like sum whose terms cancel exactly, so the
+state has exact zeros and many amplitudes of equal magnitude.  That is the
+EVDD vs. float question: in Q(i, sqrt2) the cancellations are exact and equal
+sub-diagrams merge, under floats the residues of the cancellations stay and
+keep nodes apart.  Without --close the output is byte-identical to before the
+option existed.
+
 The diagonal gates are the third level of the Clifford hierarchy on at most
 three qubits, which all three arms of run_qasm_on_qmdd apply as one gate and
 exactly on the qisq2 backend:
@@ -63,11 +75,14 @@ def _draw(rng, n, t_frac, cs_frac, ccz_frac):
     return f"{rng.choice(CLIFF_1)} q[{_qubits(rng, n, 1)[0]}];"
 
 
-def generate(n, gates, seed, t_frac=1.0 / 3.0, cs_frac=2.0 / 9.0, ccz_frac=1.0 / 9.0):
+def generate(n, gates, seed, t_frac=1.0 / 3.0, cs_frac=2.0 / 9.0, ccz_frac=1.0 / 9.0,
+             close=False):
     rng = random.Random(seed)
     head = ["OPENQASM 2.0;", 'include "qelib1.inc";', f"qreg q[{n}];"]
     body = [f"h q[{q}];" for q in range(n)]
     body += [_draw(rng, n, t_frac, cs_frac, ccz_frac) for _ in range(gates)]
+    if close:
+        body += [f"h q[{q}];" for q in range(n)]
     # no creg, no measure, no trailing newline: the artifact's convention
     return "\n".join(head + body)
 
@@ -83,13 +98,19 @@ if __name__ == "__main__":
     ap.add_argument("--cs-frac", type=float, default=2.0 / 9.0)
     ap.add_argument("--ccz-frac", type=float, default=1.0 / 9.0)
     ap.add_argument("--seed", type=int, default=1234)
-    ap.add_argument("--name", default="iqp")
+    ap.add_argument("--close", action="store_true",
+                    help="append the closing Hadamard layer (default: leave it out)")
+    ap.add_argument("--name", default=None,
+                    help="file name prefix (default: iqp, or iqp_close with --close)")
     a = ap.parse_args()
+    if a.name is None:
+        a.name = "iqp_close" if a.close else "iqp"
     os.makedirs(a.out, exist_ok=True)
     print(f"{'file':32s}{'gates':>7}{'t':>6}{'cs':>6}{'ccz':>6}")
     for n in a.qubits:
         for g in a.gates:
-            txt = generate(n, g, a.seed + 1000 * n + g, a.t_frac, a.cs_frac, a.ccz_frac)
+            txt = generate(n, g, a.seed + 1000 * n + g, a.t_frac, a.cs_frac, a.ccz_frac,
+                           a.close)
             f = os.path.join(a.out, f"{a.name}_{n}_{g}.qasm")
             with open(f, "w") as fh:
                 fh.write(txt)

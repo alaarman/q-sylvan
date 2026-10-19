@@ -70,4 +70,17 @@ static inline qisq2_t qisq2_mone() { return qisq2_make(-1, 1, 0, 1, 0, 1, 0, 1);
 
 /*****************</Implementation of edge_weights interface>******************/
 
+/*
+ * Arithmetic on interned weights, by index: the stored operands are read in
+ * place and the result is interned directly (sylvan_edge_weights_qisq2.c). The
+ * values are those of the weight_qisq2_* functions above; wgt_* uses these.
+ */
+EVBDD_WGT qisq2_wgt_mul(EVBDD_WGT a, EVBDD_WGT b);
+EVBDD_WGT qisq2_wgt_div(EVBDD_WGT a, EVBDD_WGT b);
+EVBDD_WGT qisq2_wgt_inv(EVBDD_WGT b);
+EVBDD_WGT qisq2_wgt_add(EVBDD_WGT a, EVBDD_WGT b, bool sub);
+EVBDD_WGT qisq2_wgt_neg(EVBDD_WGT a);
+EVBDD_WGT qisq2_wgt_conj(EVBDD_WGT a);
+void qisq2_wgt_as_doubles(EVBDD_WGT a, double *re, double *im);
+
 #endif

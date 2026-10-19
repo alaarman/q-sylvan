@@ -138,6 +138,8 @@ static const uint64_t CACHE_LIMDD_CGATE              = (86LL<<40);
 static const uint64_t CACHE_LIMDD_CANONIZE           = (87LL<<40);
 static const uint64_t CACHE_LIMDD_NORMSQ             = (88LL<<40);
 static const uint64_t CACHE_LIMDD_MINCOSET           = (89LL<<40);
+/* the lazy canonical form's canonical node of a stored node, keyed by node */
+static const uint64_t CACHE_LIMDD_CLASSKEY           = (189LL<<40);
 /* 95, and not 91, which is CACHE_QMDD_CGATE below: the comment above applies
  * to every block, and test_cache_opids checks that no two ids agree. */
 static const uint64_t CACHE_BQD_PROD                 = (95LL<<40);

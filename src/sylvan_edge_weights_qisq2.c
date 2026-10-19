@@ -1,6 +1,8 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sylvan_edge_weights_qisq2.h>
+#include <sylvan_platform.h>
 #include <assert.h>
 
 
@@ -431,3 +433,226 @@ weight_qisq2_print(qisq2_t *x)
 }
 
 /*****************</Implementation of edge_weights interface>******************/
+
+
+/*******************<Arithmetic on interned weights, by index>*****************/
+
+/*
+ * The generic wgt_* path copies both operands out of the table (eight mpq per
+ * operand, each an allocation), works in fresh temporaries and frees all of it
+ * again: on exact runs malloc and free took a fifth of the time. These read the
+ * stored operands in place -- table entries are never written after they are
+ * published -- and compute into temporaries that belong to the calling thread
+ * and keep their limbs from one call to the next. Every result of GMP's mpq
+ * arithmetic is reduced, so it goes into the table without reducing it again.
+ * The values are exactly those of weight_qisq2_mul and friends.
+ */
+typedef struct {
+    bool    ready;
+    qisq2_t r;          /* the result */
+    qisq2_t inv;        /* 1/y for a division */
+    mpq_t   t, u;       /* products and partial sums */
+    mpq_t   p, q, n;    /* the inverse's p, q and norm */
+} qisq2_scratch_t;
+
+static SYLVAN_TLS qisq2_scratch_t qisq2_scratch;
+
+static inline qisq2_scratch_t *
+scratch(void)
+{
+    qisq2_scratch_t *s = &qisq2_scratch;
+    if (!s->ready) {
+        qisq2_init(&s->r);
+        qisq2_init(&s->inv);
+        mpq_init(s->t); mpq_init(s->u);
+        mpq_init(s->p); mpq_init(s->q); mpq_init(s->n);
+        s->ready = true;
+    }
+    return s;
+}
+
+static inline const qisq2_t *
+stored(EVBDD_WGT a)
+{
+    return (const qisq2_t *) wgt_store_get(wgt_storage, a);
+}
+
+static EVBDD_WGT
+intern_reduced(const qisq2_t *v)
+{
+    uint64_t res;
+    const int present = qisq2_map_find_or_put_reduced(wgt_storage, v, &res);
+    if (present == -1) {
+        fprintf(stderr, "Amplitude table full!\n");
+        exit(1);
+    }
+    if (present == 0) wgt_table_gc_inc_entries_estimate();
+    return (EVBDD_WGT) res;
+}
+
+/* +i or -i, read off the stored value: 1 for i, -1 for -i, 0 otherwise. */
+static inline int
+unit_i(const qisq2_t *x)
+{
+    if (mpq_sgn(x->a) != 0 || mpq_sgn(x->b) != 0 || mpq_sgn(x->d) != 0) return 0;
+    if (mpq_cmp_si(x->c, 1, 1) == 0) return 1;
+    if (mpq_cmp_si(x->c, -1, 1) == 0) return -1;
+    return 0;
+}
+
+/* r = x * y; r is neither x nor y. */
+static void
+mul_into(qisq2_t *r, const qisq2_t *x, const qisq2_t *y, mpq_ptr t)
+{
+    /* a: xa ya + 2 xb yb - xc yc - 2 xd yd */
+    mpq_mul(r->a, x->a, y->a);
+    mpq_mul(t, x->b, y->b); mpq_mul_2exp(t, t, 1); mpq_add(r->a, r->a, t);
+    mpq_mul(t, x->c, y->c); mpq_sub(r->a, r->a, t);
+    mpq_mul(t, x->d, y->d); mpq_mul_2exp(t, t, 1); mpq_sub(r->a, r->a, t);
+    /* b: xa yb + xb ya - xc yd - xd yc */
+    mpq_mul(r->b, x->a, y->b);
+    mpq_mul(t, x->b, y->a); mpq_add(r->b, r->b, t);
+    mpq_mul(t, x->c, y->d); mpq_sub(r->b, r->b, t);
+    mpq_mul(t, x->d, y->c); mpq_sub(r->b, r->b, t);
+    /* c: xa yc + xc ya + 2 xb yd + 2 xd yb */
+    mpq_mul(r->c, x->a, y->c);
+    mpq_mul(t, x->c, y->a); mpq_add(r->c, r->c, t);
+    mpq_mul(t, x->b, y->d); mpq_mul_2exp(t, t, 1); mpq_add(r->c, r->c, t);
+    mpq_mul(t, x->d, y->b); mpq_mul_2exp(t, t, 1); mpq_add(r->c, r->c, t);
+    /* d: xa yd + xd ya + xb yc + xc yb */
+    mpq_mul(r->d, x->a, y->d);
+    mpq_mul(t, x->d, y->a); mpq_add(r->d, r->d, t);
+    mpq_mul(t, x->b, y->c); mpq_add(r->d, r->d, t);
+    mpq_mul(t, x->c, y->b); mpq_add(r->d, r->d, t);
+}
+
+/* r = i^k x for k = 1 (i), 2 (-1) or 3 (-i); i (a + b sqrt2 + i(c + d sqrt2))
+ * = -(c + d sqrt2) + i (a + b sqrt2). */
+static void
+unit_into(qisq2_t *r, const qisq2_t *x, int k)
+{
+    switch (k) {
+    case 1:  mpq_neg(r->a, x->c); mpq_neg(r->b, x->d); mpq_set(r->c, x->a); mpq_set(r->d, x->b); break;
+    case 2:  mpq_neg(r->a, x->a); mpq_neg(r->b, x->b); mpq_neg(r->c, x->c); mpq_neg(r->d, x->d); break;
+    default: mpq_set(r->a, x->c); mpq_set(r->b, x->d); mpq_neg(r->c, x->a); mpq_neg(r->d, x->b); break;
+    }
+}
+
+/*
+ * r = 1/y, y != 0. With y = e + f sqrt2 + i(g + h sqrt2), |y|^2 = p + q sqrt2
+ * for p = e^2 + 2f^2 + g^2 + 2h^2 and q = 2(ef + gh), and multiplying by the
+ * conjugate p - q sqrt2 leaves the rational n = p^2 - 2q^2, which is |y|^2
+ * times |y'|^2 for y' the image of y under sqrt2 -> -sqrt2, so it is not 0:
+ *     1/y = [(e p - 2 f q) + (f p - e q) sqrt2 + i((2 h q - g p) + (g q - h p) sqrt2)] / n.
+ * About twenty rational operations, where dividing through two conjugates
+ * took some two hundred.
+ */
+static void
+inv_into(qisq2_t *r, const qisq2_t *y, qisq2_scratch_t *s)
+{
+    mpq_ptr t = s->t, u = s->u, p = s->p, q = s->q, n = s->n;
+    mpq_mul(p, y->a, y->a);
+    mpq_mul(t, y->b, y->b); mpq_mul_2exp(t, t, 1); mpq_add(p, p, t);
+    mpq_mul(t, y->c, y->c); mpq_add(p, p, t);
+    mpq_mul(t, y->d, y->d); mpq_mul_2exp(t, t, 1); mpq_add(p, p, t);
+    mpq_mul(q, y->a, y->b);
+    mpq_mul(t, y->c, y->d); mpq_add(q, q, t); mpq_mul_2exp(q, q, 1);
+    mpq_mul(n, p, p);
+    mpq_mul(t, q, q); mpq_mul_2exp(t, t, 1); mpq_sub(n, n, t);
+    assert(mpq_sgn(n) > 0);
+    /* a = (e p - 2 f q) / n */
+    mpq_mul(r->a, y->a, p); mpq_mul(t, y->b, q); mpq_mul_2exp(t, t, 1); mpq_sub(r->a, r->a, t);
+    mpq_div(r->a, r->a, n);
+    /* b = (f p - e q) / n */
+    mpq_mul(r->b, y->b, p); mpq_mul(t, y->a, q); mpq_sub(r->b, r->b, t);
+    mpq_div(r->b, r->b, n);
+    /* c = (2 h q - g p) / n */
+    mpq_mul(u, y->d, q); mpq_mul_2exp(u, u, 1); mpq_mul(t, y->c, p); mpq_sub(r->c, u, t);
+    mpq_div(r->c, r->c, n);
+    /* d = (g q - h p) / n */
+    mpq_mul(r->d, y->c, q); mpq_mul(t, y->d, p); mpq_sub(r->d, r->d, t);
+    mpq_div(r->d, r->d, n);
+}
+
+EVBDD_WGT
+qisq2_wgt_mul(EVBDD_WGT a, EVBDD_WGT b)
+{
+    qisq2_scratch_t *s = scratch();
+    const qisq2_t *x = stored(a), *y = stored(b);
+    if (b == EVBDD_MIN_ONE) { unit_into(&s->r, x, 2); return intern_reduced(&s->r); }
+    if (a == EVBDD_MIN_ONE) { unit_into(&s->r, y, 2); return intern_reduced(&s->r); }
+    int k;
+    if ((k = unit_i(y)) != 0) { unit_into(&s->r, x, k == 1 ? 1 : 3); return intern_reduced(&s->r); }
+    if ((k = unit_i(x)) != 0) { unit_into(&s->r, y, k == 1 ? 1 : 3); return intern_reduced(&s->r); }
+    mul_into(&s->r, x, y, s->t);
+    return intern_reduced(&s->r);
+}
+
+EVBDD_WGT
+qisq2_wgt_inv(EVBDD_WGT b)
+{
+    qisq2_scratch_t *s = scratch();
+    const qisq2_t *y = stored(b);
+    if (b == EVBDD_MIN_ONE) return b;
+    const int k = unit_i(y);
+    if (k != 0) { unit_into(&s->r, stored(EVBDD_ONE), k == 1 ? 3 : 1); return intern_reduced(&s->r); }
+    inv_into(&s->r, y, s);
+    return intern_reduced(&s->r);
+}
+
+EVBDD_WGT
+qisq2_wgt_div(EVBDD_WGT a, EVBDD_WGT b)
+{
+    if (a == EVBDD_ONE) return qisq2_wgt_inv(b);
+    qisq2_scratch_t *s = scratch();
+    const qisq2_t *x = stored(a), *y = stored(b);
+    if (b == EVBDD_MIN_ONE) { unit_into(&s->r, x, 2); return intern_reduced(&s->r); }
+    const int k = unit_i(y);       /* x / (+-i) = x * (-+i) */
+    if (k != 0) { unit_into(&s->r, x, k == 1 ? 3 : 1); return intern_reduced(&s->r); }
+    inv_into(&s->inv, y, s);
+    mul_into(&s->r, x, &s->inv, s->t);
+    return intern_reduced(&s->r);
+}
+
+EVBDD_WGT
+qisq2_wgt_add(EVBDD_WGT a, EVBDD_WGT b, bool sub)
+{
+    qisq2_scratch_t *s = scratch();
+    const qisq2_t *x = stored(a), *y = stored(b);
+    if (sub) {
+        mpq_sub(s->r.a, x->a, y->a); mpq_sub(s->r.b, x->b, y->b);
+        mpq_sub(s->r.c, x->c, y->c); mpq_sub(s->r.d, x->d, y->d);
+    } else {
+        mpq_add(s->r.a, x->a, y->a); mpq_add(s->r.b, x->b, y->b);
+        mpq_add(s->r.c, x->c, y->c); mpq_add(s->r.d, x->d, y->d);
+    }
+    return intern_reduced(&s->r);
+}
+
+EVBDD_WGT
+qisq2_wgt_neg(EVBDD_WGT a)
+{
+    qisq2_scratch_t *s = scratch();
+    unit_into(&s->r, stored(a), 2);
+    return intern_reduced(&s->r);
+}
+
+EVBDD_WGT
+qisq2_wgt_conj(EVBDD_WGT a)
+{
+    qisq2_scratch_t *s = scratch();
+    const qisq2_t *x = stored(a);
+    mpq_set(s->r.a, x->a); mpq_set(s->r.b, x->b);
+    mpq_neg(s->r.c, x->c); mpq_neg(s->r.d, x->d);
+    return intern_reduced(&s->r);
+}
+
+void
+qisq2_wgt_as_doubles(EVBDD_WGT a, double *re, double *im)
+{
+    const qisq2_t *q = stored(a);
+    *re = mpq_get_d(q->a) + mpq_get_d(q->b) * sqrt(2.0);
+    *im = mpq_get_d(q->c) + mpq_get_d(q->d) * sqrt(2.0);
+}
+
+/******************</Arithmetic on interned weights, by index>*****************/

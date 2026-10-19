@@ -669,7 +669,98 @@ test_deferred_canonization(void)
     return 0;
 }
 
+/*
+ * The lazy canonical form (LIMDD_CANON_LAZY) keeps one node per class, as the
+ * eager form does, so the same circuits must end in diagrams of the same size:
+ * the size the exact eager run records, which the lazy runs, later, meet on
+ * either kind of weights.
+ */
+#define NSIZES 30
+static uint64_t eager_sizes[2][NSIZES];
+static int backend_slot = 0;          /* 0 complex, 1 exact */
+static bool lazy = false;             /* run under LIMDD_CANON_LAZY */
+
+int
+test_sizes_match_eager(void)
+{
+    const uint32_t ids[] = { GATEID_X, GATEID_Y, GATEID_Z, GATEID_H,
+                             GATEID_S, GATEID_T };
+    const uint64_t saved = rng_state;
+    unsigned float_exact_lazy = 0, float_exact_eager = 0;
+    for (int trial = 0; trial < NSIZES; trial++) {
+        rng_state = UINT64_C(0x9E3779B97F4A7C15) * (uint64_t)(trial + 1);
+        LIMDD e = limdd_all_zero_state(NQUBITS);
+        for (int step = 0; step < 40; step++) {
+            if ((rnd() % 3) == 0) {
+                const uint32_t c = rnd() % (NQUBITS - 1);
+                const uint32_t t = c + 1 + (rnd() % (NQUBITS - 1 - c));
+                e = limdd_cgate(e, ids[rnd() % 4], UINT64_C(1) << c, t, NQUBITS);
+            } else {
+                e = limdd_gate(e, ids[rnd() % 6], rnd() % NQUBITS, NQUBITS);
+            }
+        }
+        const uint64_t n = limdd_countnodes(e);
+        if (!lazy) { eager_sizes[backend_slot][trial] = n; continue; }
+        /* Held to the exact run's count, the number of classes the state
+         * has -- on exact weights. On floats neither form is canonical beyond
+         * rounding: either can keep two nodes for one class where a label
+         * rounds either side of a cell of the weight table's grid, so there
+         * the sizes are only reported. */
+        if (backend_slot == 0) {
+            float_exact_lazy += n == eager_sizes[1][trial];
+            float_exact_eager += eager_sizes[0][trial] == eager_sizes[1][trial];
+            continue;
+        }
+        if (n != eager_sizes[1][trial]) {
+            fprintf(stderr, "%s, trial %d: %llu nodes lazily, %llu exactly (%llu eagerly on these weights)\n",
+                    backend_slot ? "exact" : "complex", trial, (unsigned long long)n,
+                    (unsigned long long)eager_sizes[1][trial], (unsigned long long)eager_sizes[backend_slot][trial]);
+            rng_state = saved;
+            return 1;
+        }
+    }
+    rng_state = saved;
+    if (lazy && backend_slot == 0)
+        printf("  (float weights: %u of %d circuits at the exact size lazily, %u eagerly)\n",
+               float_exact_lazy, NSIZES, float_exact_eager);
+    return 0;
+}
+
 static bool l2 = false;      /* run the suite under L2 normalisation */
+
+TASK_0(int, runtests_lazy)
+{
+    limdd_set_canon_policy(LIMDD_CANON_LAZY, 0);
+    limdd_nodes_init(NQUBITS, 1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
+    limdd_set_l2(l2);
+
+    if (test_basis_state()) return 1;
+    printf("limdd all-zero state:                    ok\n");
+    if (test_single_gates()) return 1;
+    printf("every 1-qubit gate matches a dense sim:  ok\n");
+    if (test_controlled_gates()) return 1;
+    printf("controlled gates match a dense sim:      ok\n");
+    if (test_addition()) return 1;
+    printf("addition matches the dense sum:          ok\n");
+    if (test_reversed_and_swap()) return 1;
+    printf("reversed controls and swap:              ok\n");
+    if (test_random_circuits()) return 1;
+    printf("40 random Clifford+T circuits, per gate: ok\n");
+    if (test_probabilities()) return 1;
+    printf("norm and measurement probabilities:      ok\n");
+    if (test_gates_on_canonical_skipping()) return 1;
+    printf("gates on canonical skipping diagrams:    ok\n");
+    if (!l2) {
+        if (test_sizes_match_eager()) return 1;
+        printf("30 circuits: one node per class (exact): ok\n");
+    }
+
+    printf("(%zu nodes, %zu LIMs)\n", limdd_node_table_count(), limdd_lim_table_count());
+    limdd_set_l2(false);
+    limdd_nodes_quit();
+    limdd_set_canon_policy(LIMDD_CANON_ALWAYS, 0);
+    return 0;
+}
 
 TASK_0(int, runtests)
 {
@@ -696,6 +787,7 @@ TASK_0(int, runtests)
     printf("gates on canonical skipping diagrams:    ok\n");
     if (test_ops_on_skipping_diagrams()) return 1;
     printf("every op on hand-built skipping diagrams: ok\n");
+    if (!l2) test_sizes_match_eager();     /* records the sizes the lazy run must meet */
 
     printf("(%zu nodes, %zu LIMs)\n", limdd_node_table_count(), limdd_lim_table_count());
     limdd_set_l2(false);
@@ -704,18 +796,20 @@ TASK_0(int, runtests)
 }
 
 static int
-run_with(int backend, const char *name, bool with_l2)
+run_with(int backend, const char *name, bool with_l2, bool with_lazy)
 {
-    printf("== LIMDD operations with %s edge weights%s ==\n", name,
-           with_l2 ? ", L2 normalisation" : "");
+    printf("== LIMDD operations with %s edge weights%s%s ==\n", name,
+           with_l2 ? ", L2 normalisation" : "", with_lazy ? ", lazy canonical form" : "");
     l2 = with_l2;
+    lazy = with_lazy;
+    backend_slot = backend == QISQ2_MAP;
     lace_start(1, 0);
     sylvan_set_sizes(1LL << 18, 1LL << 18, 1LL << 18, 1LL << 18);
     sylvan_init_package();
     /* Through the simulator's initialiser, so the gate table is populated. */
     qsylvan_init_simulator(1LL << 18, 1LL << 18, -1, backend, NORM_LOW);
 
-    const int res = RUN(runtests);
+    const int res = with_lazy ? RUN(runtests_lazy) : RUN(runtests);
 
     sylvan_quit();
     lace_stop();
@@ -725,13 +819,17 @@ run_with(int backend, const char *name, bool with_l2)
 int
 main(void)
 {
-    if (run_with(COMP_HASHMAP, "complex", false)) return 1;
+    if (run_with(COMP_HASHMAP, "complex", false, false)) return 1;
     /* Every node read at norm 1: the same checks against the same dense
      * simulation, so the scaling of cofactors, makeedge, eval, the norm and
      * the probabilities must all agree with each other. */
-    if (run_with(COMP_HASHMAP, "complex", true)) return 1;
+    if (run_with(COMP_HASHMAP, "complex", true, false)) return 1;
     /* The same circuits with exact coefficients: T is a pi/4 rotation, so
      * Clifford+T stays inside Q[i,sqrt2]. */
-    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])", false)) return 1;
+    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])", false, false)) return 1;
+    /* The lazy canonical form, after the eager runs whose sizes it must meet. */
+    if (run_with(COMP_HASHMAP, "complex", false, true)) return 1;
+    if (run_with(COMP_HASHMAP, "complex", true, true)) return 1;
+    if (run_with(QISQ2_MAP, "exact (Q[i,sqrt2])", false, true)) return 1;
     return 0;
 }

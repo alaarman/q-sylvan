@@ -61,54 +61,42 @@ print_bucket_bits(bucket_t* b)
 /*
 Hash the number num
 This function assumes that num is reduced already
+
+It reads the limbs where they are: copying the eight numerators and
+denominators out first cost eight allocations per lookup. 0 and 1 still hash to
+0 and 1, so that they take buckets 0 and 1 of a fresh table.
 */
-uint32_t 
+static inline uint64_t
+qisq2_mix(uint64_t h)
+{
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+static inline uint64_t
+qisq2_mpz_hash(mpz_srcptr z, uint64_t h)
+{
+    const mp_limb_t *l = mpz_limbs_read(z);
+    const size_t n = mpz_size(z);
+    h = qisq2_mix(h ^ (uint64_t)(int64_t)z->_mp_size);
+    for (size_t i = 0; i < n; i++) h = qisq2_mix(h ^ (uint64_t)l[i]);
+    return h;
+}
+
+uint32_t
 qisq2_hash(qisq2_t *num) {
-    mpz_t anum, aden, bnum, bden, cnum, cden, dnum, dden;
-    mpz_init(anum); mpz_init(aden); mpz_init(bnum); mpz_init(bden);
-    mpz_init(cnum); mpz_init(cden); mpz_init(dnum); mpz_init(dden);
-    
-    mpz_t temp;
-    mpz_init(temp);
-    uint32_t result;
-
-    mpq_get_num(anum, num->a);
-    mpq_get_den(aden, num->a);
-    mpq_get_num(bnum, num->b);
-    mpq_get_den(bden, num->b);
-    mpq_get_num(cnum, num->c);
-    mpq_get_den(cden, num->c);
-    mpq_get_num(dnum, num->d);
-    mpq_get_den(dden, num->d);
-
-    // hash 0 and 1 to 0 resp. 1
-    if (!(mpz_cmp_si(anum,0) || mpz_cmp_si(bnum,0) || mpz_cmp_si(cnum,0) || mpz_cmp_si(dnum,0))){
-        result = 0;
-    }
-    else if (!(mpz_cmp_si(anum,1) || mpz_cmp_si(aden,1) || mpz_cmp_si(bnum,0) || mpz_cmp_si(cnum,0) || mpz_cmp_si(dnum,0))){
-        result = 1;
-    }
-    else {
-        mpz_addmul_ui(temp, anum, 3443);
-        mpz_addmul_ui(temp, aden, 17);
-        mpz_addmul_ui(temp, bnum, 8093);
-        mpz_addmul_ui(temp, bden, 9);
-        mpz_addmul_ui(temp, cnum, 7314);
-        mpz_addmul_ui(temp, cden, 71);
-        mpz_addmul_ui(temp, dnum, 2817);
-        mpz_addmul_ui(temp, dden, 7);
-        unsigned long int res = mpz_get_ui(temp);
-        result = (uint32_t) res;
-    }
-    
-    mpz_clear(anum); mpz_clear(aden); 
-    mpz_clear(bnum); mpz_clear(bden); 
-    mpz_clear(cnum); mpz_clear(cden); 
-    mpz_clear(dnum); mpz_clear(dden);
-
-    mpz_clear(temp);
-
-    return result;
+    const bool a0 = mpq_sgn(num->a) == 0, b0 = mpq_sgn(num->b) == 0,
+               c0 = mpq_sgn(num->c) == 0, d0 = mpq_sgn(num->d) == 0;
+    if (a0 && b0 && c0 && d0) return 0;
+    if (b0 && c0 && d0 && mpq_cmp_ui(num->a, 1, 1) == 0) return 1;
+    uint64_t h = 0x9e3779b97f4a7c15ULL;
+    h = qisq2_mpz_hash(mpq_numref(num->a), h); h = qisq2_mpz_hash(mpq_denref(num->a), h);
+    h = qisq2_mpz_hash(mpq_numref(num->b), h); h = qisq2_mpz_hash(mpq_denref(num->b), h);
+    h = qisq2_mpz_hash(mpq_numref(num->c), h); h = qisq2_mpz_hash(mpq_denref(num->c), h);
+    h = qisq2_mpz_hash(mpq_numref(num->d), h); h = qisq2_mpz_hash(mpq_denref(num->d), h);
+    return (uint32_t)(h ^ (h >> 32));
 }
 
 void qisq2_reduce(qisq2_t *num) {
@@ -118,9 +106,25 @@ void qisq2_reduce(qisq2_t *num) {
     mpq_canonicalize(num->d);
 }
 
+/* Same sign and length in all eight integers: read from the entry itself, so a
+ * probe that meets another value rarely has to follow its limb pointers. */
+static inline bool
+qisq2_same_shape(const qisq2_t *x, const qisq2_t *y)
+{
+    return mpq_numref(x->a)->_mp_size == mpq_numref(y->a)->_mp_size &&
+           mpq_denref(x->a)->_mp_size == mpq_denref(y->a)->_mp_size &&
+           mpq_numref(x->b)->_mp_size == mpq_numref(y->b)->_mp_size &&
+           mpq_denref(x->b)->_mp_size == mpq_denref(y->b)->_mp_size &&
+           mpq_numref(x->c)->_mp_size == mpq_numref(y->c)->_mp_size &&
+           mpq_denref(x->c)->_mp_size == mpq_denref(y->c)->_mp_size &&
+           mpq_numref(x->d)->_mp_size == mpq_numref(y->d)->_mp_size &&
+           mpq_denref(x->d)->_mp_size == mpq_denref(y->d)->_mp_size;
+}
+
 static bool
 qisq2_equal(qisq2_t *in_table, const qisq2_t* to_insert)
 {
+    if (!qisq2_same_shape(in_table, to_insert)) return false;
     if (mpq_equal(in_table->a,to_insert->a) == 0){
         return false;
     }
@@ -146,14 +150,41 @@ void qisq2_clear(qisq2_t *num) {
 }
 
 
+static int qisq2_map_insert(qisq2_map_t *qisq2_map, qisq2_t *v, uint64_t *ret);
+
 int
 qisq2_map_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
 {
     qisq2_t *v = (qisq2_t *)_v;
-    qisq2_map_t *qisq2_map = (qisq2_map_t *) dbs;
+    qisq2_reduce(v);
+    return qisq2_map_insert((qisq2_map_t *) dbs, v, ret);
+}
+
+/*
+ * The same for a value that is already reduced, as every result of GMP's mpq
+ * arithmetic is: reducing it again costs a gcd per component and changes
+ * nothing. `v` is only read.
+ */
+int
+qisq2_map_find_or_put_reduced(const void *dbs, const qisq2_t *v, uint64_t *ret)
+{
+#ifndef NDEBUG
+    mpq_t chk;
+    mpq_init(chk);
+    mpq_set(chk, v->a); mpq_canonicalize(chk); assert(mpq_equal(chk, v->a));
+    mpq_set(chk, v->b); mpq_canonicalize(chk); assert(mpq_equal(chk, v->b));
+    mpq_set(chk, v->c); mpq_canonicalize(chk); assert(mpq_equal(chk, v->c));
+    mpq_set(chk, v->d); mpq_canonicalize(chk); assert(mpq_equal(chk, v->d));
+    mpq_clear(chk);
+#endif
+    return qisq2_map_insert((qisq2_map_t *) dbs, (qisq2_t *) v, ret);
+}
+
+static int
+qisq2_map_insert(qisq2_map_t *qisq2_map, qisq2_t *v, uint64_t *ret)
+{
     bucket_t *val  = (bucket_t *) v;
 
-    qisq2_reduce(v);
     uint32_t hash = qisq2_hash(v);
     uint32_t prime = odd_primes[hash & PRIME_MASK];
 

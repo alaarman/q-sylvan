@@ -48,6 +48,11 @@ measurement is not checked and the run is drawn grey, as Figures 6 to 8
 --unchecked right counts such a run as correct instead, as the figures of the
 2026-10-01 revision did (regen_amendment.sh passes it for those), and keeps
 that revision's legend.
+Without it, the float-against-algebraic panels (evdd_ and
+limdd_float_vs_algebraic_*) draw a float run whose norm alone is wrong violet,
+apart from a wrong measurement, as Figures 6 to 8 do, and a float run that did
+not finish hollow grey, since its correctness is unknown; each set of three
+gets its own legend, evdd_ and limdd_float_vs_algebraic_legend.pdf.
 
 --rule section6 applies the rule of Section 6 of the paper instead: a float run
 is wrong when its top-qubit probability is more than 5% off the exact one, and
@@ -75,7 +80,9 @@ RULE = "amend"                                 # or "section6" (--rule)
 UNCHECKED = "right"                            # or "grey" (--unchecked; its default); the
                                                # numbers scripts keep the revision's "right"
 GREY = "0.55"                                  # a float run that was not judged
+NORMCOL = "tab:purple"                         # a float run whose norm alone is wrong (split panels)
 UNJUDGED = set()                               # panels with a run that was not judged
+DRAWN = {}                                     # panel -> (families, verdicts) drawn, for split_legend
 WIDE = 64                                      # one 64-bit Pauli word
 NUMERIC = ("simulation_time", "final_nodes", "max_nodes", "norm",
            "first_qubit_measurement_prob", "t_count", "final_width")
@@ -297,21 +304,29 @@ def failures(recs):
 
 def colours(y, x):
     """y, x: 'wrong', 'right', 'unjudged', or None where the panel judges no
-    such float run. Fill: the y arm's float run (or the only float arm), red
-    when wrong, grey when not judged. Edge: the x arm's float run, where the
-    panel judges one (the lower row), orange when wrong, grey when not judged;
-    otherwise the edge goes with the fill."""
-    face = {"wrong": "tab:red", "unjudged": GREY}.get(y, "none")
+    such float run; a split panel's y can also be 'norm' (only the norm is
+    wrong) or 'failed' (the float run did not finish). Fill: the y arm's float
+    run (or the only float arm), red when wrong, violet when only its norm is,
+    grey when not judged, none when it did not finish. Edge: the x arm's float
+    run, where the panel judges one (the lower row), orange when wrong, grey
+    when not judged; otherwise the edge goes with the fill, and is grey for a
+    float run that did not finish."""
+    face = {"wrong": "tab:red", "norm": NORMCOL, "unjudged": GREY}.get(y, "none")
     if x == "wrong": edge = "tab:orange"
     elif x == "unjudged": edge = GREY
-    elif y == "wrong": edge = "tab:red"
-    elif y == "unjudged" and x is None: edge = GREY
+    elif y in ("wrong", "norm"): edge = face
+    elif y in ("unjudged", "failed") and x is None: edge = GREY
     else: edge = "tab:blue"
     return face, edge
 
 def verdict(bad):
     """judge_point's bad as colours() takes it."""
     return "unjudged" if bad is None else ("wrong" if bad else "right")
+
+def norm_only(r, arm, ref):
+    """True when judge() finds the float run's measurement right and only its
+    norm off 1. The split panels draw such a run apart, as Figures 6 to 8 did."""
+    return RULE != "section6" and judge(r, arm, ref)[0] == "norm"
 
 def band(ax, lo, F, gap, top, nboth, fs):
     """The shaded band beyond the data, its dashed lines and their labels."""
@@ -327,8 +342,13 @@ def band(ax, lo, F, gap, top, nboth, fs):
                 ha="right", va="bottom")
 
 def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=None,
-            fails=None, xjudge=None):
+            fails=None, xjudge=None, fams=None, split=False):
+    """One panel. fams keeps only those families. split (float against
+    algebraic, with --unchecked grey) draws a float run whose norm alone is
+    wrong violet, and one that did not finish hollow grey, since its
+    correctness is unknown; split_legend() says so."""
     fails = fails or {}
+    split = split and UNCHECKED == "grey"      # --unchecked right keeps the revision's look
     pts = {}          # (family, face, edge) -> ([x],[y]); None for a failed arm
     nfloor = 0
     how = {}          # how each judged point was judged
@@ -340,6 +360,7 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
     circs = set(rows) | {c for (c, a) in fails if a in (xarm, yarm)}
     for circ in sorted(circs):                 # sorted: a set's order varies run to run
         r = rows.get(circ, {"_fam": family_of(circ)})
+        if fams is not None and r["_fam"] not in fams: continue
         xok, yok = xarm in r, yarm in r
         xf, yf = (circ, xarm) in fails, (circ, yarm) in fails
         if not (xok or xf) or not (yok or yf): continue        # an arm not run
@@ -354,7 +375,10 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         ref = truth if truth else yarm
         yv = xv = None
         bad, h = False, None
-        if judge and judge in r: bad, h = judge_point(r, judge, ref); yv = verdict(bad)
+        if judge and judge in r:
+            bad, h = judge_point(r, judge, ref); yv = verdict(bad)
+            if split and bad and norm_only(r, judge, ref): yv = "norm"
+        elif split and judge and (circ, judge) in fails: yv = "failed"
         xbad, xh = False, None
         if xjudge and xjudge in r: xbad, xh = judge_point(r, xjudge, EXACT[1]); xv = verdict(xbad)
         if (x is not None and x <= 0) or (y is not None and y <= 0):
@@ -368,6 +392,8 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         pf = perfam.setdefault(r["_fam"], [0, 0]); pf[0] += 1; pf[1] += bool(bad)
         if bad is None or xbad is None: UNJUDGED.add(fname)
         face, edge = colours(yv, xv)
+        drawn = DRAWN.setdefault(fname, (set(), set()))
+        drawn[0].add(r["_fam"]); drawn[1].add(yv or "right")
         pts.setdefault((r["_fam"], face, edge), ([], []))
         pts[(r["_fam"], face, edge)][0].append(x); pts[(r["_fam"], face, edge)][1].append(y)
     allv = [v for (xs, ys) in pts.values() for v in xs + ys if v is not None and v > 0]
@@ -404,12 +430,15 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
     n = sum(len(v[0]) for v in pts.values())
     nb = sum(len(v[0]) for k, v in pts.items() if k[1] == "tab:red")
+    nn = sum(len(v[0]) for k, v in pts.items() if k[1] == NORMCOL)
+    nfl = sum(len(v[0]) for k, v in pts.items() if k[1] == "none" and k[2] == GREY)
     nxb = sum(len(v[0]) for k, v in pts.items() if k[2] == "tab:orange")
     fams = " ".join(f"{k}={v[0]}/{v[1]}w" for k, v in sorted(perfam.items()))
     hw = ", judged by " + " ".join(f"{k}={v}" for k, v in sorted(how.items())) if how else ""
     fl = (f"; did not finish: x {nfail['x']}, y {nfail['y']}, both {nfail['both']}" if anyfail else "")
     njs = (f", {nj['y']} not judged" if nj["y"] else "") + (f", {nj['x']} x not judged" if nj["x"] else "")
-    print(f"  {fname}: {n} points ({nb} wrong{', %d x wrong' % nxb if xjudge else ''}{njs}"
+    sp = f" (of which {nn} norm only), {nfl} float did not finish" if split else ""
+    print(f"  {fname}: {n} points ({nb + nn} wrong{sp}{', %d x wrong' % nxb if xjudge else ''}{njs}"
           f"{', %d floored' % nfloor if nfloor else ''}{fl})  [{fams}{hw}]")
     if VERBOSE and detail: print("      red/orange: " + " ".join(sorted(detail)))
 
@@ -437,6 +466,31 @@ def legend(fname, grey=False):
                           else "not judged (no exact run finished)")]
     hs += [plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
                       label="did not finish (timeout or full table)")]
+    fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
+               handletextpad=0.35, columnspacing=1.1)
+    fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
+    print("  wrote", fname)
+
+def split_legend(fname, panels):
+    """The legend of a figure of split panels (float against algebraic: Figure
+    6 of Section 6 and Figure 9), listing the families and the verdicts that
+    its panels draw."""
+    fams, kinds = set(), set()
+    for p in panels:
+        f, k = DRAWN.get(p, (set(), set()))
+        fams |= f; kinds |= k
+    dot = lambda fc, ec, lab: plt.Line2D([], [], ls="", marker="o", mfc=fc, mec=ec,
+                                         mew=0.9, ms=5, label=lab)
+    hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
+                      ms=5, label=lab) for k, m, lab in FAMILY if k in fams]
+    hs += [dot("none", "tab:blue", "float correct")]
+    if "wrong" in kinds: hs += [dot("tab:red", "tab:red", "float measurement wrong")]
+    if "norm" in kinds: hs += [dot(NORMCOL, NORMCOL, "float norm wrong")]
+    if "unjudged" in kinds: hs += [dot(GREY, GREY, "float measurement not checked")]
+    if "failed" in kinds: hs += [dot("none", GREY, "float run did not finish")]
+    hs += [plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
+                      label="did not finish (timeout or full table)")]
+    fig = plt.figure(figsize=(6.4, 0.62))
     fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
                handletextpad=0.35, columnspacing=1.1)
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
@@ -536,11 +590,15 @@ def main():
                 judge=FL, truth="limdd_qisq2", fails=fails, xjudge=FE)
         scatter(rows, FE, "qisq2_low", field,
                 f"{lab} float{fl}", f"{lab} algebraic",
-                f"evdd_float_vs_algebraic_{field}.pdf", judge=FE, fails=fails)
+                f"evdd_float_vs_algebraic_{field}.pdf", judge=FE, fails=fails, split=True)
         scatter(rows, FL, "limdd_qisq2", field,
                 f"{lab} float LIMDD{ll}", f"{lab} algebraic LIMDD",
-                f"limdd_float_vs_algebraic_{field}.pdf", judge=FL, fails=fails)
+                f"limdd_float_vs_algebraic_{field}.pdf", judge=FL, fails=fails, split=True)
     legend("panel_legend.pdf", grey=any(f.startswith("limdd_vs_evdd") for f in UNJUDGED))
+    if UNCHECKED == "grey":
+        for d in ("evdd", "limdd"):
+            split_legend(f"{d}_float_vs_algebraic_legend.pdf",
+                         [f"{d}_float_vs_algebraic_{f}.pdf" for f in ("simulation_time", "final_nodes", "max_nodes")])
     if a.dump: dump(recs, a.dump)
 
 if __name__ == "__main__":

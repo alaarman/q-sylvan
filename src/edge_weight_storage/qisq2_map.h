@@ -70,6 +70,9 @@ void qisq2_reduce(qisq2_t *num);
 
 int qisq2_map_find_or_put(const void *dbs, const void *v, uint64_t *ret);
 
+/** qisq2_map_find_or_put for a value that is already reduced; `v` is only read. */
+int qisq2_map_find_or_put_reduced(const void *dbs, const qisq2_t *v, uint64_t *ret);
+
 extern void * qisq2_map_get(const void *dbs, const uint64_t ref);
 
 extern uint64_t qisq2_map_count_entries(const void *dbs);

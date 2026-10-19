@@ -301,6 +301,43 @@ limdd_lim_mul(LIMDD_LIM a, LIMDD_LIM b)
     return limdd_lim_make(pa, w);
 }
 
+/*
+ * a^-1 b and a b^-1 with ONE division of the scalars. Through limdd_lim_inverse
+ * the scalar 1/a is interned first, and on float weights the table merges any
+ * value within its tolerance of 0 with 0: a label above 1/tolerance then has an
+ * inverse of 0, and a quotient that should be about 1 comes out as the zero map.
+ * Words are their own inverses, so (1/a) A . b B = (b/a) A B, the power of i
+ * from A B folded into the scalar as limdd_lim_mul does. The quotient itself
+ * still becomes the zero map when it is within the tolerance of 0.
+ */
+static LIMDD_LIM
+lim_quotient(LIMDD_LIM a, LIMDD_LIM b, EVBDD_WGT scalar)
+{
+    limdd_pauli_t pa = limdd_lim_pauli(a);
+    const unsigned k = limdd_pauli_rightmul(&pa, limdd_lim_pauli(b), lim_nqubits);
+    EVBDD_WGT w = scalar;
+    if (k != 0) w = wgt_mul(w, i_pow[k]);
+    return limdd_lim_make(pa, w);
+}
+
+LIMDD_LIM
+limdd_lim_ldiv(LIMDD_LIM a, LIMDD_LIM b)
+{
+    assert(!limdd_lim_is_zero(a) && "the zero map has no inverse");
+    if (limdd_lim_is_zero(b)) return LIMDD_LIM_ZERO;
+    if (limdd_lim_is_identity(a)) return b;
+    return lim_quotient(a, b, wgt_div(limdd_lim_weight(b), limdd_lim_weight(a)));
+}
+
+LIMDD_LIM
+limdd_lim_rdiv(LIMDD_LIM a, LIMDD_LIM b)
+{
+    assert(!limdd_lim_is_zero(b) && "the zero map has no inverse");
+    if (limdd_lim_is_zero(a)) return LIMDD_LIM_ZERO;
+    if (limdd_lim_is_identity(b)) return a;
+    return lim_quotient(a, b, wgt_div(limdd_lim_weight(a), limdd_lim_weight(b)));
+}
+
 LIMDD_LIM
 limdd_lim_inverse(LIMDD_LIM lim)
 {

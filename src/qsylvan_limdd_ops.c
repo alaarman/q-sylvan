@@ -22,6 +22,7 @@
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_ops.h"
+#include "qsylvan_limdd_profile.h"
 #include "qsylvan_limdd_canon.h"
 #include "qsylvan_limdd_gc.h"
 #include "qsylvan_gates.h"
@@ -251,9 +252,17 @@ TASK_IMPL_3(LIMDD, limdd_plus, LIMDD, a, LIMDD, b, uint32_t, var)
     if (a > b) { const LIMDD t = a; a = b; b = t; }
 
     const LIMDD_LIM A = limdd_label(a);
-    const LIMDD_LIM Ainv = limdd_lim_inverse(A);
     const LIMDD na = limdd_bundle(LIMDD_LIM_IDENTITY, limdd_target(a));
-    const LIMDD nb = lim_times_edge(Ainv, b);
+    /* A^-1 B, through the inverse as the canonical form takes its quotients:
+     * a single division rounds differently, and on floats that alone moved
+     * results across the benchmark (more wrong runs, larger diagrams). Only
+     * when the inverse of A is merged with 0 -- a label above 1/tolerance,
+     * which would drop b from the sum -- is it taken in one division. */
+    const LIMDD_LIM Ainv = limdd_lim_inverse(A);
+    const LIMDD_LIM Bq = limdd_lim_is_zero(Ainv) ? limdd_lim_ldiv(A, limdd_label(b))
+                                                 : limdd_lim_mul(Ainv, limdd_label(b));
+    const LIMDD nb = limdd_lim_is_zero(Bq) ? limdd_zero_edge()
+                                           : limdd_bundle(Bq, limdd_target(b));
 
     /*
      * cache_get3 ORs its second argument into the operation id, so a LIMDD
@@ -360,7 +369,7 @@ TASK_IMPL_3(LIMDD, limdd_times, LIMDD, a, LIMDD, b, uint32_t, var)
 LIMDD
 limdd_reduce_root(LIMDD e, uint32_t var)
 {
-    if (limdd_edge_is_zero(e) || !limdd_get_high_determinism()) return e;
+    if (limdd_edge_is_zero(e) || !limdd_get_high_determinism() || limdd_canon_is_lazy()) return e;
     return limdd_edge_canonical(var, e);
 }
 
@@ -927,6 +936,8 @@ limdd_report_lim_stats(FILE *out, LIMDD e, uint32_t nqubits)
     for (unsigned k = 0; k <= LIMDD_MAX_QUBITS; k++) {
         if (st.by_support[k]) fprintf(out, "LIMSUP %u %llu\n", k, (unsigned long long)st.by_support[k]);
     }
+
+    limdd_prof_report(out);
 
     free(st.wgts);
     free(st.handles);

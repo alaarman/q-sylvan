@@ -59,6 +59,7 @@ target_sources(qsylvan
     qsylvan_limdd_node.c
     qsylvan_limdd_stab.c
     qsylvan_limdd_canon.c
+    qsylvan_limdd_class.c
     qsylvan_limdd_gc.c
     qsylvan_limdd_ops.c
     qsylvan_limdd_inspect.c
@@ -118,6 +119,8 @@ target_sources(qsylvan
       qsylvan_evdd_ops.h
       qsylvan_limdd_stab.h
       qsylvan_limdd_canon.h
+      qsylvan_limdd_profile.h
+      qsylvan_limdd_class.h
       qsylvan_limdd_gc.h
       qsylvan_limdd_ops.h
       "${CMAKE_CURRENT_BINARY_DIR}/sylvan_config.h"

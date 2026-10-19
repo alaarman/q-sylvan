@@ -212,6 +212,15 @@ LIMDD_LIM limdd_lim_mul(LIMDD_LIM a, LIMDD_LIM b);
 LIMDD_LIM limdd_lim_inverse(LIMDD_LIM lim);
 
 /**
+ * a^-1 b (ldiv) and a b^-1 (rdiv), with one division of the scalars rather than
+ * an inverse and a product: on float weights the inverse of a label above
+ * 1/tolerance is merged with 0, which would make the quotient the zero map
+ * whatever its size. The divisor must not be the zero map.
+ */
+LIMDD_LIM limdd_lim_ldiv(LIMDD_LIM a, LIMDD_LIM b);
+LIMDD_LIM limdd_lim_rdiv(LIMDD_LIM a, LIMDD_LIM b);
+
+/**
  * The edge weight i^k, for k in 0..3.
  *
  * Applying a Pauli word to a basis state produces such a factor, so callers

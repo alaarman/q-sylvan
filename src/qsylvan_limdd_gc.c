@@ -20,6 +20,7 @@
 #include <sylvan_int.h>
 
 #include "qsylvan_limdd_gc.h"
+#include "qsylvan_limdd_class.h"
 
 /*
  * What the last collection left behind. A collection is expensive -- it
@@ -394,6 +395,10 @@ VOID_TASK_0(limdd_gc_go)
     limdd_gc_rehash_lims();
     limdd_gc_rehash_stabs();
     limdd_gc_rehash_nodes();
+
+    /* The lazy form's class table holds node indices, and buckets of dead
+     * nodes are about to be reused: refill it from the marked nodes. */
+    limdd_class_gc_rebuild();
 
     /* Remember what is left, so a collection that freed nothing is not
      * immediately repeated. The weight table has also just doubled if it was

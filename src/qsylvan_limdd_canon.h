@@ -151,6 +151,7 @@ typedef enum {
     LIMDD_CANON_MANUAL,    /* never automatically; the caller decides */
     LIMDD_CANON_OPS,       /* when `interval` nodes have been built */
     LIMDD_CANON_ADAPTIVE,  /* interval tuned by how much the last one helped */
+    LIMDD_CANON_LAZY,      /* one node per class, searched only on a collision */
 } limdd_canon_policy_t;
 
 /**
@@ -159,10 +160,28 @@ typedef enum {
  * than how many gates it is written with. It is the threshold for OPS and the
  * starting threshold for ADAPTIVE, and is ignored otherwise.
  *
- * Anything but ALWAYS turns high determinism off for ordinary operations;
+ * MANUAL, OPS and ADAPTIVE turn high determinism off for ordinary operations;
  * limdd_canonize turns it back on for the duration of a rebuild.
+ *
+ * LAZY keeps exactly one stored node per class of states that are LIM images
+ * of each other, as ALWAYS does, but not necessarily the minimal one: a node
+ * with two different children is stored as makeedge factors it (on exact
+ * weights with its children in index order and the sign rule applied, which
+ * makes it the canonical node when both children's groups are trivial), without
+ * the coset search or its stabiliser group, unless a node of its class may already be
+ * stored, which qsylvan_limdd_class.h decides from a key every member of the
+ * class shares. The node counts are those of ALWAYS; the edges are not, as
+ * the first node of a class to be made is the one kept, and root labels are
+ * not reduced over the target's group (limdd_reduce_root returns its edge as it
+ * is), so two edges to one state share their target but may differ in their
+ * label by an element of its group. Groups are computed only where a
+ * comparison needs them. LAZY must be chosen before the first node is made and
+ * kept for the session: the class table knows only the nodes made under it.
  */
 void limdd_set_canon_policy(limdd_canon_policy_t policy, uint64_t interval);
+
+/** Whether the policy is LAZY (see limdd_set_canon_policy). */
+bool limdd_canon_is_lazy(void);
 
 /**
  * Count one unit of work towards the next rebuild.

@@ -253,6 +253,33 @@ test_concurrent_interning(void)
     return 0;
 }
 
+/*
+ * a^-1 b and a b^-1 in one division. On the exactly representable weights they
+ * equal the inverse-and-product they replace. With labels near 1e15 the inverse
+ * is below the table's tolerance and merges with 0, so the old route makes a
+ * quotient of 2 the zero map; the quotient routes must not. A quotient that is
+ * itself below the tolerance is the zero map either way.
+ */
+int
+test_quotients(void)
+{
+    for (int i = 0; i < 200; i++) {
+        const LIMDD_LIM a = limdd_lim_make(random_pauli(), random_weight());
+        const LIMDD_LIM b = limdd_lim_make(random_pauli(), random_weight());
+        test_assert(limdd_lim_ldiv(a, b) == limdd_lim_mul(limdd_lim_inverse(a), b));
+        test_assert(limdd_lim_rdiv(a, b) == limdd_lim_mul(a, limdd_lim_inverse(b)));
+    }
+    const LIMDD_LIM big1 = limdd_lim_make(random_pauli(), complex_lookup(1e15, 0.0));
+    const LIMDD_LIM big2 = limdd_lim_make(limdd_lim_pauli(big1), complex_lookup(2e15, 0.0));
+    test_assert(limdd_lim_ldiv(big1, big2) == limdd_lim_make(limdd_pauli_identity(), complex_lookup(2.0, 0.0)));
+    test_assert(limdd_lim_rdiv(big2, big1) == limdd_lim_make(limdd_pauli_identity(), complex_lookup(2.0, 0.0)));
+    const LIMDD_LIM one = limdd_lim_make(limdd_pauli_identity(), EVBDD_ONE);
+    const LIMDD_LIM tiny = limdd_lim_make(random_pauli(), complex_lookup(1e-16, 0.0));
+    test_assert(limdd_lim_ldiv(one, tiny) == LIMDD_LIM_ZERO);
+    test_assert(limdd_lim_ldiv(big1, LIMDD_LIM_ZERO) == LIMDD_LIM_ZERO);
+    return 0;
+}
+
 TASK_0(int, runtests)
 {
     limdd_lims_init(NQUBITS, 1LL << 16, 1LL << 16);
@@ -263,6 +290,8 @@ TASK_0(int, runtests)
     printf("lim zero and identity collapse:   ok\n");
     if (test_multiplication()) return 1;
     printf("lim multiplication and inverse:   ok\n");
+    if (test_quotients()) return 1;
+    printf("lim quotients take one division:  ok\n");
     if (test_associativity()) return 1;
     printf("lim multiplication associates:    ok\n");
     if (test_concurrent_interning()) return 1;

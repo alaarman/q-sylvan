@@ -108,7 +108,7 @@ static struct argp_option options[] =
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
-    {"canon", 1008, "<always|never|ops:K|adaptive>", 0, "LIMDD only: when to apply the canonical form. always (default) canonicalises inside every operation; never leaves it off; ops:K rebuilds after every K node-building operations; adaptive tunes the interval by how much the last rebuild helped.", 0},
+    {"canon", 1008, "<always|never|ops:K|adaptive|lazy>", 0, "LIMDD only: when to apply the canonical form. always (default) canonicalises inside every operation; never leaves it off; ops:K rebuilds after every K node-building operations; adaptive tunes the interval by how much the last rebuild helped; lazy keeps one node per LIM class, as always does, but searches for the canonical label only when another node may share the class (same node counts, other labels).", 0},
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
@@ -202,6 +202,7 @@ parse_opt(int key, char *arg, struct argp_state *state)
         if (strcmp(arg, "always") == 0) canon_policy = LIMDD_CANON_ALWAYS;
         else if (strcmp(arg, "never") == 0) canon_policy = LIMDD_CANON_MANUAL;
         else if (strcmp(arg, "adaptive") == 0) canon_policy = LIMDD_CANON_ADAPTIVE;
+        else if (strcmp(arg, "lazy") == 0) canon_policy = LIMDD_CANON_LAZY;
         else if (strncmp(arg, "ops:", 4) == 0) {
             canon_policy = LIMDD_CANON_OPS;
             canon_interval = (uint64_t) atoll(arg + 4);

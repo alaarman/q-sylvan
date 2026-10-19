@@ -207,6 +207,13 @@ sylvan_test_warnings(test_bqd_xp_sm)
 
 add_test(NAME test_bqd_xp_sm COMMAND test_bqd_xp_sm)
 
+add_executable(test_qisq2_ops)
+target_sources(test_qisq2_ops PRIVATE test_qisq2_ops.c)
+target_link_libraries(test_qisq2_ops PRIVATE qsylvan::sylvan)
+target_compile_features(test_qisq2_ops PRIVATE c_std_11)
+sylvan_test_warnings(test_qisq2_ops)
+add_test(NAME test_qisq2_ops COMMAND test_qisq2_ops)
+
 add_executable(test_lowlevel_ops)
 target_sources(test_lowlevel_ops PRIVATE test_lowlevel_ops.c)
 target_link_libraries(test_lowlevel_ops PRIVATE qsylvan::sylvan)

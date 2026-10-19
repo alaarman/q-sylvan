@@ -205,12 +205,11 @@ weight_as_complex(EVBDD_WGT a)
 {
     complex_t res;
     if (wgt_type == WGT_QISQ2) {
-        qisq2_t q;
-        weight_value(a, &q);
-        // a + b*sqrt2 + i(c + d*sqrt2)
-        res.r = mpq_get_d(q.a) + mpq_get_d(q.b) * sqrt(2.0);
-        res.i = mpq_get_d(q.c) + mpq_get_d(q.d) * sqrt(2.0);
-        qisq2_clear(&q);
+        // a + b*sqrt2 + i(c + d*sqrt2), read from the table entry in place
+        double re, im;
+        qisq2_wgt_as_doubles(a, &re, &im);
+        res.r = re;
+        res.i = im;
     } else {
         weight_value(a, &res);
     }
@@ -501,15 +500,13 @@ wgt_neg(EVBDD_WGT a)
     if (a == EVBDD_ONE) return EVBDD_MIN_ONE;
     if (a == EVBDD_MIN_ONE) return EVBDD_ONE;
 
-    EVBDD_WGT res;
+    if (wgt_type == WGT_QISQ2) return qisq2_wgt_neg(a);
 
-    weight_t w = weight_malloc();
-    weight_value(a, w);
-    weight_neg(w);
-    res = weight_lookup_ptr(w);
-    weight_free(w);
-
-    return res; 
+    /* complex: a stack value, no allocation */
+    complex_t w;
+    weight_value(a, &w);
+    weight_neg(&w);
+    return weight_lookup_ptr(&w);
 }
 
 EVBDD_WGT 
@@ -518,15 +515,13 @@ wgt_conj(EVBDD_WGT a)
     // special cases
     if (a == EVBDD_ZERO || a == EVBDD_ONE || a == EVBDD_MIN_ONE) return a;
 
-    EVBDD_WGT res;
+    if (wgt_type == WGT_QISQ2) return qisq2_wgt_conj(a);
 
-    weight_t w = weight_malloc();
-    weight_value(a, w);
-    weight_conj(w);
-    res = weight_lookup_ptr(w);
-    weight_free(w);
-
-    return res; 
+    /* complex: a stack value, no allocation */
+    complex_t w;
+    weight_value(a, &w);
+    weight_conj(&w);
+    return weight_lookup_ptr(&w);
 }
 
 EVBDD_WGT
@@ -543,14 +538,16 @@ wgt_add(EVBDD_WGT a, EVBDD_WGT b)
     }
 
     // compute and lookup result in edge weight table
-    weight_t wa = weight_malloc();
-    weight_t wb = weight_malloc();
-    weight_value(a, wa);
-    weight_value(b, wb);
-    weight_add(wa, wb);
-    res = weight_lookup_ptr(wa);
-    weight_free(wa);
-    weight_free(wb);
+    if (wgt_type == WGT_QISQ2) {
+        res = qisq2_wgt_add(a, b, false);
+    } else {
+        /* complex: stack values, no allocation */
+        complex_t wa, wb;
+        weight_value(a, &wa);
+        weight_value(b, &wb);
+        weight_add(&wa, &wb);
+        res = weight_lookup_ptr(&wa);
+    }
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -573,14 +570,16 @@ wgt_sub(EVBDD_WGT a, EVBDD_WGT b)
     }
 
     // compute and lookup result in edge weight table
-    weight_t wa = weight_malloc();
-    weight_t wb = weight_malloc();
-    weight_value(a, wa);
-    weight_value(b, wb);
-    weight_sub(wa, wb);
-    res = weight_lookup_ptr(wa);
-    weight_free(wa);
-    weight_free(wb);
+    if (wgt_type == WGT_QISQ2) {
+        res = qisq2_wgt_add(a, b, true);
+    } else {
+        /* complex: stack values, no allocation */
+        complex_t wa, wb;
+        weight_value(a, &wa);
+        weight_value(b, &wb);
+        weight_sub(&wa, &wb);
+        res = weight_lookup_ptr(&wa);
+    }
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -604,14 +603,16 @@ wgt_mul(EVBDD_WGT a, EVBDD_WGT b)
     }
 
     // compute and lookup result in edge weight table
-    weight_t wa = weight_malloc();
-    weight_t wb = weight_malloc();
-    weight_value(a, wa);
-    weight_value(b, wb);
-    weight_mul(wa, wb);
-    res = weight_lookup_ptr(wa);
-    weight_free(wa);
-    weight_free(wb);
+    if (wgt_type == WGT_QISQ2) {
+        res = qisq2_wgt_mul(a, b);
+    } else {
+        /* complex: stack values, no allocation */
+        complex_t wa, wb;
+        weight_value(a, &wa);
+        weight_value(b, &wb);
+        weight_mul(&wa, &wb);
+        res = weight_lookup_ptr(&wa);
+    }
 
     // insert in cache
     if (CACHE_WGT_OPS) {
@@ -635,14 +636,16 @@ wgt_div(EVBDD_WGT a, EVBDD_WGT b)
     }
 
     // compute and lookup result in edge weight table
-    weight_t wa = weight_malloc();
-    weight_t wb = weight_malloc();
-    weight_value(a, wa);
-    weight_value(b, wb);
-    weight_div(wa, wb);
-    res = weight_lookup_ptr(wa);
-    weight_free(wa);
-    weight_free(wb);
+    if (wgt_type == WGT_QISQ2) {
+        res = qisq2_wgt_div(a, b);
+    } else {
+        /* complex: stack values, no allocation */
+        complex_t wa, wb;
+        weight_value(a, &wa);
+        weight_value(b, &wb);
+        weight_div(&wa, &wb);
+        res = weight_lookup_ptr(&wa);
+    }
 
     // insert in cache
     if (CACHE_WGT_OPS) {

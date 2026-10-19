@@ -22,6 +22,7 @@
 #include <sylvan_platform.h>
 
 #include "qsylvan_limdd_stab.h"
+#include "qsylvan_limdd_profile.h"
 
 /* Written once at init, read-only afterwards. */
 static llmsset_t stab_table = NULL;
@@ -433,6 +434,7 @@ commutes(limdd_pauli_t w, limdd_pauli_t q)
 static size_t
 stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
 {
+    LIMDD_PROF(LP_ZASSENHAUS);
     const size_t nqubits = limdd_lims_nqubits();
     const size_t k0 = limdd_stab_ngens(s0);
     const size_t k1 = limdd_stab_ngens(s1);
@@ -550,6 +552,7 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
 {
     assert(stab_table != NULL);
     assert(!limdd_lim_is_zero(b) && "the zero map has no coset to minimise");
+    LIMDD_PROF(LP_MINCOSET);
 
     /*
      * Memoised on its three arguments, all of which are interned handles, so
@@ -565,6 +568,7 @@ limdd_stab_min_coset(LIMDD_LIM b, LIMDD_STAB s0, LIMDD_STAB s1,
         if (cache_get6(CACHE_LIMDD_MINCOSET, b, s0, s1, 0, 0, &r1, &r2)) {
             if (witness != NULL) *witness = (LIMDD_LIM)(r2 & ~(UINT64_C(1) << 63));
             if (negated != NULL) *negated = (r2 >> 63) != 0;
+            LIMDD_PROF(LP_MINCOSET_HIT);
             return (LIMDD_LIM)r1;
         }
     }
@@ -629,6 +633,7 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
 {
     assert(stab_table != NULL);
     assert(var < limdd_lims_nqubits());
+    LIMDD_PROF(LP_STAB_OF_NODE);
 
     const bool low_zero  = limdd_lim_is_zero(limdd_label(low));
     const bool high_zero = limdd_lim_is_zero(limdd_label(high));
