@@ -193,23 +193,21 @@ uint64_t limdd_control_list(const uint32_t *qubits, uint32_t k);
 /**
  * A controlled gate with the control on either side of the target.
  *
- * limdd_cgate needs the control above the target. When it is not, two
- * identities put it there rather than reaching for a matrix representation
- * LIMDD does not have:
+ * limdd_cgate needs the control above the target. When it is not, CZ, which
+ * is symmetric, exchanges its two qubits, and every other gate U is taken as
+ * a sum over the eigenspaces of Z at the control:
  *
- *   CZ is symmetric, so its two qubits simply exchange roles.
- *   CX reverses under Hadamards on both qubits:
- *   (H (x) H) CNOT_{a->b} (H (x) H) = CNOT_{b->a}.
+ *   CU e = (e + Z_c e)/2 + U_t (e - Z_c e)/2,
  *
- * Both are exact and stay inside Clifford+T. Any other gate with the control
- * below the target is refused.
+ * each Pauli image a label product at the root, and U_t one gate on one term
+ * (for U = X or Y another label product). Exact, and *ok is always true.
  */
 LIMDD limdd_cgate_either(LIMDD e, uint32_t gateid, uint32_t control,
                          uint32_t target, uint32_t nqubits, bool *ok);
 
 /**
- * Exchange two qubits, as three CNOTs, the middle one reversed by the
- * identity above.
+ * Exchange two qubits: SWAP e = (e + Z_aZ_b e)/2 + X_aX_b (e - Z_aZ_b e)/2,
+ * three sums of Pauli images at the root.
  */
 LIMDD limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits);
 

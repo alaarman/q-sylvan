@@ -681,17 +681,48 @@ TASK_IMPL_5(LIMDD, limdd_cgate_list, LIMDD, e, uint32_t, gateid, uint64_t, contr
 
 /* --- controls on either side, and swap -------------------------------- */
 
-/** CNOT with the control BELOW the target, via Hadamard conjugation. */
-static LIMDD
-cx_reversed(LIMDD e, uint32_t c, uint32_t t, uint32_t nq)
+/*
+ * Both work on the whole state at the root, as sums of Pauli images. For a
+ * Pauli word Q with Q^2 = I, e = (e + Qe)/2 + (e - Qe)/2 splits e into its
+ * parts in the +1 and -1 eigenspaces of Q, and Q e is a label product, O(1).
+ *
+ *   controlled-U, control c, target t:   CU e = (e + Z_c e)/2 + U_t (e - Z_c e)/2
+ *   swap of a and b:                    SWAP e = (e + Z_aZ_b e)/2 + X_aX_b (e - Z_aZ_b e)/2
+ *
+ * (the second since (I + ZZ)/2 + XX (I - ZZ)/2 = (I + XX + YY + ZZ)/2, as
+ * XX ZZ = -YY). With U a Pauli the gate is three sums; otherwise U is one
+ * gate applied to a single term. The reversed CNOT used to be four Hadamards
+ * on the whole state around a forward one, and a swap three CNOTs, seven
+ * gate calls: on random Clifford+T circuits these took most of the gate time
+ * (swaps 60% and reversed CNOTs 12% on clifford_T_circuit_20_700), and the
+ * Hadamards minted intermediates that filled the exact weight table.
+ */
+
+/** Q e for the Pauli word Q, at the root. */
+static inline LIMDD
+pauli_times(limdd_pauli_t q, LIMDD e)
 {
-    assert(c > t);
-    e = limdd_gate(e, GATEID_H, c, nq);
-    e = limdd_gate(e, GATEID_H, t, nq);
-    e = limdd_cgate_list(e, GATEID_X, ctl_one(t), c, nq);  /* now t < c */
-    e = limdd_gate(e, GATEID_H, t, nq);
-    e = limdd_gate(e, GATEID_H, c, nq);
-    return e;
+    return lim_times_edge(limdd_lim_make(q, EVBDD_ONE), e);
+}
+
+/** (e + Q e) / 2 + V (e - Q e) / 2, V applied by `v_gate` to the second
+ *  term: a Pauli word (`v_word`), or when v_gateid is not GATEID_I, that gate
+ *  on qubit v_target. */
+static LIMDD
+pauli_split(LIMDD e, limdd_pauli_t q, limdd_pauli_t v_word, uint32_t v_gateid,
+            uint32_t v_target, uint32_t nq)
+{
+    limdd_refs_push(e);
+    const LIMDD qe   = limdd_refs_push(pauli_times(q, e));
+    const LIMDD sum  = limdd_refs_push(limdd_plus(e, qe, 0));
+    const LIMDD mqe  = limdd_refs_push(limdd_scale(qe, EVBDD_MIN_ONE));
+    const LIMDD diff = limdd_refs_push(limdd_plus(e, mqe, 0));
+    const LIMDD vd   = limdd_refs_push(v_gateid == GATEID_I ? pauli_times(v_word, diff)
+                                                            : limdd_gate(diff, v_gateid, v_target, nq));
+    const LIMDD r    = limdd_plus(sum, vd, 0);
+    limdd_refs_pop(6);
+    const EVBDD_WGT half = wgt_div(EVBDD_ONE, wgt_add(EVBDD_ONE, EVBDD_ONE));
+    return limdd_reduce_root(limdd_scale(r, half), 0);
 }
 
 LIMDD
@@ -706,22 +737,24 @@ limdd_cgate_either(LIMDD e, uint32_t gateid, uint32_t control, uint32_t target,
         /* CZ = diag(1,1,1,-1) is symmetric in its two qubits. */
         return limdd_cgate_list(e, GATEID_Z, ctl_one(target), control, nqubits);
     }
-    if (gateid == GATEID_X) return cx_reversed(e, control, target, nqubits);
 
-    *ok = false;
-    return e;
+    /* The control below the target: a sum over Z_c's eigenspaces, above. */
+    const limdd_pauli_t zc = limdd_pauli_single(control, LIMDD_PAULI_Z);
+    if (gateid == GATEID_X)
+        return pauli_split(e, zc, limdd_pauli_single(target, LIMDD_PAULI_X), GATEID_I, 0, nqubits);
+    if (gateid == GATEID_Y)
+        return pauli_split(e, zc, limdd_pauli_single(target, LIMDD_PAULI_Y), GATEID_I, 0, nqubits);
+    return pauli_split(e, zc, limdd_pauli_identity(), gateid, target, nqubits);
 }
 
 LIMDD
 limdd_swap(LIMDD e, uint32_t a, uint32_t b, uint32_t nqubits)
 {
     if (a == b) return e;
-    if (a > b) { const uint32_t t = a; a = b; b = t; }
-
-    e = limdd_cgate_list(e, GATEID_X, ctl_one(a), b, nqubits);
-    e = cx_reversed(e, b, a, nqubits);
-    e = limdd_cgate_list(e, GATEID_X, ctl_one(a), b, nqubits);
-    return e;
+    limdd_pauli_t zz = limdd_pauli_identity(), xx = limdd_pauli_identity();
+    limdd_pauli_set(&zz, a, LIMDD_PAULI_Z); limdd_pauli_set(&zz, b, LIMDD_PAULI_Z);
+    limdd_pauli_set(&xx, a, LIMDD_PAULI_X); limdd_pauli_set(&xx, b, LIMDD_PAULI_X);
+    return pauli_split(e, zz, xx, GATEID_I, 0, nqubits);
 }
 
 /* --- states and probabilities -------------------------------------------- */

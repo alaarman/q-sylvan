@@ -200,8 +200,9 @@ test_controlled_gates(void)
  * SWAP, and controlled gates with the control below the target.
  *
  * These go through identities rather than the recursion, so they need
- * checking against the dense reference in their own right -- a wrong
- * Hadamard conjugation would still produce a valid state, just not this one.
+ * checking against the dense reference in their own right -- a wrong sign in
+ * the sum over Pauli images would still produce a valid state, just not this
+ * one.
  */
 int
 test_reversed_and_swap(void)
@@ -234,6 +235,17 @@ test_reversed_and_swap(void)
             dense_gate(want, GATEID_Z, b, UINT64_C(1) << a);
             char l2[48]; snprintf(l2, sizeof(l2), "cz %u->%u", a, b);
             if (compare(e, want, l2, 0)) return 1;
+
+            /* Any other controlled gate, the control on either side: below
+             * the target it is a sum over Z's eigenspaces at the control. */
+            const uint32_t more[] = { GATEID_Y, GATEID_H, GATEID_S, GATEID_T };
+            for (unsigned g = 0; g < sizeof(more) / sizeof(more[0]); g++) {
+                e = limdd_cgate_either(e, more[g], a, b, NQUBITS, &ok);
+                test_assert(ok);
+                dense_gate(want, more[g], b, UINT64_C(1) << a);
+                char lg[48]; snprintf(lg, sizeof(lg), "c-gate%u %u->%u", more[g], a, b);
+                if (compare(e, want, lg, 0)) return 1;
+            }
 
             e = limdd_swap(e, a, b, NQUBITS);
             /* SWAP as three CNOTs, applied to the reference the same way. */
