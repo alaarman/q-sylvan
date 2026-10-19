@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "qsylvan_bqd_evalmemo.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1698,30 +1699,39 @@ VOID_TASK_IMPL_3(bqd_xpsm_to_vector, BQD, e, uint32_t, n, EVBDD_WGT *, out)
  * point, unless the low one is zero there.
  */
 static EVBDD_WGT
-eval_node(LIMDD_TARG p, uint32_t n, uint64_t y)
+eval_node(LIMDD_TARG p, uint32_t n, uint64_t y, bqd_eval_memo_t *m)
 {
     if (p == LIMDD_TERMINAL) return EVBDD_ONE;
     const uint64_t h = UINT64_C(1) << (n - limdd_node_var(p) - 1);
     const uint64_t yy = y & (h - 1);
     const LIMDD low = limdd_node_low(p);
     if ((y & h) == 0)
-        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yy);
+        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yy, m);
 
     const LIMDD high = limdd_node_high(p);
     if (limdd_edge_is_zero(high)) return EVBDD_ZERO;
+    EVBDD_WGT r;
+    if (bqd_evm_get(m, p, y, &r)) return r;
     EVBDD_WGT c; uint64_t s, t;
     bqd_lim_masks(limdd_label(high), n, &c, &s, &t);
     const uint64_t yt = yy ^ t;
     EVBDD_WGT a = EVBDD_ONE;
-    if (!bqd_sm_is_s(p)) {
-        a = limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yt);
-        if (a == EVBDD_ZERO) return a;
+    if (!bqd_sm_is_s(p))
+        a = limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yt, m);
+    if (a == EVBDD_ZERO) {
+        r = a;
+    } else {
+        const EVBDD_WGT b = eval_node(limdd_target(high), n, yt, m);
+        if (b == EVBDD_ZERO) {
+            r = b;
+        } else {
+            EVBDD_WGT w = (a == EVBDD_ONE) ? b : wgt_mul(a, b);
+            if (parity(s & yy)) w = neg(w);
+            r = wgt_mul(c, w);
+        }
     }
-    const EVBDD_WGT b = eval_node(limdd_target(high), n, yt);
-    if (b == EVBDD_ZERO) return b;
-    EVBDD_WGT w = (a == EVBDD_ONE) ? b : wgt_mul(a, b);
-    if (parity(s & yy)) w = neg(w);
-    return wgt_mul(c, w);
+    bqd_evm_put(m, p, y, r);
+    return r;
 }
 
 EVBDD_WGT
@@ -1730,7 +1740,10 @@ bqd_xpsm_eval(BQD e, uint32_t n, uint64_t x)
     if (limdd_edge_is_zero(e)) return EVBDD_ZERO;
     EVBDD_WGT c; uint64_t s, t;
     bqd_lim_masks(limdd_label(e), n, &c, &s, &t);
-    EVBDD_WGT w = eval_node(limdd_target(e), n, x ^ t);
+    bqd_eval_memo_t m;
+    bqd_evm_init(&m);
+    EVBDD_WGT w = eval_node(limdd_target(e), n, x ^ t, &m);
+    bqd_evm_free(&m);
     if (w == EVBDD_ZERO) return w;
     if (parity(s & x)) w = neg(w);
     return wgt_mul(c, w);

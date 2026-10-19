@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "qsylvan_bqd_evalmemo.h"
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1137,32 +1138,39 @@ VOID_TASK_IMPL_3(bqd_sm_to_vector, BQD, e, uint32_t, n, EVBDD_WGT *, out)
  * same point, unless the low one is zero there.
  */
 static EVBDD_WGT
-eval_node(LIMDD_TARG p, uint32_t n, uint64_t y)
+eval_node(LIMDD_TARG p, uint32_t n, uint64_t y, bqd_eval_memo_t *m)
 {
     if (p == LIMDD_TERMINAL) return EVBDD_ONE;
     const uint64_t h = UINT64_C(1) << (n - limdd_node_var(p) - 1);
     const uint64_t yy = y & (h - 1);
     const LIMDD low = limdd_node_low(p);
     if ((y & h) == 0)
-        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yy);
+        return limdd_edge_is_zero(low) ? EVBDD_ZERO : eval_node(limdd_target(low), n, yy, m);
 
     const LIMDD high = limdd_node_high(p);
     if (limdd_edge_is_zero(high)) return EVBDD_ZERO;
+    EVBDD_WGT r;
+    if (bqd_evm_get(m, p, y, &r)) return r;
     EVBDD_WGT v = EVBDD_ONE;
-    if (!bqd_sm_is_s(p)) {
-        v = eval_node(limdd_target(low), n, yy);
-        if (v == EVBDD_ZERO) return v;
+    if (!bqd_sm_is_s(p)) v = eval_node(limdd_target(low), n, yy, m);
+    if (v == EVBDD_ZERO) {
+        r = v;
+    } else {
+        const EVBDD_WGT b = eval_node(limdd_target(high), n, yy, m);
+        r = (b == EVBDD_ZERO) ? b : wgt_mul(scalar_of(high), wgt_mul(v, b));
     }
-    const EVBDD_WGT b = eval_node(limdd_target(high), n, yy);
-    if (b == EVBDD_ZERO) return b;
-    return wgt_mul(scalar_of(high), wgt_mul(v, b));
+    bqd_evm_put(m, p, y, r);
+    return r;
 }
 
 EVBDD_WGT
 bqd_sm_eval(BQD e, uint32_t n, uint64_t x)
 {
     if (limdd_edge_is_zero(e)) return EVBDD_ZERO;
-    const EVBDD_WGT v = eval_node(limdd_target(e), n, x);
+    bqd_eval_memo_t m;
+    bqd_evm_init(&m);
+    const EVBDD_WGT v = eval_node(limdd_target(e), n, x, &m);
+    bqd_evm_free(&m);
     return v == EVBDD_ZERO ? v : wgt_mul(scalar_of(e), v);
 }
 
