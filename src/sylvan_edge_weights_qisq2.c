@@ -574,6 +574,141 @@ inv_into(qisq2_t *r, const qisq2_t *y, qisq2_scratch_t *s)
     mpq_div(r->d, r->d, n);
 }
 
+/*
+ * Products and quotients over one common denominator.
+ *
+ * mul_into and inv_into work on the four components as separate rationals:
+ * sixteen products and twelve sums, each of which GMP reduces with a gcd of
+ * its own. Once weights grow to thousands of bits that is the run: GMP's gcd
+ * was 62% of an exact BQD run on clifford_T_circuit_20_700 and 90% of an EVDD
+ * run on synth_qft_n6_e3. Here the operands are lifted to four integers over
+ * one denominator, multiplied (or inverted) in integers, and only the result
+ * is reduced, four gcds in all. The value is the same, and so, since the
+ * reduced form is unique, are the stored rationals.
+ *
+ * For operands whose eight integers all fit a limb the separate rationals are
+ * cheaper (no lifting, gcds of single limbs), so those keep the old path.
+ */
+typedef struct { mpz_t a, b, c, d, den; } qisq2_cd_t;
+
+typedef struct {
+    bool        ready;
+    qisq2_cd_t  x, y, inv, r;
+    mpz_t       t, p, q, n;
+} qisq2_cd_scratch_t;
+
+static SYLVAN_TLS qisq2_cd_scratch_t qisq2_cd_scratch;
+
+static inline void
+cd_init(qisq2_cd_t *x)
+{
+    mpz_init(x->a); mpz_init(x->b); mpz_init(x->c); mpz_init(x->d); mpz_init(x->den);
+}
+
+static inline qisq2_cd_scratch_t *
+cd_scratch(void)
+{
+    qisq2_cd_scratch_t *s = &qisq2_cd_scratch;
+    if (!s->ready) {
+        cd_init(&s->x); cd_init(&s->y); cd_init(&s->inv); cd_init(&s->r);
+        mpz_init(s->t); mpz_init(s->p); mpz_init(s->q); mpz_init(s->n);
+        s->ready = true;
+    }
+    return s;
+}
+
+#ifndef QISQ2_CD_MIN_LIMBS
+#define QISQ2_CD_MIN_LIMBS 2
+#endif
+/* True iff every numerator and denominator of x has fewer than
+ * QISQ2_CD_MIN_LIMBS limbs. */
+static inline bool
+qisq2_small(const qisq2_t *x)
+{
+    return mpz_size(mpq_numref(x->a)) < QISQ2_CD_MIN_LIMBS && mpz_size(mpq_denref(x->a)) < QISQ2_CD_MIN_LIMBS &&
+           mpz_size(mpq_numref(x->b)) < QISQ2_CD_MIN_LIMBS && mpz_size(mpq_denref(x->b)) < QISQ2_CD_MIN_LIMBS &&
+           mpz_size(mpq_numref(x->c)) < QISQ2_CD_MIN_LIMBS && mpz_size(mpq_denref(x->c)) < QISQ2_CD_MIN_LIMBS &&
+           mpz_size(mpq_numref(x->d)) < QISQ2_CD_MIN_LIMBS && mpz_size(mpq_denref(x->d)) < QISQ2_CD_MIN_LIMBS;
+}
+
+/* r = x over the least common denominator of its components. */
+static void
+to_cd(qisq2_cd_t *r, const qisq2_t *x)
+{
+    mpz_lcm(r->den, mpq_denref(x->a), mpq_denref(x->b));
+    mpz_lcm(r->den, r->den, mpq_denref(x->c));
+    mpz_lcm(r->den, r->den, mpq_denref(x->d));
+    mpq_srcptr q[4] = { x->a, x->b, x->c, x->d };
+    mpz_ptr z[4] = { r->a, r->b, r->c, r->d };
+    for (int i = 0; i < 4; i++) {
+        if (mpz_cmp(mpq_denref(q[i]), r->den) == 0) {
+            mpz_set(z[i], mpq_numref(q[i]));
+        } else {
+            mpz_divexact(z[i], r->den, mpq_denref(q[i]));
+            mpz_mul(z[i], z[i], mpq_numref(q[i]));
+        }
+    }
+}
+
+/* x = r, each component reduced on its own: the stored form. */
+static void
+from_cd(qisq2_t *x, const qisq2_cd_t *r)
+{
+    mpq_ptr q[4] = { x->a, x->b, x->c, x->d };
+    mpz_srcptr z[4] = { r->a, r->b, r->c, r->d };
+    for (int i = 0; i < 4; i++) {
+        mpq_set_num(q[i], z[i]);
+        mpq_set_den(q[i], r->den);
+        mpq_canonicalize(q[i]);
+    }
+}
+
+/* r = x y in integers; r is neither x nor y. Both denominators are positive. */
+static void
+cd_mul(qisq2_cd_t *r, const qisq2_cd_t *x, const qisq2_cd_t *y, mpz_ptr t)
+{
+    /* a: xa ya + 2 xb yb - xc yc - 2 xd yd */
+    mpz_mul(r->a, x->a, y->a);
+    mpz_mul(t, x->b, y->b); mpz_addmul_ui(r->a, t, 2);
+    mpz_submul(r->a, x->c, y->c);
+    mpz_mul(t, x->d, y->d); mpz_submul_ui(r->a, t, 2);
+    /* b: xa yb + xb ya - xc yd - xd yc */
+    mpz_mul(r->b, x->a, y->b); mpz_addmul(r->b, x->b, y->a);
+    mpz_submul(r->b, x->c, y->d); mpz_submul(r->b, x->d, y->c);
+    /* c: xa yc + xc ya + 2 xb yd + 2 xd yb */
+    mpz_mul(r->c, x->a, y->c); mpz_addmul(r->c, x->c, y->a);
+    mpz_mul(t, x->b, y->d); mpz_addmul_ui(r->c, t, 2);
+    mpz_mul(t, x->d, y->b); mpz_addmul_ui(r->c, t, 2);
+    /* d: xa yd + xd ya + xb yc + xc yb */
+    mpz_mul(r->d, x->a, y->d); mpz_addmul(r->d, x->d, y->a);
+    mpz_addmul(r->d, x->b, y->c); mpz_addmul(r->d, x->c, y->b);
+    mpz_mul(r->den, x->den, y->den);
+}
+
+/*
+ * r = 1/y in integers, as inv_into: with y = (E + F sqrt2 + i(G + H sqrt2))/D,
+ * P = E^2 + 2F^2 + G^2 + 2H^2, Q = 2(EF + GH) and N = P^2 - 2Q^2 > 0,
+ *     1/y = D [(EP - 2FQ) + (FP - EQ) sqrt2 + i((2HQ - GP) + (GQ - HP) sqrt2)] / N.
+ */
+static void
+cd_inv(qisq2_cd_t *r, const qisq2_cd_t *y, qisq2_cd_scratch_t *s)
+{
+    mpz_ptr t = s->t, P = s->p, Q = s->q, N = s->n;
+    mpz_mul(P, y->a, y->a);
+    mpz_mul(t, y->b, y->b); mpz_addmul_ui(P, t, 2);
+    mpz_addmul(P, y->c, y->c);
+    mpz_mul(t, y->d, y->d); mpz_addmul_ui(P, t, 2);
+    mpz_mul(Q, y->a, y->b); mpz_addmul(Q, y->c, y->d); mpz_mul_2exp(Q, Q, 1);
+    mpz_mul(N, P, P);
+    mpz_mul(t, Q, Q); mpz_submul_ui(N, t, 2);
+    assert(mpz_sgn(N) > 0);
+    mpz_mul(r->a, y->a, P); mpz_mul(t, y->b, Q); mpz_submul_ui(r->a, t, 2); mpz_mul(r->a, r->a, y->den);
+    mpz_mul(r->b, y->b, P); mpz_submul(r->b, y->a, Q); mpz_mul(r->b, r->b, y->den);
+    mpz_mul(r->c, y->d, Q); mpz_mul_2exp(r->c, r->c, 1); mpz_submul(r->c, y->c, P); mpz_mul(r->c, r->c, y->den);
+    mpz_mul(r->d, y->c, Q); mpz_submul(r->d, y->d, P); mpz_mul(r->d, r->d, y->den);
+    mpz_set(r->den, N);
+}
+
 EVBDD_WGT
 qisq2_wgt_mul(EVBDD_WGT a, EVBDD_WGT b)
 {
@@ -584,7 +719,14 @@ qisq2_wgt_mul(EVBDD_WGT a, EVBDD_WGT b)
     int k;
     if ((k = unit_i(y)) != 0) { unit_into(&s->r, x, k == 1 ? 1 : 3); return intern_reduced(&s->r); }
     if ((k = unit_i(x)) != 0) { unit_into(&s->r, y, k == 1 ? 1 : 3); return intern_reduced(&s->r); }
-    mul_into(&s->r, x, y, s->t);
+    if (qisq2_small(x) && qisq2_small(y)) {
+        mul_into(&s->r, x, y, s->t);
+    } else {
+        qisq2_cd_scratch_t *c = cd_scratch();
+        to_cd(&c->x, x); to_cd(&c->y, y);
+        cd_mul(&c->r, &c->x, &c->y, c->t);
+        from_cd(&s->r, &c->r);
+    }
     return intern_reduced(&s->r);
 }
 
@@ -596,7 +738,14 @@ qisq2_wgt_inv(EVBDD_WGT b)
     if (b == EVBDD_MIN_ONE) return b;
     const int k = unit_i(y);
     if (k != 0) { unit_into(&s->r, stored(EVBDD_ONE), k == 1 ? 3 : 1); return intern_reduced(&s->r); }
-    inv_into(&s->r, y, s);
+    if (qisq2_small(y)) {
+        inv_into(&s->r, y, s);
+    } else {
+        qisq2_cd_scratch_t *c = cd_scratch();
+        to_cd(&c->y, y);
+        cd_inv(&c->inv, &c->y, c);
+        from_cd(&s->r, &c->inv);
+    }
     return intern_reduced(&s->r);
 }
 
@@ -609,8 +758,17 @@ qisq2_wgt_div(EVBDD_WGT a, EVBDD_WGT b)
     if (b == EVBDD_MIN_ONE) { unit_into(&s->r, x, 2); return intern_reduced(&s->r); }
     const int k = unit_i(y);       /* x / (+-i) = x * (-+i) */
     if (k != 0) { unit_into(&s->r, x, k == 1 ? 3 : 1); return intern_reduced(&s->r); }
-    inv_into(&s->inv, y, s);
-    mul_into(&s->r, x, &s->inv, s->t);
+    if (qisq2_small(x) && qisq2_small(y)) {
+        inv_into(&s->inv, y, s);
+        mul_into(&s->r, x, &s->inv, s->t);
+    } else {
+        /* x * (1/y) without reducing 1/y in between */
+        qisq2_cd_scratch_t *c = cd_scratch();
+        to_cd(&c->x, x); to_cd(&c->y, y);
+        cd_inv(&c->inv, &c->y, c);
+        cd_mul(&c->r, &c->x, &c->inv, c->t);
+        from_cd(&s->r, &c->r);
+    }
     return intern_reduced(&s->r);
 }
 
