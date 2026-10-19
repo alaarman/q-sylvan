@@ -1123,8 +1123,11 @@ test_lazy_scalar_key(void)
  * of 0 relative to the low one is dead: makeedge builds the dead-branch node,
  * whose zero edge points at the terminal. Before, a high branch 1e-16 times the
  * low one gave the zero map as the node's label, on an edge to a live node, and
- * the coset search asserted on it. The other way round the low branch stays,
- * and the swapped form, whose label would be merged with 0, is not used.
+ * the coset search asserted on it. The other way round, under low
+ * normalisation the low branch stays, and the swapped form, whose label would
+ * be merged with 0, is not used; under L2, where the ratio of the two scalars
+ * is the ratio of the branches' norms, the low branch is dead in turn
+ * (confined annihilation, see makeedge_canonical).
  */
 int
 test_negligible_branch(void)
@@ -1141,6 +1144,10 @@ test_negligible_branch(void)
         test_assert(e1 == limdd_makeedge(0, big_lo, limdd_zero_edge()));
         test_assert(limdd_node_high(limdd_target(e1)) == limdd_zero_edge());
         const LIMDD e2 = limdd_makeedge(0, lo, big_hi);
+        if (limdd_get_l2()) {
+            test_assert(e2 == limdd_makeedge(0, limdd_zero_edge(), big_hi));
+            continue;
+        }
         test_assert(!limdd_edge_is_zero(limdd_node_low(limdd_target(e2))));
         test_assert(!limdd_edge_is_zero(limdd_node_high(limdd_target(e2))));
     }

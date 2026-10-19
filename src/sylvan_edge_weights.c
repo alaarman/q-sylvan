@@ -228,6 +228,18 @@ sylvan_edge_weights_tolerance() // accuracy, eps
     return wgt_store_get_tol();
 }
 
+double
+sylvan_edge_weights_merge_tolerance(void)
+{
+    return wgt_type == WGT_COMPLEX_128 ? cmap_get_merge_tolerance() : 0.0;
+}
+
+bool
+sylvan_edge_weights_merge_is_relative(void)
+{
+    return wgt_type == WGT_COMPLEX_128 && cmap_get_tolerance_mode() == CMAP_TOL_HYBRID;
+}
+
 uint64_t
 sylvan_edge_weights_count_entries()
 {
@@ -306,6 +318,9 @@ wgt_table_gc_init_new(void (*init_wgt_table_entries)())
     }
     wgt_storage_new = wgt_storage;  // wgt_store_new now has initial values
     wgt_storage = wgt_store_tmp;    // wgt_storage now has the old values
+    /* The kept weights are copied one to one (wgt_table_gc_keep): two kept
+     * weights that the neighbour probe would merge are two LIMs' keys. */
+    if (wgt_backend == COMP_HASHMAP) cmap_set_neighbour_probe(wgt_storage_new, false);
 }
 
 void
@@ -314,6 +329,7 @@ wgt_table_gc_delete_old()
     // delete  old (full) table + set new as current
     wgt_store_free(wgt_storage);
     wgt_storage = wgt_storage_new;
+    if (wgt_backend == COMP_HASHMAP) cmap_set_neighbour_probe(wgt_storage, true);
 }
 
 EVBDD_WGT

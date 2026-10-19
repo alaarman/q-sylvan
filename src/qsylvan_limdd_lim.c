@@ -34,6 +34,9 @@ LIMDD_LIM LIMDD_LIM_ZERO     = 0;
 static llmsset_t pauli_table = NULL;
 static llmsset_t lim_table   = NULL;
 static size_t    lim_nqubits = 0;
+/* Set by limdd_lims_init, read-only after: see limdd_lim_float_tol. */
+static double    lim_float_tol = 0.0;
+static double    lim_float_tol_abs = 0.0;
 
 /*
  * The generation of the LIM indices: moved on whenever an index may come to
@@ -67,6 +70,18 @@ size_t
 limdd_lims_nqubits(void)
 {
     return lim_nqubits;
+}
+
+double
+limdd_lim_float_tol(void)
+{
+    return lim_float_tol;
+}
+
+double
+limdd_lim_float_tol_abs(void)
+{
+    return lim_float_tol_abs;
 }
 
 #if LIMDD_PAULI_WORDS > 1
@@ -446,6 +461,13 @@ limdd_lims_init(size_t nqubits, size_t pauli_tablesize, size_t lim_tablesize)
 
     atomic_fetch_add_explicit(&lim_generation, 1, memory_order_relaxed);
     lim_nqubits  = nqubits;
+    /* The merging rule is fixed before the weight table exists, which is
+     * before this, so it cannot change under the canonical form. */
+    lim_float_tol = LIMDD_FLOAT_DECIDE_FACTOR * sylvan_edge_weights_merge_tolerance();
+    if (lim_float_tol > LIMDD_FLOAT_DECIDE_MAX) lim_float_tol = LIMDD_FLOAT_DECIDE_MAX;
+    /* Under the absolute rule the residues are absolute too: a weight within
+     * --tol of 0 in a component is merged there, whatever its size. */
+    lim_float_tol_abs = sylvan_edge_weights_merge_is_relative() ? 0.0 : lim_float_tol;
     pauli_table  = llmsset_create(pauli_tablesize, pauli_tablesize);
 #if LIMDD_PAULI_WORDS > 1
     llmsset_set_custom(pauli_table, pauli_hash_cb, pauli_equals_cb,
@@ -505,6 +527,8 @@ limdd_lims_quit(void)
         pauli_table = NULL;
     }
     lim_nqubits = 0;
+    lim_float_tol = 0.0;
+    lim_float_tol_abs = 0.0;
     LIMDD_LIM_IDENTITY = 0;
     LIMDD_LIM_ZERO = 0;
 }

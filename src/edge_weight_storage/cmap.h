@@ -54,6 +54,20 @@ extern void cmap_set_absolute_tolerance(double tol);
 extern int cmap_get_tolerance_mode();
 
 /**
+\brief The tolerance two non-zero weights are merged by: the relative one under
+the hybrid rule, the absolute one under the absolute rule.
+*/
+extern double cmap_get_merge_tolerance();
+
+/**
+\brief Whether the hybrid rule's lookups also probe a weight's neighbouring
+cells (the default). The weight collector turns it off while it copies the
+kept weights into a new table, so that the copy maps them one to one: merging
+two kept weights there would give two LIMs one (Pauli, weight) key.
+*/
+extern void cmap_set_neighbour_probe(void *dbs, bool on);
+
+/**
 \brief Free the memory used by a dbs.
 */
 extern void cmap_free(void *dbs);

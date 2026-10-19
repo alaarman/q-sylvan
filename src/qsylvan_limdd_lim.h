@@ -126,6 +126,42 @@ void limdd_lims_quit(void);
 /** The qubit width passed to limdd_lims_init. */
 size_t limdd_lims_nqubits(void);
 
+/**
+ * The tolerance of the canonical form's decisions on float scalars:
+ * LIMDD_FLOAT_DECIDE_FACTOR times the one by which the weight table merges two
+ * non-zero float weights (sylvan_edge_weights_merge_tolerance, read when the
+ * tables were made), or 0 for exact weights.
+ *
+ * Every decision of the canonical form that reads a float scalar -- the sign
+ * rule, the order on labels, setting a component to 0, and under L2 whether
+ * one branch is negligible beside the other -- is taken to this tolerance,
+ * relative to the scalar's modulus. Rounding leaves residues such as 1e-13
+ * where the exact value is 0, and taken exactly, their sign would pick the
+ * canonical node, so that one class gets two nodes. What the table merges,
+ * the canonical form must not tell apart.
+ *
+ * Why a multiple: every merge moves a weight by up to the merging tolerance,
+ * and a label is the product of several merged weights, so its residues reach
+ * a few times that tolerance (-1 + 1.8e-10 i at a merging tolerance of 1e-10,
+ * on grover_iter_n8_it12 under L2). Decided at the merging tolerance itself,
+ * that label kept a level the exact diagram skips. 64 was the best of 1, 16
+ * and 64 on twelve circuits (17 Oct 2026), and of 1 to 256 on that one.
+ */
+#define LIMDD_FLOAT_DECIDE_FACTOR 64.0
+/* A cap, so that a coarse --rel-tol cannot have the canonical form set whole
+ * labels to 0 or drop every L2 branch: decisions never move a label by more
+ * than this, relative to its modulus. */
+#define LIMDD_FLOAT_DECIDE_MAX 1e-6
+double limdd_lim_float_tol(void);
+
+/**
+ * Under the absolute merging rule, the same tolerance as an absolute floor:
+ * a component is taken as 0 when it is within limdd_lim_float_tol() of 0
+ * relative to the modulus, or within this absolutely, whichever is larger.
+ * 0 under the hybrid rule and for exact weights.
+ */
+double limdd_lim_float_tol_abs(void);
+
 /** Number of distinct Pauli words interned so far. Needs a running Lace. */
 size_t limdd_pauli_table_count(void);
 

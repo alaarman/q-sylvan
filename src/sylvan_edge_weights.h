@@ -51,6 +51,17 @@ complex_t weight_as_complex(EVBDD_WGT a);
 extern double sylvan_edge_weights_tolerance();
 
 /**
+ * The tolerance by which the table merges two non-zero float weights: the
+ * relative one under the hybrid rule (--rel-tol), the absolute one under the
+ * absolute rule (--tol). 0 for exact weights, which are never merged.
+ */
+double sylvan_edge_weights_merge_tolerance(void);
+
+/** True iff float weights are merged by the hybrid (relative) rule; false for
+ *  the absolute rule and for exact weights. */
+bool sylvan_edge_weights_merge_is_relative(void);
+
+/**
  * Select the hybrid merging rule for the edge-weight table: a *relative*
  * threshold `rel` for non-zero weights and an *absolute* threshold `zero` for
  * collapsing a weight to 0.  Must be called BEFORE sylvan_init_evbdd(), since

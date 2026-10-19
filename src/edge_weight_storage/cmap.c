@@ -86,6 +86,7 @@ struct cmap_s {
     size_t              mask;
     size_t              threshold;
     int                 seen_0;
+    bool                neighbours;     /* hybrid rule: probe the near cells too */
     bucket_t  __attribute__(( __aligned__(32)))       *table;
     // Q: should this 32 change to 16 now that we use doubles instead of
     // long doubles for the real and imaginary components?
@@ -111,6 +112,12 @@ double
 cmap_get_tolerance()
 {
     return TOLERANCE;
+}
+
+double
+cmap_get_merge_tolerance()
+{
+    return TOL_MODE == CMAP_TOL_HYBRID ? (double) TOL_REL : (double) TOLERANCE;
 }
 
 static bool
@@ -143,69 +150,28 @@ complex_close(complex_t *in_table, const complex_t* to_insert)
     
 }
 
-int
-cmap_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
+/*
+ * One probe sequence from `hash`: find a value close to `v`, or, if `insert`,
+ * put `val` at the first empty bucket. Returns 1 if found, 0 if inserted, 2 if
+ * not found (an empty bucket ends the sequence, since nothing is ever removed
+ * between collections), and -1 if the table is full.
+ */
+static int
+probe_sequence(cmap_t *cmap, uint32_t hash, const bucket_t *val, const complex_t *v,
+               bool insert, uint64_t *ret)
 {
-    complex_t *v = (complex_t *) _v;
-    cmap_t *cmap = (cmap_t *) dbs;
-    bucket_t *val  = (bucket_t *) v;
-
-    // Round the value to compute the hash with, but store the actual value v
-    bucket_t round_v;
-    if (TOL_MODE == CMAP_TOL_HYBRID) {
-        // Log-polar quantisation: cells of *relative* width TOL_REL, so that
-        // relatively-close weights land in the same (or an adjacent) cell,
-        // exactly as absolutely-close weights do on the uniform grid below.
-        long double m = cmag(v);
-        if (m <= TOL_ZERO || TOL_REL == 0.0l) {
-            round_v.c.r = (m <= TOL_ZERO) ? 0.0 : v->r;
-            round_v.c.i = (m <= TOL_ZERO) ? 0.0 : v->i;
-        }
-        else {
-            long double kr = floorl(logl(m) / log1pl(TOL_REL) + 0.5l);
-            // angular buckets of width TOL_REL, wrapped so that -pi and +pi agree
-            long double nbuckets = floorl(2.0l * 3.14159265358979323846264338327950288l / TOL_REL) + 1.0l;
-            long double ka = floorl(atan2l((long double) v->i,
-                                           (long double) v->r) / TOL_REL + 0.5l);
-            ka = fmodl(ka, nbuckets);
-            if (ka < 0.0l) ka += nbuckets;
-            round_v.c.r = (fl_t) kr;
-            round_v.c.i = (fl_t) ka;
-        }
-    }
-    else if (TOLERANCE == 0.0) {
-        round_v.c.r = v->r;
-        round_v.c.i = v->i;
-    }
-    else {
-        round_v.c.r = flt_round(v->r / TOLERANCE) * TOLERANCE;
-        round_v.c.i = flt_round(v->i / TOLERANCE) * TOLERANCE;
-    }
-
-    // fix 0 possibly having a sign
-    if(round_v.c.r == 0.0) round_v.c.r = 0.0;
-    if(round_v.c.i == 0.0) round_v.c.i = 0.0;
-
-    //printf("(%.3f,%.3f) ",(float)round_v.c.r,(float)round_v.c.i);
-    //print_bucket_bits(&round_v); 
-    
-    uint32_t hash  = SuperFastHash(&round_v, sizeof(complex_t), 0);
-    uint32_t prime = odd_primes[hash & PRIME_MASK];
-
-    assert (val->d[0] != LOCK);
-    assert (val->d[0] != EMPTY);
-
-    // Insert/lookup `v`
+    const uint32_t prime = odd_primes[hash & PRIME_MASK];
     for (unsigned int c = 0; c < cmap->threshold; c++) {
         uint64_t            ref = hash & cmap->mask;
         uint64_t            line_end = (ref & CL_MASK) + CACHE_LINE_SIZE;
         for (size_t i = 0; i < CACHE_LINE_SIZE; i++) {
-            
+
             // 1. Get bucket
             bucket_t *bucket = &cmap->table[ref];
 
             // 2. If bucket empty, insert new value here
             if (bucket->d[0] == EMPTY) {
+                if (!insert) return 2;
                 if (cas(&bucket->d[0], EMPTY, LOCK)) {
                     *ret = ref;
                     // write backwards (overwrite bucket->d[0] last)
@@ -234,6 +200,96 @@ cmap_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
     }
     // amplitude table full, unable to add
     return -1;
+}
+
+static inline uint32_t
+hash_cell(fl_t r, fl_t i)
+{
+    bucket_t round_v;
+    round_v.c.r = r;
+    round_v.c.i = i;
+    // fix 0 possibly having a sign
+    if(round_v.c.r == 0.0) round_v.c.r = 0.0;
+    if(round_v.c.i == 0.0) round_v.c.i = 0.0;
+    return SuperFastHash(&round_v, sizeof(complex_t), 0);
+}
+
+int
+cmap_find_or_put(const void *dbs, const void *_v, uint64_t *ret)
+{
+    complex_t *v = (complex_t *) _v;
+    cmap_t *cmap = (cmap_t *) dbs;
+    bucket_t *val  = (bucket_t *) v;
+
+    assert (val->d[0] != LOCK);
+    assert (val->d[0] != EMPTY);
+
+    // Round the value to compute the hash with, but store the actual value v
+    if (TOL_MODE == CMAP_TOL_HYBRID) {
+        long double m = cmag(v);
+        if (m <= TOL_ZERO || TOL_REL == 0.0l) {
+            return probe_sequence(cmap, hash_cell((m <= TOL_ZERO) ? 0.0 : v->r,
+                                                  (m <= TOL_ZERO) ? 0.0 : v->i),
+                                  val, v, true, ret);
+        }
+        /*
+         * Log-polar quantisation, in cells of relative width 2*TOL_REL in
+         * magnitude and 2*TOL_REL in angle. Two weights within TOL_REL of
+         * each other are less than half a cell apart in both coordinates, so
+         * the other one lies in this weight's own cell or in the neighbour
+         * on the side of the nearer edge -- four cells in all. A lookup that
+         * misses its own cell asks those neighbours before inserting:
+         * without that, two weights that the rule calls equal but that fall
+         * either side of a cell edge were never merged, and a LIMDD's
+         * canonical form, which compares interned labels by index, kept two
+         * nodes for one class (grover_iter_n8_it12 under L2 at 1e-9: labels
+         * 3e-10 apart, interned twice).
+         *
+         * Two limits. The probes are not atomic with the insert, so two
+         * workers inserting close values in neighbouring cells at once can
+         * both insert; only a one-cell race is excluded, by the CAS. And the
+         * cell coordinates are computed in long double, which is double on
+         * arm64: past |log m| of about 45 their rounding is a sizeable part
+         * of a cell at 1e-14, and close pairs can again be missed.
+         */
+        const long double w = 2.0l * TOL_REL;
+        const long double fr = logl(m) / log1pl(w);
+        const long double kr = floorl(fr + 0.5l);
+        // angular cells of width w, wrapped so that -pi and +pi agree
+        const long double nbuckets = floorl(2.0l * 3.14159265358979323846264338327950288l / w) + 1.0l;
+        const long double fa = atan2l((long double) v->i, (long double) v->r) / w;
+        const long double ka = floorl(fa + 0.5l);
+        const long double dr = (fr >= kr) ? 1.0l : -1.0l;
+        const long double da = (fa >= ka) ? 1.0l : -1.0l;
+        long double cr[4] = { kr, kr + dr, kr,      kr + dr };
+        long double ca[4] = { ka, ka,      ka + da, ka + da };
+        uint32_t h[4];
+        for (int k = 0; k < 4; k++) {
+            long double a = fmodl(ca[k], nbuckets);
+            if (a < 0.0l) a += nbuckets;
+            h[k] = hash_cell((fl_t) cr[k], (fl_t) a);
+        }
+        if (!cmap->neighbours) return probe_sequence(cmap, h[0], val, v, true, ret);
+        for (int k = 0; k < 4; k++) {
+            const int r = probe_sequence(cmap, h[k], val, v, false, ret);
+            if (r != 2) return r;          // found, or full
+        }
+        return probe_sequence(cmap, h[0], val, v, true, ret);
+    }
+    else if (TOLERANCE == 0.0) {
+        return probe_sequence(cmap, hash_cell(v->r, v->i), val, v, true, ret);
+    }
+    else {
+        return probe_sequence(cmap, hash_cell(flt_round(v->r / TOLERANCE) * TOLERANCE,
+                                              flt_round(v->i / TOLERANCE) * TOLERANCE),
+                              val, v, true, ret);
+    }
+}
+
+void
+cmap_set_neighbour_probe(void *dbs, bool on)
+{
+    ((cmap_t *) dbs)->neighbours = on;
 }
 
 void *
@@ -280,6 +336,7 @@ cmap_create(uint64_t size, double tolerance)
     cmap->threshold = cmap->size / 100;
     cmap->threshold = min(cmap->threshold, 1ULL << 16);
     cmap->seen_0 = 0;
+    cmap->neighbours = true;
     return (void *) cmap;
 }
 

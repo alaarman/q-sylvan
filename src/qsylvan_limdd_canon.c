@@ -493,14 +493,14 @@ lim_with_pauli_at(LIMDD_LIM a, uint32_t var, bool x, bool z)
  * but the label.
  *
  * On float weights a component decides only when it differs by more than the
- * weight table's tolerance; within it the next one does. Rounding leaves
- * residues such as 1e-17 where the exact value is 0, and compared exactly
- * their sign would pick the candidate: one class then gets two canonical
- * nodes, and the weight table cannot merge the two labels either, since its
- * grid has a cell boundary at 0. Near such ties the order is not transitive,
- * but makeedge only ever compares its two candidates. Only the lazy form does
- * this (with exact weights it compares exactly too), so the eager form keeps
- * every choice it made before.
+ * weight table's merging tolerance (limdd_lim_float_tol), relative to the
+ * larger modulus; within it the next one does. Rounding leaves residues such
+ * as 1e-13 where the exact value is 0, and compared exactly their sign would
+ * pick the candidate: one class then gets two canonical nodes, and the weight
+ * table cannot merge the two labels either, since its grid has a cell
+ * boundary at 0. Near such ties the order is not transitive, but makeedge
+ * only ever compares its two candidates. With exact weights the tolerance is
+ * 0 and the comparison exact.
  */
 static int
 lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
@@ -516,12 +516,12 @@ lim_cmp(LIMDD_LIM a, LIMDD_LIM b)
      * stays a deterministic function of the value. */
     const complex_t ca = weight_as_complex(limdd_lim_weight(a));
     const complex_t cb = weight_as_complex(limdd_lim_weight(b));
-    double tol = 0.0;
-    if (limdd_class_on() && sylvan_get_edge_weight_type() == WGT_COMPLEX_128) {
-        /* relative to the larger modulus, see labels_match */
-        tol = sylvan_edge_weights_tolerance() * fmax(hypot((double)ca.r, (double)ca.i),
-                                                     hypot((double)cb.r, (double)cb.i));
-    }
+    /* 0 for exact weights, written out: their double image can overflow,
+     * and 0 * inf is not 0 */
+    const double ftol = limdd_lim_float_tol();
+    const double tol = ftol <= 0.0 ? 0.0
+        : fmax(ftol * fmax(hypot((double)ca.r, (double)ca.i), hypot((double)cb.r, (double)cb.i)),
+               limdd_lim_float_tol_abs());
     if (fabs((double)ca.r - (double)cb.r) > tol) return ca.r < cb.r ? -1 : 1;
     if (fabs((double)ca.i - (double)cb.i) > tol) return ca.i < cb.i ? -1 : 1;
     return 0;
@@ -589,20 +589,20 @@ intern(uint32_t var, LIMDD_TARG lo, LIMDD_LIM lab, LIMDD_TARG hi,
 }
 
 /**
- * In the lazy form on float weights, a canonical label with the components
- * that are within the weight tolerance of 0 (relative to its modulus) set to
- * +0: rounding leaves residues such as 1e-17 or -0 where the exact value is 0,
+ * On float weights, a canonical label with the components that are within the
+ * merging tolerance of 0 (limdd_lim_float_tol, relative to its modulus) set to
+ * +0: rounding leaves residues such as 1e-13 or -0 where the exact value is 0,
  * and the weight table, whose grid has a cell boundary at 0, would intern
  * them apart, so the canonical node of one class would come out twice. The
  * label moves by less than the tolerance, which is what the table merges by.
- * The eager form keeps its labels as they were.
  */
 static LIMDD_LIM
 lim_clean(LIMDD_LIM l)
 {
-    if (!limdd_class_on() || sylvan_get_edge_weight_type() != WGT_COMPLEX_128) return l;
+    const double ftol = limdd_lim_float_tol();
+    if (ftol <= 0.0) return l;
     const complex_t c = weight_as_complex(limdd_lim_weight(l));
-    const double tol = sylvan_edge_weights_tolerance() * hypot((double)c.r, (double)c.i);
+    const double tol = fmax(ftol * hypot((double)c.r, (double)c.i), limdd_lim_float_tol_abs());
     const bool zr = fabs((double)c.r) <= tol, zi = fabs((double)c.i) <= tol;
     if ((!zr || ((double)c.r == 0.0 && !signbit((double)c.r))) &&
         (!zi || ((double)c.i == 0.0 && !signbit((double)c.i)))) return l;
@@ -778,7 +778,8 @@ static bool
 labels_match(LIMDD_LIM x, LIMDD_LIM y)
 {
     if (x == y) return true;
-    if (sylvan_get_edge_weight_type() != WGT_COMPLEX_128) return false;
+    const double tol = limdd_lim_float_tol();
+    if (tol <= 0.0) return false;
     if (limdd_lim_pauli_ref(x) != limdd_lim_pauli_ref(y)) return false;
     const complex_t a = weight_as_complex(limdd_lim_weight(x));
     const complex_t b = weight_as_complex(limdd_lim_weight(y));
@@ -786,7 +787,7 @@ labels_match(LIMDD_LIM x, LIMDD_LIM y)
      * absolute tolerance would call any two small ones equal. */
     const double scale = fmax(hypot((double)a.r, (double)a.i), hypot((double)b.r, (double)b.i));
     return hypot((double)a.r - (double)b.r, (double)a.i - (double)b.i)
-           <= sylvan_edge_weights_tolerance() * scale;
+           <= fmax(tol * scale, limdd_lim_float_tol_abs());
 }
 
 /**
@@ -1008,6 +1009,27 @@ makeedge_canonical(uint32_t var, LIMDD low, LIMDD high)
      * and the coset search would be handed the zero map.
      */
     if (limdd_lim_is_zero(bp)) return makeedge_canonical(var, low, limdd_zero_edge());
+
+    /*
+     * CONFINED ANNIHILATION, under L2 on floats. Both children have norm 1
+     * there, and so does whatever a skipped level stands for, so |b| is the
+     * ratio of the two branches' norms. A branch below the merging tolerance
+     * of the other is what a cancellation leaves of a zero: merging moves
+     * every weight by up to that tolerance, so a sum that is 0 comes out at
+     * about that size, and kept, it gives the class a second node (on
+     * grover_iter_n8_it12 a low branch |0..0> at 1.4e-11 of the high one,
+     * which then never met its class again). Only the ratio is tested, never
+     * a weight on its own, so the tiny scalars a root legitimately carries are
+     * left alone. Under low normalisation the children are not unit vectors
+     * and the ratio says nothing about the norms, so it is not tested.
+     */
+    if (limdd_l2_on) {
+        const double eps = limdd_lim_float_tol();
+        const complex_t c = weight_as_complex(limdd_lim_weight(bp));
+        const double m = hypot((double)c.r, (double)c.i);
+        if (m <= eps) return makeedge_canonical(var, low, limdd_zero_edge());
+        if (m * eps >= 1.0) return makeedge_canonical(var, limdd_zero_edge(), high);
+    }
 
     if (!high_determinism) {
         /*

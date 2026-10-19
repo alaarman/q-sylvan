@@ -536,13 +536,23 @@ intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
 /**
  * True iff `w` is the sign the rule prefers: nonnegative imaginary part, and
  * among the two purely real options the nonnegative one.
+ *
+ * On float weights "purely real" is up to the merging tolerance, relative to
+ * the modulus (limdd_lim_float_tol): a real label computed along an irrational
+ * route carries an imaginary residue of either sign, 3e-13 on a label of 22
+ * under L2, and an absolute threshold let that residue pick the sign, and with
+ * it the node. Exact weights keep the absolute 1e-14 on their double image,
+ * which is a fixed function of the value and so canonical as it stands.
  */
 static bool
 sign_is_canonical(EVBDD_WGT w)
 {
     const complex_t c = weight_as_complex(w);
-    if (c.i > 1e-14) return true;
-    if (c.i < -1e-14) return false;
+    const double tol = limdd_lim_float_tol();
+    const double t = tol > 0.0 ? fmax(tol * hypot((double)c.r, (double)c.i), limdd_lim_float_tol_abs())
+                               : 1e-14;
+    if (c.i > t) return true;
+    if (c.i < -t) return false;
     return c.r >= 0.0;
 }
 
