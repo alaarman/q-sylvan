@@ -148,25 +148,33 @@ def main():
     ap.add_argument("--float", dest="float_arm", choices=("float_low", "float_l2"), default=FLOAT)
     ap.add_argument("--rule", choices=("amend", "section6"), default="amend")
     ap.add_argument("--tag", default="", help="file names float_TAG_vs_algebraic")
+    ap.add_argument("--reference", action="append", default=[],
+                    help="state-vector top-qubit probabilities (make_figures.py --reference)")
+    ap.add_argument("--no-tag-label", action="store_true",
+                    help="TAG in the file names only, not in the x label (the text says which normalisation)")
     a = ap.parse_args()
     FLOAT, mf.RULE = a.float_arm, a.rule
     mf.UNCHECKED = "grey"                     # as category() draws it, in the pooled panels too
     out, new = a.paths[-1], a.paths[:-1]
     for d in a.qasm: mf.count_qasm(d)
+    for f in a.reference: mf.read_reference(f)
     recs, rows, _ = mf.load(new, a.old, {FLOAT, EXACT})
+    mf.add_reference(rows)
     tag = f"float_{a.tag}_vs" if a.tag else "float_vs"
-    TAGLAB = f" ({a.tag})" if a.tag else ""
+    TAGLAB = f" ({a.tag})" if a.tag and not a.no_tag_label else ""
     fails = mf.failures(recs)
     for sub, fam in PANELS:
         os.makedirs(os.path.join(out, sub), exist_ok=True)
         for fname, field, lab in QUANT:
             panel(rows, fails, fam, field, lab, os.path.join(out, sub, fname.replace("float_vs", tag)))
     mf.OUT = out                                # the pooled panels, in the format of Figure 9
+    # the families of the per-family panels and the new families where their runs are given
+    POOLED = ({fam for _, fam in PANELS} | set(mf.NEW_FAMILIES)) & set(mf.MARK)
     pooled = []
     for fname, field, lab in QUANT:
         pooled.append("pooled_" + fname.replace("float_vs", tag))
         mf.scatter(rows, FLOAT, EXACT, field, f"{lab} float{TAGLAB}", f"{lab} algebraic", pooled[-1],
-                   judge=FLOAT, fails=fails, fams={fam for _, fam in PANELS}, split=True)
+                   judge=FLOAT, fails=fails, fams=POOLED, split=True)
     mf.split_legend("pooled_legend_" + "float_vs_algebraic_nw.pdf".replace("float_vs", tag), pooled)
 
 if __name__ == "__main__":

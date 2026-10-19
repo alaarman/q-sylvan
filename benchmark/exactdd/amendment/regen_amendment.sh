@@ -2,7 +2,12 @@
 # Regenerate every figure and number of experiments_limdd_amendment.tex
 # (revision of 2026-10-01) from the stored runs. No simulator runs.
 #   ./regen_amendment.sh ROOT OUTDIR
-#   ROOT    the data directory, laid out as README.md describes
+#   ROOT    the data directory, laid out as README.md describes. The steps of
+#           the 2026-10-01 revision need its older runs (ldd/out, amend/out_rnd,
+#           amend/out, the September records, ...); where ROOT lacks them (a
+#           repeat of the clean sweep by sweep.py), only the figures the paper
+#           typesets now are made, from amend/out_clean (OUTDIR/paper/, below).
+#           make_paper_figures.sh runs this script for those figures only.
 #   OUTDIR  where the PDFs, merged_records.csv and one .out per script go
 # Python from $PY, else python3; it needs matplotlib (README.md has the
 # versions that wrote the paper's PDFs):
@@ -29,7 +34,9 @@
 # alternative judges a float run as Figures 6 to 8 do (make_figures.judge): a
 # run whose measurement cannot be checked is grey. The paper's own figures
 # keep the 2026-10-01 revision's rule (--unchecked right). No rerun is read by
-# any other step.
+# any other step. When ROOT has amend/out_clean (the clean sweep of 6-7
+# October, all six arms on one binary), the figures the paper typesets are also
+# made from it alone, into OUTDIR/paper/ (see that step below).
 set -u
 [ $# -eq 2 ] || { echo "usage: $0 ROOT OUTDIR" >&2; exit 2; }
 ROOT=$1; O=$2
@@ -37,18 +44,21 @@ PY=${PY:-python3}
 export PYTHONDONTWRITEBYTECODE=1           # no __pycache__ in the source tree
 S=$(cd "$(dirname "$0")" && pwd)
 V=$S/checks
-miss=0
-for d in ldd/out ldd/qasm amend/out_rnd amend/out amend/qasm amend/trace amend/span/out2 \
-         exactdd/final.log gw/out gw/out2; do
-  [ -e "$ROOT/$d" ] || { echo "missing $ROOT/$d" >&2; miss=1; }
+for d in ldd/qasm amend/qasm; do
+  [ -e "$ROOT/$d" ] || { echo "missing $ROOT/$d" >&2; exit 1; }
 done
-[ $miss -eq 0 ] || exit 1
+REV=1                                      # the 2026-10-01 revision's runs are all there
+for d in ldd/out amend/out_rnd amend/out amend/trace amend/span/out2 exactdd/final.log gw/out gw/out2; do
+  [ -e "$ROOT/$d" ] || { [ $REV -eq 1 ] && echo "no $ROOT/$d: the 2026-10-01 revision's steps are skipped" >&2; REV=0; }
+done
+[ $REV -eq 1 ] || [ -d "$ROOT/amend/out_clean" ] || { echo "nothing to do: $ROOT has neither the revision's runs nor amend/out_clean" >&2; exit 1; }
 OLD=(--old "$ROOT/exactdd/final.log" --old "$ROOT/gw/out" --old "$ROOT/gw/out2")
 Q=(--qasm "$ROOT/ldd/qasm" --qasm "$ROOT/amend/qasm")
 NEW=("$ROOT/ldd/out" "$ROOT/amend/out_rnd" "$ROOT/amend/out")
 mkdir -p "$O"
 fail=()
 step() { local log=$1; shift; "$@" > "$O/$log" 2>&1 || fail+=("$log"); }
+if [ $REV -eq 1 ]; then
 step make_figures.out      "$PY" "$S/make_figures.py" -v --unchecked right "${OLD[@]}" "${Q[@]}" --dump "$O/merged_records.csv" "${NEW[@]}" "$O"
 step amend_numbers.out     "$PY" "$S/amend_numbers.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
 step amend_stats.out       "$PY" "$S/amend_stats.py" "${OLD[@]}" "${Q[@]}" "${NEW[@]}"
@@ -74,6 +84,50 @@ if [ -d "$ROOT/amend/out_l2" ] && [ -d "$ROOT/amend/out_low" ]; then
     step tcount_low.out cp "$O/width_vs_tcount.pdf" "$O/bits_vs_tcount.pdf" "$O/limdd2_low/"
   fi
 fi
+fi   # REV
+# The clean sweep of 6-7 October (sweep.py; sweep/clean_sweep.py of the data): all six
+# arms of run_arm.sh on the 91 circuits of ldd/qasm and amend/qasm, on one
+# binary, at most six runs at a time, memory-aware, with nothing else on the
+# machine. When ROOT has amend/out_clean, the figures the paper typesets are
+# made from it alone (no September record, no earlier rerun) into
+# OUTDIR/paper/, in the paper's layout: final_plots_mm-(in)correct2/ (Figure 6,
+# low and L2 floats, pooled and per family), limdd2/ and limdd2_low/ (the two
+# LIMDD figures, L2 and low floats), with no normalisation in the axis labels
+# (the paper's text says which one). The T-count figure comes from
+# amend/trace_clean when ROOT has it (the ten traces rerun on that binary),
+# else from amend/trace. (amend/out_paper6, the first attempt of 6 October, has
+# the same node counts but runtimes that the load on the machine distorted; it
+# is not read.)
+if [ -d "$ROOT/amend/out_clean" ]; then
+  P=$O/paper
+  PN=("$ROOT/amend/out_clean")
+  # the new families (mirror, IQP, Grover with many iterations, quantum walks,
+  # synthesised circuits), when ROOT has pilot/ (the data's pilot/:
+  # qasm/<family>/ and out_clean/, the same six arms in the same sweep); they
+  # are drawn where AMEND_FAMILIES lets them (mirror,iqp,groveriter,qwalk,synth)
+  if [ -d "$ROOT/pilot/out_clean" ]; then
+    PN+=("$ROOT/pilot/out_clean")
+    for d in "$ROOT"/pilot/qasm/*/; do Q+=(--qasm "$d"); done
+    # state-vector probabilities where no exact run has one (reference_probs.py)
+    [ -f "$ROOT/pilot/reference_probs.csv" ] && Q+=(--reference "$ROOT/pilot/reference_probs.csv")
+  fi
+  step paper_section6_l2.out  "$PY" "$S/make_section6_figures.py" --float float_l2 --tag l2 --no-tag-label \
+       "${Q[@]}" "${PN[@]}" "$P/final_plots_mm-(in)correct2"
+  step paper_section6_low.out "$PY" "$S/make_section6_figures.py" --float float_low --tag low --no-tag-label \
+       "${Q[@]}" "${PN[@]}" "$P/final_plots_mm-(in)correct2"
+  step paper_limdd2.out "$PY" "$S/make_figures.py" -v --no-norm-label --pair-wrong-colour black --float-evdd float_l2 --float-limdd limdd_float_l2 \
+       "${Q[@]}" --dump "$P/merged_records.csv" "${PN[@]}" "$P/limdd2"
+  step paper_limdd2_low.out "$PY" "$S/make_figures.py" -v --no-norm-label --pair-wrong-colour black --float-evdd float_low \
+       --float-limdd limdd_float "${Q[@]}" "${PN[@]}" "$P/limdd2_low"
+  TR=$ROOT/amend/trace; [ -d "$ROOT/amend/trace_clean" ] && TR=$ROOT/amend/trace_clean
+  step paper_theorem.out "$PY" "$S/make_theorem_figs.py" "$TR" "$P/tcount"
+  step paper_tcount.out cp "$P/tcount/width_vs_tcount.pdf" "$P/tcount/bits_vs_tcount.pdf" "$P/limdd2/"
+  step paper_tcount_low.out cp "$P/tcount/width_vs_tcount.pdf" "$P/tcount/bits_vs_tcount.pdf" "$P/limdd2_low/"
+  # the per-family counts behind the text (wrong runs, faster runs, runs that
+  # did not finish), low and L2
+  step paper_family_stats.out "$PY" "$V/family_stats.py" "$ROOT"
+fi
+if [ $REV -eq 1 ]; then
 # checks behind the 2026-10-01 revision
 step evdd_float_versions.out "$PY" "$V/evdd_float_versions.py" "$ROOT"
 step wide_old_new.out        "$PY" "$V/wide_old_new.py" "$ROOT"
@@ -94,5 +148,6 @@ for p in bits_vs_tcount \
   PDFS+=("$O/$p.pdf")
 done
 step count_markers.out       "$PY" "$V/count_markers.py" "${PDFS[@]}"
+fi   # REV
 ls "$O"
 if [ ${#fail[@]} -gt 0 ]; then echo "FAILED (see these files in $O): ${fail[*]}" >&2; exit 1; fi

@@ -6,12 +6,16 @@ paper, as revised on 2026-10-01. That section was written by Claude (AI) and
 says so in its header; so were these scripts. Neither has been checked by an
 author yet.
 
-**The run data of the 2026-10-01 revision is not in this repository.** It is
-kept by the authors and is available from them on request. Every script that
-reads it takes the root of a copy of it, called ROOT below, as an argument.
-Only `run_arm.sh` and `run_trace.sh` run the simulator, and they are what made
-that data. Regenerating the figures and numbers from it takes a few seconds and
-no simulator.
+**To repeat the experiments and remake the paper's figures from a clone of
+this repository, follow `REPRODUCE.md`.**
+
+**The run data is not in this repository.** It is kept with the paper's
+sources, as `reproducibility/exactdd-data-2026-10.tar.xz`, and is available
+from the authors on request. Unpacked, it is the root that every script here
+takes as an argument, called ROOT below; `DATA_README.md` in it lists what it
+holds. Only `run_arm.sh` and `run_trace.sh` run the simulator (`sweep.py`
+schedules them), and they are what made that data. Regenerating the figures and
+numbers from it takes a minute and no simulator.
 
 | file | what it is |
 |---|---|
@@ -22,6 +26,11 @@ no simulator.
 | `checks/` | five checks behind particular sentences and the open items |
 | `run_arm.sh` | one run of one arm on one circuit (the LIMDD sweep) |
 | `run_trace.sh` | one per-gate trace (the T-count figures) |
+| `sweep.py` | every run of the clean sweep, scheduled for clean timings (`REPRODUCE.md`, section 5) |
+| `make_paper_figures.sh` | the figures the paper typesets, in its layout, compared with a checkout of it |
+| `reference_probs.py` | state-vector probabilities where no exact run has one |
+| `checks/family_stats.py`, `checks/compare_sweeps.py`, `checks/pdf_same.py` | the counts of the text; one sweep against another; one PDF against another |
+| `REPRODUCE.md`, `requirements-*.txt` | how to repeat everything; the Python environments |
 
 ## What each script makes
 
@@ -79,6 +88,8 @@ by record, as listed in `regen_amendment.sh`.
 | `amend/out_l2/`, `amend/out_low/` (optional) | the float EVDD rerun of 4 October on the 72 circuits of Figures 6 to 10 (49 random, 12 Grover, 11 W state): `float_l2` ('L2' normalisation, Section 6's float) and `float_low`, both with `-m`, on the binary of the LIMDD runs. Both also ran on the 7 hidden-shift circuits, which Figures 9 and 10 draw when `AMEND_FAMILIES` is unset | `run_arm.sh` |
 | `amend/out_limdd_l2/` (optional) | `limdd_float_l2` on the same 72 circuits and the 7 hidden-shift ones: the float LIMDD with every node read at norm 1 (`-s l2`, `limdd_set_l2`), on a build of the working tree on top of `2d070f4` that is kept with the data, with its patch (which differs from `fa20a97` in comments only) | `run_arm.sh` |
 | `amend/out_limdd_low/` (optional) | `limdd_float` (low) on the same 79 circuits, on the build of `amend/out_limdd_l2`, so that the LIMDD's two options differ only in `-s` | `run_arm.sh` |
+| `amend/out_clean/` (optional) | the clean sweep of 6-7 October: all six arms on the 91 circuits of `ldd/qasm` and `amend/qasm`, on one build of the working tree of 6 October (`bin-lazy6`, committed as the tag `exactdd-clean-sweep-2026-10`; its diff is `source/lazy6.patch` of the data), at most six runs at a time, memory-aware, with nothing else on the machine. `regen_amendment.sh` makes the figures the paper typesets from it alone | `run_arm.sh`, driven by `sweep/clean_sweep.py` of the data (`sweep.py` here is the same driver with its paths made arguments), which also writes a per-run audit (`sweep/clean_audit.csv`: CPU time against wall time, footprint, swapouts) |
+| `amend/trace_clean/` (optional) | the ten traces of `amend/trace/` rerun on that build | `run_trace.sh` |
 
 Only the EVDD arms (`qisq2_low`, `float_low`) are taken from the September
 records; their LIMDD records there are superseded by the October runs, and
@@ -164,6 +175,17 @@ float run, so both folders get its two PDFs unchanged and either folder can
 stand in for the paper's `figures/limdd/`. The paper's `figures/limdd2/` and
 `figures/limdd2_low/` are these two folders without the
 `evdd_float_vs_algebraic_*` panels, which the paper does not show.
+
+Since 7 October the paper's figures come from the clean sweep instead. When
+ROOT has `amend/out_clean`, `regen_amendment.sh` makes, from that folder alone,
+`OUTDIR/paper/final_plots_mm-(in)correct2/` (Figure 6, pooled and per family,
+low and L2 floats), `OUTDIR/paper/limdd2/` and `OUTDIR/paper/limdd2_low/`, with
+the T-count figure from `amend/trace_clean` (else `amend/trace`) in both. The
+paper's copies are made with `AMEND_FAMILIES=random,grover,wstate`, the
+families the text discusses. A first attempt of 6 October (`amend/out_paper6`)
+has the same node counts, but its runtimes were distorted by other load on the
+machine (up to 12 times slower than earlier runs with the same node counts),
+so no step reads it.
 
 Every one of these alternatives, and Figures 6 to 8 in all their versions,
 judge a float run by one function, `make_figures.judge`: wrong when its

@@ -81,6 +81,8 @@ UNCHECKED = "right"                            # or "grey" (--unchecked; its def
                                                # numbers scripts keep the revision's "right"
 GREY = "0.55"                                  # a float run that was not judged
 NORMCOL = "tab:purple"                         # a float run whose norm alone is wrong (split panels)
+PAIRCOL = "tab:red"                            # a wrong float run in a panel of two float runs, the
+                                               # float LIMDD of LIMDD against EVDD (--pair-wrong-colour)
 UNJUDGED = set()                               # panels with a run that was not judged
 DRAWN = {}                                     # panel -> (families, verdicts) drawn, for split_legend
 WIDE = 64                                      # one 64-bit Pauli word
@@ -93,10 +95,17 @@ FAMILY = [
     ("grover",  "s", "Grover"),
     ("wstate",  "^", "W state"),
     ("hshift",  "D", "hidden shift"),
+    # the new families of 6-7 October (pilot/qasm/<family>/ of the data)
+    ("mirror",     "v", "mirror"),
+    ("iqp",        "p", "IQP"),
+    ("groveriter", "h", "Grover, many iterations"),
+    ("qwalk",      "X", "quantum walk"),
+    ("synth",      "*", "synthesised (SK, gridsynth)"),
 ]
+NEW_FAMILIES = ("mirror", "iqp", "groveriter", "qwalk", "synth")
 # AMEND_FAMILIES=random,grover,wstate keeps only those families, in the figures,
 # the legend and every number the other scripts take from family_of. Unset, all
-# four are kept.
+# are kept (the new families only appear where their runs are given).
 ONLY = [f for f in os.environ.get("AMEND_FAMILIES", "").split(",") if f]
 if ONLY:
     unknown = sorted(set(ONLY) - {k for k, _, _ in FAMILY})
@@ -106,9 +115,14 @@ MARK = {k: m for k, m, _ in FAMILY}
 
 def family_of(name):
     if name.startswith("clifford_T_circuit"): fam = "random"
+    elif name.startswith("grover_iter"):      fam = "groveriter"
     elif name.startswith("grover"):           fam = "grover"
     elif name.startswith(("w-state", "wclif")): fam = "wstate"
     elif name.startswith("hidden-shift"):     fam = "hshift"
+    elif name.startswith("mirror"):           fam = "mirror"
+    elif name.startswith("iqp"):              fam = "iqp"
+    elif name.startswith("qwalk"):            fam = "qwalk"
+    elif name.startswith("synth_"):           fam = "synth"
     else: return None                          # adder, ising: text only
     return fam if fam in MARK else None
 
@@ -239,12 +253,27 @@ def norm_of(d):
     try: return float(d.get("norm"))
     except (TypeError, ValueError): return None
 
+REFERENCE = {}                                 # circuit -> state-vector p0 (--reference)
+
+def add_reference(rows):
+    """A state-vector probability (reference_probs.py) as the pseudo-arm
+    'statevector' of the circuits that have one: judge_section6 takes it only
+    when no exact arm has a probability."""
+    for c, r in rows.items():
+        if c in REFERENCE: r["statevector"] = {"first_qubit_measurement_prob": REFERENCE[c]}
+
+def read_reference(path):
+    import csv
+    for row in csv.DictReader(open(path)): REFERENCE[row["circuit"]] = float(row["p0"])
+
 def judge_section6(r, judge, ref):
-    """Section 6's rule, (bad, how): bad is None when the run is not judged."""
+    """Section 6's rule, (bad, how): bad is None when the run is not judged.
+    The exact probability comes from the panel's exact arm, else the other
+    exact arm, else a state-vector reference (--reference)."""
     pf = p(r[judge])
     if pf is not None and (pf >= SENTINEL or pf != pf): return True, "sentinel"
     if pf is None: return None, "no-p"
-    for a in (ref,) + tuple(e for e in EXACT if e != ref):
+    for a in (ref,) + tuple(e for e in EXACT if e != ref) + ("statevector",):
         if a in r and p(r[a]) is not None:
             pa = p(r[a])
             return abs(pf - pa) > 0.05 * max(abs(pa), 1e-12), ("p" if a == ref else "p:" + a)
@@ -302,7 +331,7 @@ def failures(recs):
             if rec["status"] != "OK" and rec["status"] not in NOT_RUN
             and family_of(k[0]) is not None}
 
-def colours(y, x):
+def colours(y, x, split=False):
     """y, x: 'wrong', 'right', 'unjudged', or None where the panel judges no
     such float run; a split panel's y can also be 'norm' (only the norm is
     wrong) or 'failed' (the float run did not finish). Fill: the y arm's float
@@ -311,7 +340,7 @@ def colours(y, x):
     run, where the panel judges one (the lower row), orange when wrong, grey
     when not judged; otherwise the edge goes with the fill, and is grey for a
     float run that did not finish."""
-    face = {"wrong": "tab:red", "norm": NORMCOL, "unjudged": GREY}.get(y, "none")
+    face = {"wrong": "tab:red" if split else PAIRCOL, "norm": NORMCOL, "unjudged": GREY}.get(y, "none")
     if x == "wrong": edge = "tab:orange"
     elif x == "unjudged": edge = GREY
     elif y in ("wrong", "norm"): edge = face
@@ -391,7 +420,7 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         if xbad is None: detail.append(f"{short(circ)}:x:unjudged"); nj["x"] += 1
         pf = perfam.setdefault(r["_fam"], [0, 0]); pf[0] += 1; pf[1] += bool(bad)
         if bad is None or xbad is None: UNJUDGED.add(fname)
-        face, edge = colours(yv, xv)
+        face, edge = colours(yv, xv, split)
         drawn = DRAWN.setdefault(fname, (set(), set()))
         drawn[0].add(r["_fam"]); drawn[1].add(yv or "right")
         pts.setdefault((r["_fam"], face, edge), ([], []))
@@ -429,7 +458,7 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
     fig.tight_layout(pad=0.25)
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
     n = sum(len(v[0]) for v in pts.values())
-    nb = sum(len(v[0]) for k, v in pts.items() if k[1] == "tab:red")
+    nb = sum(len(v[0]) for k, v in pts.items() if k[1] == ("tab:red" if split else PAIRCOL))
     nn = sum(len(v[0]) for k, v in pts.items() if k[1] == NORMCOL)
     nfl = sum(len(v[0]) for k, v in pts.items() if k[1] == "none" and k[2] == GREY)
     nxb = sum(len(v[0]) for k, v in pts.items() if k[2] == "tab:orange")
@@ -456,7 +485,7 @@ def legend(fname, grey=False):
             else "float EVDD wrong (lower row)")
     hs += [plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:blue",
                       mew=0.9, ms=5, label="float correct" if both else "measurement correct"),
-           plt.Line2D([], [], ls="", marker="o", mfc="tab:red", mec="tab:red",
+           plt.Line2D([], [], ls="", marker="o", mfc=PAIRCOL, mec=PAIRCOL,
                       ms=5, label="float (LIMDD) wrong" if both else "float (LIMDD) measurement wrong"),
            plt.Line2D([], [], ls="", marker="o", mfc="none", mec="tab:orange",
                       mew=0.9, ms=5, label=xlab)]
@@ -556,21 +585,33 @@ def main():
                     help="a float run with norm 1 and no exact probability to compare with: "
                          "drawn grey, as Figures 6 to 8 draw it, or counted as correct "
                          "(the 2026-10-01 revision)")
+    ap.add_argument("--reference", action="append", default=[],
+                    help="CSV of state-vector top-qubit probabilities (reference_probs.py), used where "
+                         "no exact run has one")
+    ap.add_argument("--pair-wrong-colour", default="tab:red",
+                    help="fill of a wrong float LIMDD run in the LIMDD-against-EVDD panels, so that red "
+                         "can keep one meaning (measurement wrong) in the float-against-algebraic panels")
+    ap.add_argument("--no-norm-label", action="store_true",
+                    help="no '(low)' or '(L2)' in the axis labels (the text says which normalisation)")
     ap.add_argument("--low-label", action="store_true",
                     help="'(low)' after a low float arm in the axis labels, as '(L2)' after an L2 one")
     a = ap.parse_args()
-    RULE, UNCHECKED = a.rule, a.unchecked
+    global PAIRCOL
+    RULE, UNCHECKED, PAIRCOL = a.rule, a.unchecked, a.pair_wrong_colour
     FE, FL = a.float_evdd, a.float_limdd
     low = " (low)" if a.low_label else ""     # without it the labels stay as the paper has them
     fl = " (L2)" if FE == "float_l2" else low
     ll = " (L2)" if FL == "limdd_float_l2" else low
+    if a.no_norm_label: fl = ll = ""
     if len(a.paths) < 1: ap.error("need OUTDIR")
     OUT, new = a.paths[-1], a.paths[:-1]
     VERBOSE = a.verbose
     old_arms = set(ARMS) if a.old_arms == "all" else set(a.old_arms.split(","))
     for d in a.qasm: count_qasm(d)
     os.makedirs(OUT, exist_ok=True)
+    for f in a.reference: read_reference(f)
     recs, rows, dropped = load(new, a.old, old_arms)
+    add_reference(rows)
     provenance(recs, dropped)
     exact_agreement(rows)
     fams = {}

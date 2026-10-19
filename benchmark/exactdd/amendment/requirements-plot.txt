@@ -1,0 +1,15 @@
+# The plotting Python of the exact-DD paper's Figures 6 and 7 (make_figures.py,
+# make_section6_figures.py and the checks): CPython 3.11 with exactly these.
+# Other versions plot the same data, but the PDFs are not byte-identical.
+#   python3.11 -m venv venv-plot && venv-plot/bin/pip install -r requirements-plot.txt
+matplotlib==3.7.1
+numpy==1.26.4
+contourpy==1.0.7
+cycler==0.11.0
+fonttools==4.39.3
+kiwisolver==1.4.4
+packaging==25.0
+Pillow==9.4.0
+pyparsing==3.0.9
+python-dateutil==2.8.2
+six==1.17.0

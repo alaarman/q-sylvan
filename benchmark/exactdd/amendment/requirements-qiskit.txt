@@ -1,0 +1,41 @@
+# The Python of the circuit generators (gen_grover.py, gen_synth.py, gen_new_families.sh, ...)
+# and reference_probs.py: CPython 3.11 with exactly these (pip freeze of the environment used).
+#   python3.11 -m venv venv-qiskit && venv-qiskit/bin/pip install -r requirements-qiskit.txt
+cffi==2.1.1
+clarabel==0.11.1
+cloudpickle==3.1.2
+contourpy==1.3.3
+cvxpy==1.9.3
+cycler==0.12.1
+dill==0.4.1
+fonttools==4.66.1
+highspy==1.15.1
+iniconfig==2.3.0
+Jinja2==3.1.6
+joblib==1.6.0
+kiwisolver==1.5.1
+llvmlite==0.50.0
+MarkupSafe==3.0.4
+matplotlib==3.11.2
+mpmath==1.4.1
+numba==0.68.0
+numpy==2.4.6
+osqp==1.1.3
+packaging==26.3
+pillow==12.3.0
+pluggy==1.6.0
+pycparser==3.0
+Pygments==2.21.0
+pygridsynth==2.0.0
+pyparsing==3.3.3
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+qdldl==0.1.9.post1
+qiskit==2.5.2
+rustworkx==0.18.1
+scipy==1.17.1
+scs==3.3.1
+six==1.17.0
+sparsediffpy==0.6.1
+stevedore==5.9.1
+typing_extensions==4.16.0
