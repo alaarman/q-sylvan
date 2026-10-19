@@ -339,12 +339,31 @@ wgt_table_gc_keep(EVBDD_WGT a)
 /********************<For caching arithmetic operations>***********************/
 
 static bool CACHE_WGT_OPS = true;
-static bool CACHE_INV_OPS = true;
+
+/*
+ * Inverse caching: with a*b = c, also cache c/a = b and c/b = a, and with
+ * a/b = c also b*c = a. For exact weights those are facts. For floats they are
+ * not: c was merged with a nearby weight, so c/b computed again would round to
+ * something else, and the entry hands back a value that recomputing would not.
+ * Whether a later division finds the entry depends on where the cache put it,
+ * which follows the operands' table indices -- so float results changed with
+ * the weight table's size (clifford_T_circuit_20_700, float LIMDD, absolute
+ * rule: right at 2^22 to 2^24 without these entries; norm 0.56 and twelve
+ * times the nodes at 2^26 with them). Unless set explicitly, it is on for
+ * exact weights only.
+ */
+static int CACHE_INV_OPS = -1;      /* -1: exact weights only, 0: off, 1: on */
 
 void
 wgt_set_inverse_chaching(bool on)
 {
-    CACHE_INV_OPS = on;
+    CACHE_INV_OPS = on ? 1 : 0;
+}
+
+bool
+wgt_get_inverse_caching(void)
+{
+    return CACHE_INV_OPS < 0 ? wgt_type == WGT_QISQ2 : CACHE_INV_OPS != 0;
 }
 
 static void
@@ -401,7 +420,7 @@ cache_put_mul(EVBDD_WGT a, EVBDD_WGT b, EVBDD_WGT res)
     if (cache_put3(CACHE_WGT_MUL, a, b, sylvan_false, res)) {
         sylvan_stats_count(WGT_MUL_CACHEDPUT);
     }
-    if (CACHE_INV_OPS) {
+    if (wgt_get_inverse_caching()) {
         // put inverse as well (empirically seems not so beneficial)
         if (cache_put3(CACHE_WGT_DIV, res, b, sylvan_false, a)) {
             sylvan_stats_count(WGT_DIV_CACHEDPUT);
@@ -429,7 +448,7 @@ cache_put_div(EVBDD_WGT a, EVBDD_WGT b, EVBDD_WGT res)
     if (cache_put3(CACHE_WGT_DIV, a, b, sylvan_false, res)) {
         sylvan_stats_count(WGT_DIV_CACHEDPUT);
     }
-    if (CACHE_INV_OPS) {
+    if (wgt_get_inverse_caching()) {
         // put inverse as well (empirically seems beneficial)
         order_inputs(&b, &res);
         if (cache_put3(CACHE_WGT_MUL, b, res, sylvan_false, a)) {

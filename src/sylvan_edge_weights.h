@@ -160,7 +160,12 @@ extern weight_fprint_f 		weight_fprint;
 
 /********************<For caching arithmetic operations>***********************/
 
+/** Force inverse caching on or off. Without a call it is on for exact
+ *  weights only; see sylvan_edge_weights.c. */
 void wgt_set_inverse_chaching(bool on);
+
+/** Whether inverse entries are cached, as now in effect. */
+bool wgt_get_inverse_caching(void);
 
 /*******************</For caching arithmetic operations>***********************/
 
