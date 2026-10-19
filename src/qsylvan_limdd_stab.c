@@ -224,10 +224,20 @@ static size_t
 rref(gen_row_t *rows, size_t n, size_t nqubits)
 {
     size_t top = 0;
-    for (size_t c = 0; c < 2 * nqubits && top < n; c++) {
-        size_t pivot = top;
-        while (pivot < n && !row_bit(&rows[pivot], c, nqubits)) pivot++;
-        if (pivot == n) continue;
+    while (top < n) {
+        /*
+         * The next pivot column is the least leading column among the rows
+         * not yet placed: every column before it is clear in all of them.
+         * The first row that leads there is the one a column-by-column scan
+         * would pick, so the form is the same, at a count of trailing zeros
+         * per row instead of a bit test per column.
+         */
+        size_t c = 2 * nqubits, pivot = n;
+        for (size_t r = top; r < n; r++) {
+            const size_t lc = limdd_pauli_lead_column(rows[r].p, nqubits);
+            if (lc < c) { c = lc; pivot = r; }
+        }
+        if (pivot == n) break;
 
         if (pivot != top) {
             const gen_row_t t = rows[top];
@@ -328,8 +338,7 @@ limdd_stab_contains(LIMDD_STAB s, LIMDD_LIM g)
     for (; s != LIMDD_STAB_TRIVIAL; s = stab_tail(s)) {
         const gen_row_t row = unpack(stab_head(s));
 
-        size_t c = 0;
-        while (c < 2 * nqubits && !row_bit(&row, c, nqubits)) c++;
+        const size_t c = limdd_pauli_lead_column(row.p, nqubits);
         assert(c < 2 * nqubits && "an RREF row is never the identity");
 
         if (row_bit(&r, c, nqubits)) add_row(&r, &row, nqubits);
@@ -369,7 +378,10 @@ limdd_stab_fprint(FILE *out, LIMDD_STAB s, const char *indent)
 
 /* --- the stabiliser group of a node -------------------------------------- */
 
-/** The element of `s` whose Pauli word is `w`, or 0 if the group has none. */
+#ifndef NDEBUG
+/** The element of `s` whose Pauli word is `w`, or 0 if the group has none.
+ *  Only a cross-check now: limdd_stab_of_node reads the element off the
+ *  intersection, which already computed it. */
 static LIMDD_LIM
 stab_find(LIMDD_STAB s, limdd_pauli_t w)
 {
@@ -401,6 +413,7 @@ stab_find(LIMDD_STAB s, limdd_pauli_t w)
      */
     return limdd_pauli_is_identity(w) ? acc : 0;
 }
+#endif
 
 /** `a` with its sign flipped. `a` must have scalar +-1. */
 static LIMDD_LIM
@@ -465,14 +478,15 @@ stack_generators(LIMDD_STAB s0, LIMDD_STAB s1, size_t *nrows)
      * tagged generators back together, which gets the phases right for free.
      */
     size_t top = 0;
-    for (size_t c = 0; c < 2 * nqubits && top < n; c++) {
-        size_t pivot = top;
-        while (pivot < n) {
-            const gen_row_t r = { isect[pivot].w, false };
-            if (row_bit(&r, c, nqubits)) break;
-            pivot++;
+    while (top < n) {
+        /* The least leading column among the unplaced rows, and the first row
+         * leading there: what a column-by-column scan finds, as in rref. */
+        size_t c = 2 * nqubits, pivot = n;
+        for (size_t r = top; r < n; r++) {
+            const size_t lc = limdd_pauli_lead_column(isect[r].w, nqubits);
+            if (lc < c) { c = lc; pivot = r; }
         }
-        if (pivot == n) continue;
+        if (pivot == n) break;
 
         if (pivot != top) {
             const isect_row_t t = isect[top];
@@ -519,7 +533,7 @@ product_of(LIMDD_STAB s, const genmask_t *mask)
  * of s0 and s1 rows that agree, and their s0 tag names the element.
  */
 static size_t
-intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
+intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out, LIMDD_LIM *out1)
 {
     size_t n;
     const size_t top = stack_generators(s0, s1, &n);
@@ -528,6 +542,10 @@ intersect_gens(LIMDD_STAB s0, LIMDD_STAB s1, LIMDD_LIM *out)
     for (size_t r = top; r < n; r++) {
         assert(limdd_pauli_is_identity(isect[r].w));
         if (genmask_is_zero(&isect[r].mask0)) continue;  /* inside s1 alone */
+        /* The row cancelled, so the s1 generators its tag names multiply to
+         * the same word: the element of s1 with that word, which a stabiliser
+         * group has at most one of. */
+        out1[nout] = product_of(s1, &isect[r].mask1);
         out[nout++] = product_of(s0, &isect[r].mask0);
     }
     return nout;
@@ -699,16 +717,19 @@ limdd_stab_of_node(uint32_t var, LIMDD low, LIMDD high,
      * that limdd_makenode_ex records in the node, which is derived from the
      * same argument.
      */
-    LIMDD_LIM common[LIMDD_MAX_QUBITS];
+    LIMDD_LIM common[LIMDD_MAX_QUBITS], common1[LIMDD_MAX_QUBITS];
     const size_t ncommon = (limdd_stab_is_trivial(s0) || limdd_stab_is_trivial(s1))
-                         ? 0 : intersect_gens(s0, s1, common);
+                         ? 0 : intersect_gens(s0, s1, common, common1);
 
     for (size_t i = 0; i < ncommon; i++) {
         const LIMDD_LIM a = common[i];
         const limdd_pauli_t wa = limdd_lim_pauli(a);
 
-        const LIMDD_LIM a1 = stab_find(s1, wa);
-        assert(a1 != 0 && "the intersection produced a word s1 does not have");
+        /* s1's element with a's word, read off the intersection; searching
+         * s1 for it again (stab_find) was a quarter of the time on
+         * hidden-shift_n30. */
+        const LIMDD_LIM a1 = common1[i];
+        assert(a1 == stab_find(s1, wa) && "the intersection and s1 disagree");
 
         /*
          * Conjugating by B flips A's sign when they anticommute, and the two

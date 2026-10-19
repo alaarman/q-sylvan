@@ -217,6 +217,21 @@ limdd_pauli_column(limdd_pauli_t p, size_t c, size_t nqubits)
     return (w & LIMDD_PAULI_BIT(k)) != 0;
 }
 
+/**
+ * The first column, in limdd_pauli_column's order, where `p` has a 1: a count
+ * of trailing zeros per word rather than a test per column. 2*nqubits for the
+ * identity. Bits at or above nqubits are never set.
+ */
+static inline size_t
+limdd_pauli_lead_column(limdd_pauli_t p, size_t nqubits)
+{
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++)
+        if (p.x[i]) return (size_t)i * 64 + (size_t)__builtin_ctzll(p.x[i]);
+    for (unsigned i = 0; i < LIMDD_PAULI_WORDS; i++)
+        if (p.z[i]) return nqubits + (size_t)i * 64 + (size_t)__builtin_ctzll(p.z[i]);
+    return 2 * nqubits;
+}
+
 /** True iff `p` acts on any qubit below `level`. */
 static inline bool
 limdd_pauli_acts_below(limdd_pauli_t p, size_t level)
