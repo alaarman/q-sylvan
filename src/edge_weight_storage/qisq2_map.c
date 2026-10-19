@@ -30,8 +30,18 @@ typedef union {
 
 // float "equality" tolerance
 static long double TOLERANCE = 1e-14l;
-static const uint64_t EMPTY = 14738995463583502973ull;
-static const uint64_t LOCK  = 14738995463583502974ull;
+/*
+ * A bucket's first word is the (_mp_alloc, _mp_size) pair of its real part's
+ * numerator. EMPTY is 0, so that the table can come from calloc and its pages
+ * stay untouched until a weight lands in them: with a non-zero marker written
+ * into every 128-byte bucket, a 2^24 table was 2 GB resident before the first
+ * gate, whatever the run then used. A stored numerator always has storage
+ * (qisq2_map_insert sees to it, since GMP leaves a fresh zero unallocated), so
+ * its word is never 0; and an allocation of -1 never occurs, so neither is it
+ * LOCK.
+ */
+static const uint64_t EMPTY = 0;
+static const uint64_t LOCK  = UINT64_MAX;
 static const uint64_t CL_MASK = -(1ULL << CACHE_LINE);
 
 /**
@@ -188,8 +198,7 @@ qisq2_map_insert(qisq2_map_t *qisq2_map, qisq2_t *v, uint64_t *ret)
     uint32_t hash = qisq2_hash(v);
     uint32_t prime = odd_primes[hash & PRIME_MASK];
 
-    assert (val->d[0] != LOCK);
-    assert (val->d[0] != EMPTY);
+    (void)val;
 
     // Insert/lookup `v`
     for (unsigned int c = 0; c < qisq2_map->threshold; c++) {
@@ -220,8 +229,13 @@ qisq2_map_insert(qisq2_map_t *qisq2_map, qisq2_t *v, uint64_t *ret)
                     mpq_set(owned.b, v->b);
                     mpq_set(owned.c, v->c);
                     mpq_set(owned.d, v->d);
+                    /* A numerator of 0 may have no storage, which would make
+                     * the bucket's first word 0, i.e. EMPTY. */
+                    if (mpq_numref(owned.a)->_mp_alloc == 0)
+                        mpz_realloc2(mpq_numref(owned.a), 64);
 
                     bucket_t *src = (bucket_t *)&owned;
+                    assert(src->d[0] != EMPTY && src->d[0] != LOCK);
                     // write backwards (overwrite bucket->d[0] last)
                     for (int k = entry_size-1; k >= 0; k--) {
                         atomic_write (&bucket->d[k], src->d[k]);
@@ -288,10 +302,8 @@ qisq2_map_create(uint64_t size, double tolerance)
     qisq2_map_t  *qisq2_map = calloc (1, sizeof(qisq2_map_t));
     qisq2_map->size = size;
     qisq2_map->mask = qisq2_map->size - 1;
+    /* calloc, and EMPTY is 0: pages are only touched when used. */
     qisq2_map->table = calloc (qisq2_map->size, sizeof(bucket_t));
-    for (uint64_t c = 0; c < qisq2_map->size; c++) {
-        qisq2_map->table[c].d[0] = EMPTY;
-    }
     qisq2_map->threshold = qisq2_map->size / 100;
     qisq2_map->threshold = min(qisq2_map->threshold, 1ULL << 16);
     qisq2_map->seen_0 = 0;
