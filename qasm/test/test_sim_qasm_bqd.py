@@ -80,8 +80,10 @@ def iqp_circuit(n, gates, seed):
 def run(path, dd, backend, check=True, sizes=SIZES, family=None, extra=(), zero=None):
     fam = ['--bqd-family', family] if family else []
     rule = ['--bqd-zero', zero] if zero else []
+    # float weights in the BQD are refused unless asked for by name
+    unsafe = ['--bqd-float=unsafe'] if dd == 'bqd' and backend == 'float' else []
     out = subprocess.run([SIM_QASM, path, '-d', dd, '-e', backend, '-s', 'low',
-                          '--state-vector', '-m', *sizes, *fam, *rule, *extra],
+                          '--state-vector', '-m', *sizes, *fam, *rule, *unsafe, *extra],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if not check:
         return out
@@ -305,3 +307,52 @@ def test_rotation_refused_on_exact_weights(tmp_path):
     out = run(str(path), 'qmdd', 'qisq2', check=False)
     assert out.returncode == 1
     assert b'angle' in out.stderr
+
+
+def test_bqd_float_is_refused_without_unsafe(tmp_path):
+    """-d bqd on float weights stops before simulating unless --bqd-float=unsafe
+    is given, since a wrong state shows no sign of it in the run."""
+    path = tmp_path / "ct.qasm"
+    path.write_text(clifford_t_circuit(3, 24, 3000))
+    out = subprocess.run([SIM_QASM, str(path), '-d', 'bqd', '-e', 'float', '-s', 'low', '-m'],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    assert out.returncode != 0
+    assert b'--bqd-float=unsafe' in out.stderr
+    ok = subprocess.run([SIM_QASM, str(path), '-d', 'bqd', '-e', 'float', '-s', 'low', '-m',
+                         '--bqd-float=unsafe'],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    assert ok.returncode == 0, ok.stderr.decode()
+
+
+@pytest.mark.parametrize("sampler", ['qmdd', 'limdd'])
+def test_amp_sample_and_amp_at(sampler, tmp_path):
+    """--amp-sample draws basis states from the final state and records their
+    amplitudes; --amp-at evaluates another arm at the same points. Every arm
+    must agree, and the amplitudes must be the state vector's at those points
+    (character q of a point is qubit q, as for -v's ordering below)."""
+    for n, seed in ((5, 5001), (7, 7001)):
+        path = tmp_path / f"ct_{n}_{seed}.qasm"
+        path.write_text(clifford_t_circuit(n, 10 * n, seed))
+        ref = tmp_path / f"ref_{n}.json"
+        out = subprocess.run([SIM_QASM, str(path), '-d', sampler, '-e', 'qisq2', '-s', 'low', *SIZES,
+                              '-r', '11', '--amp-sample=6', '-j', str(ref)],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        assert out.returncode == 0, out.stderr.decode()
+        r = json.load(open(ref))
+        pts, vals = r['amp_points'], [complex(*v) for v in r['amp_values']]
+        assert len(pts) == 6 and all(len(p) == n for p in pts)
+        assert all(abs(v) > 0 for v in vals), "sampled a basis state of amplitude 0"
+        vec, _ = run(str(path), 'qmdd', 'qisq2')
+        for p, v in zip(pts, vals):
+            assert abs(vec[int(p[::-1], 2)] - v) < 1e-12, (p, v)
+        for dd, fam in (('qmdd', None), ('limdd', None), ('bqd', None), ('bqd', 'x'), ('bqd', 'pauli')):
+            at = tmp_path / f"at_{n}_{dd}_{fam}.json"
+            extra = ['--bqd-family', fam] if fam else []
+            out = subprocess.run([SIM_QASM, str(path), '-d', dd, '-e', 'qisq2', '-s', 'low', *SIZES, *extra,
+                                  f'--amp-at={ref}', '-j', str(at)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            assert out.returncode == 0, out.stderr.decode()
+            d = json.load(open(at))
+            assert d['amp_points'] == pts
+            got = [complex(*v) for v in d['amp_values']]
+            assert max(abs(a - b) for a, b in zip(got, vals)) < 1e-12, (dd, fam)

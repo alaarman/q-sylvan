@@ -179,6 +179,13 @@ const char  *bqd_family_name(bqd_family_t f);
  * one diagram on every function of full support and on every function whose
  * support is an affine subspace (skip:cor:smd0), and different ones
  * elsewhere, so a session has one rule, fixed with its tables.
+ *
+ * SM is the rule that is maintained for speed: new optimisations of the gate
+ * algorithms go into SM, in each family, and not into the copy rule. The copy
+ * rule stays as the paper's def:bqd and as a reference that the tests compare
+ * SM with (the D0 size comparisons, the canonicity cross-checks, and decoding
+ * both to one vector); it is correct but not tuned, so a timing of one rule
+ * against the other measures the tuning as much as the rule.
  */
 typedef enum {
     BQD_ZERO_SM   = 0,

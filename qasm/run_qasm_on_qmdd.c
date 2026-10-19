@@ -75,6 +75,7 @@ static const char *bqd_family_opt_name = "scalar";
 static bool bqd_family_set = false;
 static bqd_zero_rule_t bqd_zero_opt = BQD_ZERO_SM;          /* --bqd-zero, every family */
 static bool bqd_zero_set = false;
+static bool bqd_float_unsafe = false;                        /* --bqd-float=unsafe */
 static int reorder_qubits = 0;
 static char* qasm_inputfile = NULL;
 static char* json_outputfile = NULL;
@@ -85,6 +86,21 @@ static char* json_outputfile = NULL;
  */
 #define DECODE_MAX_QUBITS 24     /* 2^24 weights, 128 MB */
 static EVBDD_WGT *final_vector = NULL;
+
+/*
+ * --amp-sample and --amp-at: amplitudes of the final state at a few basis
+ * states, so that two arms can be checked against each other on circuits too
+ * wide to decode (DECODE_MAX_QUBITS). A point is a string of n characters 0/1,
+ * character q the value of qubit q. One arm samples points from its own state
+ * (by |amplitude|^2, so they are where the state lives) and the others read
+ * the same points; benchmark/exactdd/amendment/amp_check.py compares them.
+ */
+#define AMP_MAX 1024
+static int amp_sample = 0;                 /* --amp-sample=K */
+static const char *amp_at_file = NULL;     /* --amp-at=FILE */
+static char *amp_points[AMP_MAX];
+static complex_t amp_values[AMP_MAX];
+static size_t amp_count = 0;
 
 
 static struct argp_option options[] =
@@ -113,9 +129,12 @@ static struct argp_option options[] =
     {"rel-tol", 1006, "<tolerance>", 0, "Relative tolerance; selects the hybrid merging rule (default: off for qmdd, --tol for limdd, which needs it)", 0},
     {"zero-tol", 1007, "<tolerance>", 0, "Zero-collapse tolerance for the hybrid merging rule (default: 1e-14 for qmdd, 0 for limdd, whose weights are legitimately tiny)", 0},
     {"merging", 1011, "<abs|hybrid>", 0, "Which merging rule to use, overriding the per-diagram default. abs is the historical single absolute tolerance (--tol); hybrid is relative plus zero-collapse. A LIMDD defaults to hybrid and needs --merging=abs to be held to the absolute rule; exact (qisq2) weights ignore both.", 0},
-    {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram, with scalar labels unless --bqd-family picks others, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It is meant for -e qisq2: on float weights it runs every gate but warns, since after a gate that can cancel amplitudes a rounding residue can move an amplitude by orders of magnitude. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
-    {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound, under either zero rule (--bqd-zero). Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. Under sm, on a 16-qubit Clifford+T circuit of 500 gates x takes as long as the scalar family with two fifths of its nodes, and pauli two and a half times as long with less than a third; on a 20-qubit Clifford circuit of 400 gates x takes as long with a fifth of them, and pauli twice as long with a twenty-fifth. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float both run with the scalar family's warning and are more fragile: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
-    {"bqd-zero", 1015, "<sm|copy>", 0, "With -d bqd: what a node does where its low cofactor is zero, the zero rule (default sm, in every family). copy is the paper's def:bqd: every node stores its low cofactor and the ratio of the two, and where the low cofactor is zero the ratio holds a copy of the high one, so a gate that recurses on a node's stored edges has to multiply that part off again. sm, Shannon where misaligned, has no copy: a node whose high cofactor is zero wherever its low one is stores the ratio, as before, and any other node stores its two cofactors and says so in a tag. The two give the same diagram on every state of full support and on every state whose support is an affine subspace, the stabiliser states among them; elsewhere they differ, and on the circuits measured in the scalar family sm's has had no more nodes than copy's at the end of a run or at its peak, and between gates at most 7.5% more, on 21 of 17,721 states. Each rule has its own gate algorithms, so a timing of one against the other measures the rule and the algorithms together. On a state of full support the two hold one diagram and sm's recursion is still the faster one: it takes a gate through a node whose ratio does not depend on the gate's qubit without forming the high cofactor, and multiplies and divides two nodes that store ratios level by level. On clifford_T_circuit_20_700 copy spends 89% of its time on the 39 gates it meets on full support, and sm runs those 148 times faster. On a state with zeros no gate under sm makes a copy or multiplies one off, which adds to that. With a node table of 2^25, in the scalar family, hidden-shift_n30, which never has full support, fills it under copy and takes 1 s under sm, clifford_T_circuit_20_700 runs out of 900 s under copy and takes 50 s under sm, and rand_18_500, with 5 of 500 gates on full support, takes 20 s under copy and 1 s under sm. x and pauli have sm too: there a node's high cofactor is moved by its least point before its tag is decided, so a translation can turn a node of one kind into the other, and the two rules are again one diagram on full and affine supports. With the same table, rand_18_500 takes 0.9 s in x and 1.6 s in pauli under sm, and 61 s and 145 s under copy; hidden-shift_n30 takes 1.5 s and 2.0 s under sm, and copy reaches gate 325 and 301 of 431 in 900 s; clifford_T_circuit_20_700 takes 41 s and 48 s under sm, and copy reaches gate 681 and 654 of 700. On those three and ising_n16_s3, sm's diagram had more nodes than copy's after 7 of the 3,133 gates both rules ran, at most 7.1% more, and never a larger peak; on 36 smaller circuits it had neither a larger final count nor a larger peak in either family.", 0},
+    {"dd", 'd', "<qmdd|limdd|limdd-heur|bqd>", 0, "Decision diagram to simulate with (default qmdd). limdd applies the full canonical form; limdd-heur skips the search for a canonical high-edge label and only divides the low label out, which is cheaper per node but stops nodes that are the same state up to a LIM from merging. bqd is the binary quotient diagram, with scalar labels unless --bqd-family picks others, on the LIMDD's gate set: the diagonal gates by the paper's O(n) algorithm while the state has full support, everything else by a recursion that is exact and has no size bound. It is meant for -e qisq2: float weights are refused unless --bqd-float=unsafe, since after a gate that can cancel amplitudes a rounding residue can move an amplitude by orders of magnitude. It has no norm or measurement algorithm, so -m and -v decode the state when it has at most 24 qubits and report -1 otherwise.", 0},
+    {"bqd-family", 1014, "<scalar|x|pauli>", 0, "With -d bqd: the label family (default scalar). scalar labels an edge with a number c, the BQD above. x labels it with c X^t, a number and a translation of the domain, the X-BQD, so that a function and its translates share a node; pauli with c Z^s X^t, the Pauli-BQD, so that its sign patterns share it too. Both run the diagonal gates by the O(n) walk while the state has full support, and every other gate by the recursion on labelled edges, exact and without a size bound, under either zero rule (--bqd-zero). Fewer nodes do not make a faster run: a gate's cost follows the labelled cofactors it meets, which the diagram does not hold. Under sm, on a 16-qubit Clifford+T circuit of 500 gates x takes as long as the scalar family with two fifths of its nodes, and pauli two and a half times as long with less than a third; on a 20-qubit Clifford circuit of 400 gates x takes as long with a fifth of them, and pauli twice as long with a twenty-fifth. pauli mints far more labels, Pauli words and weights than the others: its LIM table defaults to sixteen times its node table, which defaults to 2^21, and it can need a larger --wgt-tab-size. On -e float (with --bqd-float=unsafe) both are more fragile than the scalar family: their canonical form also places every translation by comparing values with zero, and the pauli family compares arguments with [0, pi), which a rounding error decides either way for a real value.", 0},
+    {"bqd-zero", 1015, "<sm|copy>", 0, "With -d bqd: what a node does where its low cofactor is zero, the zero rule (default sm, in every family). copy is the paper's def:bqd: every node stores its low cofactor and the ratio of the two, and where the low cofactor is zero the ratio holds a copy of the high one, so a gate that recurses on a node's stored edges has to multiply that part off again. sm, Shannon where misaligned, has no copy: a node whose high cofactor is zero wherever its low one is stores the ratio, as before, and any other node stores its two cofactors and says so in a tag. The two give the same diagram on every state of full support and on every state whose support is an affine subspace, the stabiliser states among them; elsewhere they differ, and on the circuits measured in the scalar family sm's has had no more nodes than copy's at the end of a run or at its peak, and between gates at most 7.5% more, on 21 of 17,721 states. Each rule has its own gate algorithms, so a timing of one against the other measures the rule and the algorithms together. On a state of full support the two hold one diagram and sm's recursion is still the faster one: it takes a gate through a node whose ratio does not depend on the gate's qubit without forming the high cofactor, and multiplies and divides two nodes that store ratios level by level. On clifford_T_circuit_20_700 copy spends 89% of its time on the 39 gates it meets on full support, and sm runs those 148 times faster. On a state with zeros no gate under sm makes a copy or multiplies one off, which adds to that. With a node table of 2^25, in the scalar family, hidden-shift_n30, which never has full support, fills it under copy and takes 1 s under sm, clifford_T_circuit_20_700 runs out of 900 s under copy and takes 50 s under sm, and rand_18_500, with 5 of 500 gates on full support, takes 20 s under copy and 1 s under sm. x and pauli have sm too: there a node's high cofactor is moved by its least point before its tag is decided, so a translation can turn a node of one kind into the other, and the two rules are again one diagram on full and affine supports. With the same table, rand_18_500 takes 0.9 s in x and 1.6 s in pauli under sm, and 61 s and 145 s under copy; hidden-shift_n30 takes 1.5 s and 2.0 s under sm, and copy reaches gate 325 and 301 of 431 in 900 s; clifford_T_circuit_20_700 takes 41 s and 48 s under sm, and copy reaches gate 681 and 654 of 700. On those three and ising_n16_s3, sm's diagram had more nodes than copy's after 7 of the 3,133 gates both rules ran, at most 7.1% more, and never a larger peak; on 36 smaller circuits it had neither a larger final count nor a larger peak in either family. copy is kept as the paper's definition and as a reference for the tests; speed work goes into sm only, so do not time copy against sm as two tuned rules.", 0},
+    {"bqd-float", 1017, "<unsafe>", 0, "With -d bqd: run on float weights (-e float) all the same. Refused without it: the quotient rule divides by values a rounding residue can stand in for, and a weight that merges into 0 changes a node's kind, so after a gate that can cancel the state can be far off with no sign of it in the run; -e qisq2 is exact.", 0},
+    {"amp-sample", 1018, "<K>", 0, "Sample K basis states from the final state, each with probability |amplitude|^2 (seeded by -r), and write them with their amplitudes into the JSON (amp_points, amp_values). qmdd and limdd; at most 1024.", 0},
+    {"amp-at", 1019, "<file>", 0, "Write the final state's amplitudes at the basis states listed in FILE into the JSON: one string of 0s and 1s per line, character q the value of qubit q, or the JSON of a run with --amp-sample. Every diagram; checks an arm against another above the 24 qubits that are decoded.", 0},
     {0, 0, 0, 0, 0, 0}
 };
 
@@ -243,6 +262,17 @@ parse_opt(int key, char *arg, struct argp_state *state)
         else if (strcmp(arg, "copy") == 0)  bqd_zero_opt = BQD_ZERO_COPY;
         else argp_error(state, "unknown bqd zero rule '%s'", arg);
         break;
+    case 1017:
+        if (strcmp(arg, "unsafe") == 0) bqd_float_unsafe = true;
+        else argp_error(state, "--bqd-float takes 'unsafe', not '%s'", arg);
+        break;
+    case 1018:
+        amp_sample = atoi(arg);
+        if (amp_sample < 1 || amp_sample > AMP_MAX) argp_error(state, "--amp-sample takes 1 to %d", AMP_MAX);
+        break;
+    case 1019:
+        amp_at_file = arg;
+        break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1) argp_usage(state);
         qasm_inputfile = arg;
@@ -251,6 +281,13 @@ parse_opt(int key, char *arg, struct argp_state *state)
         if (state->arg_num < 1) argp_usage(state);
         if (bqd_family_set && dd_kind != DD_BQD) argp_error(state, "--bqd-family needs -d bqd");
         if (bqd_zero_set && dd_kind != DD_BQD) argp_error(state, "--bqd-zero needs -d bqd");
+        if (bqd_float_unsafe && dd_kind != DD_BQD) argp_error(state, "--bqd-float needs -d bqd");
+        if (amp_sample && amp_at_file) argp_error(state, "--amp-sample and --amp-at exclude each other");
+        if (amp_sample && dd_kind == DD_BQD)
+            argp_error(state, "--amp-sample needs -d qmdd, limdd or limdd-heur; sample with one of those and pass its JSON to --amp-at");
+        if (dd_kind == DD_BQD && wgt_table_type != QISQ2_MAP && !bqd_float_unsafe)
+            argp_error(state, "-d bqd on float weights can give a wrong state with no sign of "
+                              "it; use -e qisq2, or --bqd-float=unsafe to run it all the same");
         break;
     default:
         return ARGP_ERR_UNKNOWN;
@@ -321,6 +358,20 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
             free(x);
         }
         fprintf(stream, "  ],\n");
+    }
+    if (amp_count > 0) {
+        fprintf(stream, "  \"amp_points\": [");
+        for (size_t k = 0; k < amp_count; k++)
+            fprintf(stream, "%s\"%s\"", k ? ", " : "", amp_points[k]);
+        fprintf(stream, "],\n  \"amp_values\": [");
+        for (size_t k = 0; k < amp_count; k++) {
+            fprintf(stream, "%s[", k ? ", " : "");
+            fprint_json_double(stream, "%.17g", amp_values[k].r);
+            fprintf(stream, ", ");
+            fprint_json_double(stream, "%.17g", amp_values[k].i);
+            fprintf(stream, "]");
+        }
+        fprintf(stream, "],\n");
     }
     fprintf(stream, "  \"statistics\": {\n");
     fprintf(stream, "    \"applied_gates\": %" PRIu64 ",\n", stats.applied_gates);
@@ -708,6 +759,159 @@ trace_row(uint64_t gate_idx, const char *gate, LIMDD state, uint32_t n, double s
     trace_full(full);
 }
 
+/* --- --amp-sample and --amp-at ------------------------------------------------ */
+
+/* The points of --amp-at: the "amp_points" of a JSON, or else every word of
+ * 0s and 1s in the file, one per line; '#' starts a comment line. */
+static void
+amp_read_points(uint32_t n)
+{
+    FILE *f = fopen(amp_at_file, "r");
+    if (f == NULL) { fprintf(stderr, "--amp-at: cannot open %s\n", amp_at_file); exit(1); }
+    /* read to the end in chunks: a pipe has no length to ask for */
+    size_t len = 0, cap = 1 << 16;
+    char *buf = malloc(cap);
+    for (;;) {
+        if (buf == NULL) { fprintf(stderr, "out of memory\n"); exit(1); }
+        len += fread(buf + len, 1, cap - 1 - len, f);
+        if (len < cap - 1) break;
+        cap *= 2;
+        buf = realloc(buf, cap);
+    }
+    if (ferror(f)) { fprintf(stderr, "--amp-at: cannot read %s\n", amp_at_file); exit(1); }
+    buf[len] = 0;
+    fclose(f);
+    char *p = buf;
+    const char *key = strstr(buf, "\"amp_points\"");
+    if (key != NULL) p = strchr(key, '[');
+    while (p != NULL && *p && amp_count < AMP_MAX) {
+        if (key != NULL && *p == ']') break;
+        if (key == NULL && *p == '#') { p = strchr(p, '\n'); continue; }
+        if (*p == '0' || *p == '1') {
+            const size_t l = strspn(p, "01");
+            if (l != n) {
+                fprintf(stderr, "--amp-at: a point of %zu characters, but %u qubits\n", l, n);
+                exit(1);
+            }
+            amp_points[amp_count] = strndup(p, l);
+            amp_values[amp_count].r = amp_values[amp_count].i = 0.0;
+            amp_count++;
+            p += l;
+        } else {
+            p++;
+        }
+    }
+    free(buf);
+    if (amp_count == 0) { fprintf(stderr, "--amp-at: no points in %s\n", amp_at_file); exit(1); }
+}
+
+static char *
+amp_new_point(uint32_t n)
+{
+    char *s = malloc(n + 1);
+    if (s == NULL) { fprintf(stderr, "out of memory\n"); exit(1); }
+    memset(s, '0', n);
+    s[n] = 0;
+    return s;
+}
+
+/* A uniform double in [0,1) from a private generator, so that sampling does
+ * not depend on, or disturb, rand(). */
+static double
+amp_uniform(uint64_t *s)
+{
+    *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17;
+    return (double)(*s >> 11) * 0x1.0p-53;
+}
+
+/* The QMDD arm: sample by walking down the diagram, at each qubit taking a
+ * branch with its share of the probability; it builds no node, so it cannot
+ * set off a collection (qmdd_measure_all builds the measured basis state).
+ * qmdd_get_amplitude reads qubit n-1-j from x[j]. */
+static void
+amp_qmdd(QMDD state, uint32_t n)
+{
+    bool *x = malloc(n * sizeof(bool));
+    if (amp_sample) {
+        uint64_t rs = (uint64_t)(uint32_t)rseed * UINT64_C(0x9E3779B97F4A7C15) | 1u;
+        for (int k = 0; k < amp_sample; k++) {
+            char *pt = amp_new_point(n);
+            QMDD e = state;
+            for (uint32_t q = 0; q < n; q++) {
+                BDDVAR top; QMDD lo, hi;
+                evbdd_get_topvar(e, q, &top, &lo, &hi);
+                const double pl = qmdd_unnormed_prob(lo, q + 1, n);
+                const double ph = qmdd_unnormed_prob(hi, q + 1, n);
+                if (amp_uniform(&rs) * (pl + ph) < pl) {
+                    e = lo;
+                } else {
+                    e = hi;
+                    pt[q] = '1';
+                }
+            }
+            amp_points[amp_count++] = pt;
+        }
+    }
+    for (size_t k = 0; k < amp_count; k++) {
+        for (uint32_t j = 0; j < n; j++) x[j] = amp_points[k][n - 1 - j] == '1';
+        amp_values[k] = qmdd_get_amplitude(state, x, n);
+    }
+    free(x);
+}
+
+/* The LIMDD arm: sample qubit by qubit, projecting onto the outcome drawn
+ * with its share of the norm. From the simulation task, so a collection inside
+ * a projection keeps what is pushed. */
+static void
+amp_limdd(LIMDD state, uint32_t n)
+{
+    bool *bits = malloc(n * sizeof(bool));
+    if (amp_sample) {
+        uint64_t rs = (uint64_t)(uint32_t)rseed * UINT64_C(0x9E3779B97F4A7C15) | 1u;
+        for (int k = 0; k < amp_sample; k++) {
+            /* n projections per sample: let the tables be collected in
+             * between, as between gates (state is protected) */
+            if (limdd_gc_wanted()) RUN(limdd_gc);
+            LIMDD e = state;
+            limdd_refs_pushptr(&e);
+            double norm = limdd_norm_squared(e, n);
+            char *pt = amp_new_point(n);
+            for (uint32_t q = 0; q < n; q++) {
+                const LIMDD e0 = limdd_refs_push(limdd_project(e, q, 0, 0));
+                const double n0 = limdd_norm_squared(e0, n);
+                if (amp_uniform(&rs) * norm < n0) {
+                    e = e0;
+                    norm = n0;
+                } else {
+                    e = limdd_project(e, q, 1, 0);
+                    norm = limdd_norm_squared(e, n);
+                    pt[q] = '1';
+                }
+                limdd_refs_pop(1);
+            }
+            limdd_refs_popptr(1);
+            amp_points[amp_count++] = pt;
+        }
+    }
+    for (size_t k = 0; k < amp_count; k++) {
+        for (uint32_t q = 0; q < n; q++) bits[q] = amp_points[k][q] == '1';
+        amp_values[k] = weight_as_complex(limdd_eval(state, bits, n));
+    }
+    free(bits);
+}
+
+/* The BQD arm: points only (--amp-at); bqd_eval reads qubit q at bit n-1-q. */
+static void
+amp_bqd(BQD state, uint32_t n)
+{
+    for (size_t k = 0; k < amp_count; k++) {
+        uint64_t idx = 0;
+        for (uint32_t q = 0; q < n; q++)
+            if (amp_points[k][q] == '1') idx |= UINT64_C(1) << (n - 1 - q);
+        amp_values[k] = weight_as_complex(bqd_eval(state, n, idx));
+    }
+}
+
 TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
 {
     const BDDVAR n = circuit->qreg_size;
@@ -792,6 +996,7 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
     }
     stats.final_nodes = limdd_countnodes(state);
     if (lim_stats) limdd_report_lim_stats(stderr, state, n);
+    if (amp_sample || amp_count) amp_limdd(state, n);
 
     /* -v reads the amplitudes now, while the tables exist: fprint_stats
      * runs after limdd_nodes_quit. It used to read stats.final_state, which
@@ -841,8 +1046,8 @@ TASK_1(int, limdd_simulate_circuit, quantum_circuit_t*, circuit)
  * on affine supports the two are one diagram, so the proved path above is the
  * same under both.
  *
- * Exact weights are what the arm is for. Float weights are taken all the
- * same, in every family and for every gate, with a warning: what they do is
+ * Exact weights are what the arm is for. Float weights are taken only with
+ * --bqd-float=unsafe, in every family and for every gate, with a warning: what they do is
  * worth measuring, and it is not what they do to an EVDD. Under the copy
  * rule a residue where a value should be 0 turns a copy point into a ratio
  * point, and a value that merges into 0 turns a ratio point into a copy
@@ -972,6 +1177,7 @@ TASK_1(int, bqd_simulate_circuit, quantum_circuit_t*, circuit)
             free(vec);
         }
     }
+    if (amp_count) amp_bqd(state, n);
     limdd_unprotect(&state);
     return 0;
 }
@@ -1032,6 +1238,7 @@ void simulate_circuit(quantum_circuit_t* circuit)
     stats.shots = 1;
     stats.final_nodes = evbdd_countnodes(state);
     stats.norm = qmdd_get_norm(state, circuit->qreg_size);
+    if (amp_sample || amp_count) amp_qmdd(state, circuit->qreg_size);
 
     if (calc_measurement_prob){
         srand(12345);
@@ -1187,6 +1394,8 @@ int main(int argc, char *argv[])
     quantum_circuit_t* circuit = parse_qasm_file(qasm_inputfile);
     if (reorder_qubits)
         optimize_qubit_order(circuit, reorder_qubits == 2);
+    /* before the run, so that a bad file stops it at once */
+    if (amp_at_file) amp_read_points(circuit->qreg_size);
 
     /*
      * LIMDD needs the relative merging rule, and gets it unless asked
