@@ -597,6 +597,17 @@ TASK_IMPL_1(size_t, llmsset_count_marked, llmsset_t, dbs)
     return CALL(llmsset_count_marked_par, dbs, 0, dbs->table_size);
 }
 
+size_t
+llmsset_count_regions(const llmsset_t dbs)
+{
+    const size_t regions = dbs->table_size / 512u;
+    const size_t words = (regions + 63u) / 64u;
+    size_t n = 0;
+    for (size_t i = 0; i < words; i++)
+        n += popcnt_uint64(atomic_load_explicit(dbs->bitmap1 + i, memory_order_relaxed));
+    return n;
+}
+
 VOID_TASK_3(llmsset_destroy_par, llmsset_t, dbs, size_t, first, size_t, count)
 {
     if (count > 1024) {

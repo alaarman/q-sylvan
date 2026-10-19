@@ -174,6 +174,11 @@ size_t limdd_lim_table_count(void);
 /** Capacity of the LIM table, for deciding when to collect. */
 size_t limdd_lim_table_size(void);
 
+/** Regions of the LIM and Pauli tables claimed since their last clear; see
+ *  llmsset_count_regions. Between operations only. */
+size_t limdd_lim_table_regions(void);
+size_t limdd_pauli_table_regions(void);
+
 /**
  * Intern `p`, returning its reference. Equal words always give equal
  * references. Aborts if the table is full.

@@ -205,6 +205,18 @@ limdd_lim_table_size(void)
 }
 
 size_t
+limdd_lim_table_regions(void)
+{
+    return lim_table == NULL ? 0 : llmsset_count_regions(lim_table);
+}
+
+size_t
+limdd_pauli_table_regions(void)
+{
+    return pauli_table == NULL ? 0 : llmsset_count_regions(pauli_table);
+}
+
+size_t
 limdd_lim_table_count(void)
 {
     return table_count(lim_table);

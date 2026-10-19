@@ -109,6 +109,12 @@ limdd_stab_table_size(void)
 }
 
 size_t
+limdd_stab_table_regions(void)
+{
+    return stab_table == NULL ? 0 : llmsset_count_regions(stab_table);
+}
+
+size_t
 limdd_stab_table_count(void)
 {
     if (stab_table == NULL) return 0;

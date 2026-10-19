@@ -376,6 +376,12 @@ limdd_node_table_size(void)
 }
 
 size_t
+limdd_node_table_regions(void)
+{
+    return limdd_nodes == NULL ? 0 : llmsset_count_regions(limdd_nodes);
+}
+
+size_t
 limdd_node_table_count(void)
 {
     if (limdd_nodes == NULL) return 0;

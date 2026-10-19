@@ -474,6 +474,26 @@ table_wants_gc(uint64_t count, uint64_t size, uint64_t floor)
     return count > floor + ((size - floor) >> 2);
 }
 
+/**
+ * The occupancy of a table, or an upper bound on it whenever that bound
+ * already says the table is under three quarters full.
+ *
+ * Counting walks one bit per bucket: 0.13 ms per call at the benchmark sizes
+ * (a LIM table of 2^27), which was two thirds of the run time on
+ * grover_iter_n16_it32, whose diagram never exceeds a few hundred nodes. The
+ * bound reads one bit per 512-bucket region: what the last collection kept,
+ * plus a full region for every region claimed since (llmsset_count_regions).
+ * It never undercounts, so a table it calls safe is safe, and the decision is
+ * the one the exact count would give.
+ */
+static uint64_t
+occupancy(uint64_t floor, size_t regions, uint64_t size, size_t (*count)(void))
+{
+    const uint64_t bound = floor + 512u * (uint64_t)regions;
+    if (bound <= size - (size >> 2)) return bound;
+    return count();
+}
+
 bool
 limdd_gc_wanted(void)
 {
@@ -481,8 +501,9 @@ limdd_gc_wanted(void)
      * The weight table keeps a plain counter, so it is asked every time. The
      * other four walk an occupancy bitmap to count, which cost 17% of a run
      * on a 20-qubit Clifford+T circuit when asked every gate -- more than the
-     * coset search -- so they are asked every 16th time. The quarter of
-     * headroom in table_wants_gc is what absorbs those 16 gates.
+     * coset search -- so they are asked every 16th time, and then answered
+     * from a bound wherever it suffices (occupancy). The quarter of headroom
+     * in table_wants_gc is what absorbs those 16 gates.
      */
     if (table_wants_gc(wgt_table_entries_estimate(),
                        sylvan_get_edge_weight_table_size(), limdd_gc_floor_wgt))
@@ -491,7 +512,8 @@ limdd_gc_wanted(void)
     static _Atomic(uint64_t) calls = 0;
     if ((atomic_fetch_add(&calls, 1) & 15u) != 0) return false;
 
-    const uint64_t lims = limdd_lim_table_count();
+    const uint64_t lims = occupancy(limdd_gc_floor_lim, limdd_lim_table_regions(),
+                                    limdd_lim_table_size(), limdd_lim_table_count);
     if (table_wants_gc(lims, limdd_lim_table_size(), limdd_gc_floor_lim)) return true;
 
     /*
@@ -506,11 +528,15 @@ limdd_gc_wanted(void)
      */
     const uint64_t pauli_size = limdd_pauli_table_size();
     if (lims > pauli_size - (pauli_size >> 2) &&
-        table_wants_gc(limdd_pauli_table_count(), pauli_size, limdd_gc_floor_pauli))
+        table_wants_gc(occupancy(limdd_gc_floor_pauli, limdd_pauli_table_regions(),
+                                 pauli_size, limdd_pauli_table_count),
+                       pauli_size, limdd_gc_floor_pauli))
         return true;
 
-    return table_wants_gc(limdd_node_table_count(), limdd_node_table_size(),
-                          limdd_gc_floor_node)
-        || table_wants_gc(limdd_stab_table_count(), limdd_stab_table_size(),
-                          limdd_gc_floor_stab);
+    return table_wants_gc(occupancy(limdd_gc_floor_node, limdd_node_table_regions(),
+                                    limdd_node_table_size(), limdd_node_table_count),
+                          limdd_node_table_size(), limdd_gc_floor_node)
+        || table_wants_gc(occupancy(limdd_gc_floor_stab, limdd_stab_table_regions(),
+                                    limdd_stab_table_size(), limdd_stab_table_count),
+                          limdd_stab_table_size(), limdd_gc_floor_stab);
 }

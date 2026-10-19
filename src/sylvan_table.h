@@ -197,6 +197,15 @@ TASK_DECL_1(size_t, llmsset_count_marked, llmsset_t);
 #define llmsset_count_marked(dbs) RUN(llmsset_count_marked, dbs)
 
 /**
+ * The number of 512-bucket data regions claimed since the table was created or
+ * last cleared (llmsset_clear_data). Every bucket made since then lies in one,
+ * so the occupancy is at most what was kept at the clear plus 512 per region:
+ * an upper bound read from one bit per region, where llmsset_count_marked
+ * reads one per bucket. Read it while no worker is inserting.
+ */
+size_t llmsset_count_regions(const llmsset_t dbs);
+
+/**
  * During garbage collection, this method calls the destroy callback
  * for all 'custom' data that is not kept.
  */
