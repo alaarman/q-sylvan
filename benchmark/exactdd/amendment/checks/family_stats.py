@@ -9,10 +9,16 @@ final and peak nodes, and the runs that did not finish.
   family_stats.py ROOT
 ROOT as for regen_amendment.sh: ldd/qasm, amend/qasm, amend/out_clean, and
 where present pilot/qasm/<family>/, pilot/out_clean, pilot/reference_probs.csv.
+Where ROOT has the float LIMDD under the relative merging rule
+(limdd_float_rel, limdd_float_l2_rel; the paper's float LIMDD since the rerun
+of 19 Oct 2026), every LIMDD count is given for those arms too, and the last
+section totals the counts the text quotes.
 Run with the plotting Python (it loads make_figures.py)."""
 import os, sys, statistics as st
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import make_figures as mf, glob
+REL = ["limdd_float_rel", "limdd_float_l2_rel"]
+mf.ARMS += REL                                   # read the relative-rule arms too
 if len(sys.argv) != 2: sys.exit(__doc__)
 S = sys.argv[1]
 for d in [S + "/ldd/qasm", S + "/amend/qasm"] + glob.glob(S + "/pilot/qasm/*/"): mf.count_qasm(d)
@@ -50,15 +56,20 @@ cmp("float_low", "qisq2_low", "Fig 6 low")
 cmp("float_l2", "qisq2_low", "Fig 6 L2")
 cmp("limdd_float", "limdd_qisq2", "Fig 7 low")
 cmp("limdd_float_l2", "limdd_qisq2", "Fig 7 L2")
+HAVE_REL = any(k[1] in REL for k in recs)
+if HAVE_REL:
+    cmp("limdd_float_rel", "limdd_qisq2", "Fig 7 low, relative rule")
+    cmp("limdd_float_l2_rel", "limdd_qisq2", "Fig 7 L2, relative rule")
 cmp("qisq2_low", "limdd_qisq2", "Fig 8 top: EVDD exact (as 'float') vs LIMDD exact")
 print("== only exact completes / only float completes (LIMDD)")
-for fl in ("limdd_float", "limdd_float_l2"):
+for fl in ("limdd_float", "limdd_float_l2") + (tuple(REL) if HAVE_REL else ()):
     oe = [c for c in rows if stat(c, "limdd_qisq2") == "OK" and stat(c, fl) not in ("OK", "-", "SKIPPED_PREDICTED")]
     of = [(c, stat(c, "limdd_qisq2")) for c in rows if stat(c, fl) == "OK" and stat(c, "limdd_qisq2") not in ("OK", "-", "SKIPPED_PREDICTED")]
     ofw = [(c, s, mf.judge(rows[c], fl, "limdd_qisq2")[0]) for c, s in of]
     print(f"  {fl}: only exact finishes {len(oe)}; only float finishes {len(of)}: {ofw}")
 print("== Fig 8 bottom: LIMDD float vs EVDD float, low and L2")
-for fe, fl in (("float_low", "limdd_float"), ("float_l2", "limdd_float_l2")):
+for fe, fl in (("float_low", "limdd_float"), ("float_l2", "limdd_float_l2")) + \
+              ((("float_low", "limdd_float_rel"), ("float_l2", "limdd_float_l2_rel")) if HAVE_REL else ()):
     both = [c for c in rows if ok(c, fe) and ok(c, fl)]
     lf = sum(1 for c in both if float(rows[c][fl]["simulation_time"]) < float(rows[c][fe]["simulation_time"]))
     ld = sum(1 for c in rows if stat(c, fl) not in ("OK", "-", "SKIPPED_PREDICTED") and stat(c, fe) == "OK")
@@ -70,3 +81,19 @@ print("== exact: LIMDD vs EVDD")
 both = [c for c in rows if ok(c, "qisq2_low") and ok(c, "limdd_qisq2")]
 print("  both", len(both), "LIMDD fewer peak", sum(1 for c in both if float(rows[c]["limdd_qisq2"]["max_nodes"]) < float(rows[c]["qisq2_low"]["max_nodes"])),
       "LIMDD faster", sum(1 for c in both if float(rows[c]["limdd_qisq2"]["simulation_time"]) < float(rows[c]["qisq2_low"]["simulation_time"])))
+
+# the totals the text quotes, per pair of arms: circuits both finish, the
+# exact run faster, equal and fewer final nodes, and wrong float runs
+print("== totals: float against exact, all families drawn")
+pairs = [("float_low", "qisq2_low"), ("float_l2", "qisq2_low"), ("limdd_float", "limdd_qisq2"), ("limdd_float_l2", "limdd_qisq2")]
+if HAVE_REL: pairs += [("limdd_float_rel", "limdd_qisq2"), ("limdd_float_l2_rel", "limdd_qisq2")]
+for fl, ex in pairs:
+    both = [c for c in rows if ok(c, fl) and ok(c, ex)]
+    t = lambda c, a, k: float(rows[c][a][k])
+    runs = [c for c in rows if ok(c, fl)]
+    wrong = sum(1 for c in runs if mf.judge(rows[c], fl, ex)[0] in ("meas", "norm"))
+    print(f"  {fl} vs {ex}: float runs {len(runs)}, wrong {wrong}; both {len(both)}, exact faster "
+          f"{sum(t(c, ex, 'simulation_time') < t(c, fl, 'simulation_time') for c in both)}, same final nodes "
+          f"{sum(t(c, ex, 'final_nodes') == t(c, fl, 'final_nodes') for c in both)}, exact fewer final nodes "
+          f"{sum(t(c, ex, 'final_nodes') < t(c, fl, 'final_nodes') for c in both)}, exact fewer peak nodes "
+          f"{sum(t(c, ex, 'max_nodes') < t(c, fl, 'max_nodes') for c in both)}")

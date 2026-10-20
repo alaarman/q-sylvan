@@ -63,7 +63,9 @@ grey. --float-evdd picks the float EVDD arm of the lower row and of the EVDD
 panels: float_low (the default) or float_l2, the 'L2' normalisation that
 Section 6 calls float. --float-limdd likewise picks the float LIMDD arm of the
 lower row and of the LIMDD panels: limdd_float (the default, low) or
-limdd_float_l2, the LIMDD with every node read at norm 1 (limdd_set_l2).
+limdd_float_l2, the LIMDD with every node read at norm 1 (limdd_set_l2), or
+limdd_float_rel and limdd_float_l2_rel, the same two under the relative
+merging rule (run_arm.sh; the arms of the 19 October rerun).
 """
 import argparse, json, math, os, re, sys, glob
 import matplotlib
@@ -411,8 +413,13 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         xbad, xh = False, None
         if xjudge and xjudge in r: xbad, xh = judge_point(r, xjudge, EXACT[1]); xv = verdict(xbad)
         if (x is not None and x <= 0) or (y is not None and y <= 0):
+            # 0 nodes: drawn at the floor of the log axis. It keeps its verdict:
+            # a LIMDD of 0 nodes is a root edge, which holds a product
+            # stabiliser state (mirror-none-plus_*: |+>^n) as well as the zero
+            # vector, and judge() tells them apart by the norm. Until 19 Oct
+            # 2026 such a point was always drawn wrong.
             if not judge: continue
-            bad = True; yv = "wrong"; nfloor += 1; h = (h or "") + "+floored"
+            nfloor += 1; h = (h or "") + "+floored"
         if h: how[h] = how.get(h, 0) + 1
         if bad: detail.append(f"{short(circ)}:{h}")
         if xbad: detail.append(f"{short(circ)}:x:{xh}")
@@ -579,7 +586,8 @@ def main():
                     help="correctness rule: the amendment's (norm and 5%%) or Section 6's (5%% alone)")
     ap.add_argument("--float-evdd", choices=("float_low", "float_l2"), default="float_low",
                     help="the float EVDD arm of the lower row and the EVDD panels")
-    ap.add_argument("--float-limdd", choices=("limdd_float", "limdd_float_l2"), default="limdd_float",
+    ap.add_argument("--float-limdd", choices=("limdd_float", "limdd_float_l2", "limdd_float_rel", "limdd_float_l2_rel"),
+                    default="limdd_float",
                     help="the float LIMDD arm of the lower row and the LIMDD panels")
     ap.add_argument("--unchecked", choices=("grey", "right"), default="grey",
                     help="a float run with norm 1 and no exact probability to compare with: "
@@ -596,12 +604,14 @@ def main():
     ap.add_argument("--low-label", action="store_true",
                     help="'(low)' after a low float arm in the axis labels, as '(L2)' after an L2 one")
     a = ap.parse_args()
-    global PAIRCOL
+    global PAIRCOL, LIMDD_ARMS
     RULE, UNCHECKED, PAIRCOL = a.rule, a.unchecked, a.pair_wrong_colour
     FE, FL = a.float_evdd, a.float_limdd
+    if FL not in ARMS:                         # a relative-rule arm: read its records too
+        ARMS.append(FL); LIMDD_ARMS = LIMDD_ARMS + (FL,)
     low = " (low)" if a.low_label else ""     # without it the labels stay as the paper has them
     fl = " (L2)" if FE == "float_l2" else low
-    ll = " (L2)" if FL == "limdd_float_l2" else low
+    ll = " (L2)" if FL.startswith("limdd_float_l2") else low
     if a.no_norm_label: fl = ll = ""
     if len(a.paths) < 1: ap.error("need OUTDIR")
     OUT, new = a.paths[-1], a.paths[:-1]

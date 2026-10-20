@@ -10,8 +10,11 @@ author yet.
 this repository, follow `REPRODUCE.md`.**
 
 **The run data is not in this repository.** It is kept with the paper's
-sources, as `reproducibility/exactdd-data-2026-10.tar.xz`, and is available
-from the authors on request. Unpacked, it is the root that every script here
+sources, as `reproducibility/exactdd-data-2026-10-19.tar.xz` (the rerun the
+paper's figures come from since 20 October 2026, tag
+`exactdd-rerun-2026-10-19`) and `exactdd-data-2026-10.tar.xz` (the clean sweep
+of 6-7 October and the older runs, tag `exactdd-clean-sweep-2026-10`), and is
+available from the authors on request. Unpacked, it is the root that every script here
 takes as an argument, called ROOT below; `DATA_README.md` in it lists what it
 holds. Only `run_arm.sh` and `run_trace.sh` run the simulator (`sweep.py`
 schedules them), and they are what made that data. Regenerating the figures and

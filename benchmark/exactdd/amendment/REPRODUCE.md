@@ -20,35 +20,47 @@ the remade figures with the paper's copies.
 
 ## 0. What you need
 
-**The code.** Check out the tag `exactdd-clean-sweep-2026-10` of this
-repository: the commit "limdd: the code of the exact-DD clean sweep of 6-7
-October (bin-lazy6)" plus the scripts.
+**Two datasets.** The paper's figures were made twice. Each dataset has a tag
+with the exact code of its runs and an archive of its runs:
 
-- The paper's runs were made with exactly this code.
-- Later commits fix float LIMDD canonicity, which changes the float LIMDD
-  results and all runtimes.
+| dataset | tag | archive | the paper's figures |
+|---|---|---|---|
+| the rerun of 19-20 October 2026 | `exactdd-rerun-2026-10-19` | `exactdd-data-2026-10-19.tar.xz` | since 20 October |
+| the clean sweep of 6-7 October 2026 | `exactdd-clean-sweep-2026-10` | `exactdd-data-2026-10.tar.xz` | until 20 October |
+
+The rerun's code adds the fixes of 17 October: float LIMDD canonicity, no
+inverse caching for float weights, faster CX/SWAP and stabiliser code, and
+faster exact arithmetic. Exact runs keep their node counts; float results and
+all runtimes change. The rerun also has the float LIMDD under the relative
+merging rule (`limdd_float_rel`, `limdd_float_l2_rel`), which the paper now
+shows: under the absolute rule of Section 6 the float LIMDD is unsound. The
+rerun has no lazy-canonical-form runs.
+
+Use the tag of the dataset you repeat; the commands below are the same for
+both, except where they say otherwise.
 
 ```
 git clone -b limdd https://github.com/alaarman/q-sylvan.git $QSY
-cd $QSY && git checkout exactdd-clean-sweep-2026-10
+cd $QSY && git checkout exactdd-rerun-2026-10-19      # or exactdd-clean-sweep-2026-10
 ```
 
-**The data.** `exactdd-data-2026-10.tar.xz`, kept with the paper's sources in
-`reproducibility/`, or from the authors. Its SHA-256 is in
-`reproducibility/SHA256SUMS` there. Unpacked, it is `$DATA`:
+**The data.** The archives are kept with the paper's sources in
+`reproducibility/`, or are available from the authors. Their SHA-256 sums are
+in `reproducibility/SHA256SUMS` there. Unpacked, an archive is `$DATA`:
 
 ```
-tar xJf exactdd-data-2026-10.tar.xz     # -> exactdd-data/
-DATA=$PWD/exactdd-data
+tar xJf exactdd-data-2026-10-19.tar.xz     # -> exactdd-data-2026-10-19/
+DATA=$PWD/exactdd-data-2026-10-19
 ```
 
-What is in the archive:
+What is in an archive:
 
 - every circuit;
-- every run of the clean sweep (`.status`, `.json`, `.out`), with its audit and
-  logs;
-- the older runs that `regen_amendment.sh` reads for the 2026-10-01 revision;
-- the source diff of the build.
+- every run of its sweep (`.status`, `.json`, `.out`), with the sweep's audit
+  and logs;
+- the source diff of the build;
+- in the clean sweep's archive also the older runs that `regen_amendment.sh`
+  reads for the 2026-10-01 revision.
 
 `$DATA/DATA_README.md` lists the layout.
 
@@ -162,9 +174,17 @@ default timeout of 1800 s. These are the paper's six arms:
 | `limdd_float` | LIMDD | float, low | `--dd=limdd -e float -s low --merging=abs -t 1e-14` |
 | `limdd_float_l2` | LIMDD | float, L2 | `--dd=limdd -e float -s l2 --merging=abs -t 1e-14` |
 
-`run_arm.sh` knows more arms (`limdd_lazy`, `limdd_qisq2_lazy`, and others for
-later work); its header lists them. Leave `QSY_AMP_SAMPLE` and `QSY_AMP_AT`
-unset: the runner of this tag does not have the options they switch on.
+The rerun adds two arms, which the paper's float LIMDD panels show since 20
+October:
+
+| arm | diagram | weights | flags |
+|---|---|---|---|
+| `limdd_float_rel` | LIMDD | float, low | `--dd=limdd -e float -s low --merging=hybrid --rel-tol 1e-12 --zero-tol 0` |
+| `limdd_float_l2_rel` | LIMDD | float, L2 | `--dd=limdd -e float -s l2 --merging=hybrid --rel-tol 1e-12 --zero-tol 0` |
+
+`run_arm.sh` knows more arms (`limdd_lazy`, `limdd_qisq2_lazy`, BQD arms); its
+header lists them. With the clean sweep's tag, leave `QSY_AMP_SAMPLE` and
+`QSY_AMP_AT` unset: that runner does not have the options they switch on.
 
 In the JSON:
 
@@ -187,8 +207,15 @@ traces. It is the driver that made the paper's runs, kept as
 ```
 cd $QSY/benchmark/exactdd/amendment
 ./sweep.py $DATA /path/to/OUT --dry      # the plan
-./sweep.py $DATA /path/to/OUT > sweep.log
+./sweep.py $DATA /path/to/OUT > sweep.log                                   # the clean sweep
+./sweep.py $DATA /path/to/OUT --phases A,T,B,C \
+   --arms qisq2_low,float_low,float_l2,limdd_qisq2,limdd_float,limdd_float_l2,limdd_float_rel,limdd_float_l2_rel \
+   > sweep.log                                                              # the rerun
 ```
+
+The rerun ran the LIMDD arms first (with an earlier copy of this driver,
+`$DATA/sweep/sweep_limdd.py`) and the EVDD arms after, on the same build; the
+runs do not depend on the order.
 
 It writes `OUT` in the data layout, so `OUT` can be given to the figure
 scripts:
@@ -274,7 +301,7 @@ The paper's sweep has the same file as `$DATA/sweep/clean_audit.csv`.
   or another verdict. Section 9 has a check that counts how many do.
 - **Runtimes**: those of the machine.
 
-This was checked by repeating 110 runs from a fresh clone: 14 circuits from
+For the clean sweep's tag this was checked by repeating 110 runs from a fresh clone: 14 circuits from
 every family, every arm, and two traces, one of them above 64 qubits.
 `checks/compare_sweeps.py` compared them with the stored runs:
 
@@ -318,8 +345,11 @@ PY=$PWD/venv-plot/bin/python PY_TCOUNT=$PWD/venv-tcount/bin/python \
 #   compared with $PAPER/figures: 36 same, 0 differ, 0 not in the paper
 ```
 
-`ROOT` is either `$DATA` or a sweep's `OUT`. `/tmp/figs/figures/` then holds
-the paper's figure files:
+`ROOT` is either `$DATA` or a sweep's `OUT`. Where `ROOT` has the
+relative-rule arms (the rerun), the float LIMDD panels use them, as the paper
+does since 20 October; `FLOAT_LIMDD=abs` takes the absolute-rule arms
+instead, and the other rule's panels go to `/tmp/figs/figures_alt/`.
+`/tmp/figs/figures/` then holds the paper's figure files:
 
 | paper | file in `figures/` |
 |---|---|
@@ -383,19 +413,27 @@ Run these with the plotting Python. `ROOT` is `$DATA` or a sweep's `OUT`.
 
 - **The exact arms agree.** `make_figures.py` prints `exact arms agree on the
   top-qubit probability on N/N circuits` into `/tmp/figs/paper_limdd2.out`.
-  The paper's runs give 145 of 145.
+  The clean sweep gives 145 of 145, the rerun 149 of 149.
 - **The counts in the text.** `checks/family_stats.py ROOT`, also written by
   `make_paper_figures.sh` to `paper_family_stats.out`. Per family and per pair
   of arms (low and L2), it gives:
   - the wrong runs;
   - the faster runs;
   - the runs that did not finish;
-  - the circuits where only the exact or only the float run finishes.
+  - the circuits where only the exact or only the float run finishes;
+  - where `ROOT` has them, the same for the relative-rule arms, and at the end
+    the totals the text quotes (float runs, wrong runs, exact faster, same
+    final nodes).
 - **A repeat against the paper's runs.**
   `checks/compare_sweeps.py $DATA OUT [FAMILIES]`. For each arm it gives:
   - the runs that finish in each sweep;
   - whether the exact arms keep their node counts (they must);
   - the time ratio between the two sweeps.
+- **The rerun against the clean sweep.**
+  `checks/compare_sweeps.py $CLEAN $RERUN`, with the two unpacked archives:
+  every exact run that finishes in both has the same node counts (165 EVDD,
+  164 LIMDD); the float EVDD under L2 is unchanged, the float arms with low
+  normalisation are not.
 - **The clean sweep against the runs of 5 October.**
   `checks/compare_sweeps.py --paper5 $DATA`. These are the runs behind the
   figures before the clean sweep. The exact runs have identical node counts on
