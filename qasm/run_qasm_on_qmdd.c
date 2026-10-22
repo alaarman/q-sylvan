@@ -24,6 +24,7 @@
 #include "qsylvan_limdd_ops.h"
 #include "qsylvan_limdd_gc.h"
 #include "qsylvan_limdd_inspect.h"
+#include "sylvan_edge_weights_qisq2.h"
 #include "qsylvan_bqd.h"
 #include "qsylvan_bqd_ops.h"
 #include "qsylvan_bqd_gates.h"
@@ -117,7 +118,7 @@ static struct argp_option options[] =
     {"lim-stats", 1009, 0, 0, "For limdd: report the Pauli support of the high-edge LIM per level, to size an inline encoding", 0},
     {"count-qisq-size", 'q', 0, 0, "Count the number of bits of the largest qisq value", 0},
     {"calc-measurement-prob", 'm', 0, 0, "Calculate the probability on a specific outcome of the final state", 0},
-    {"state-vector", 'v', 0, 0, "Also output the complete state vector", 0},
+    {"state-vector", 'v', 0, 0, "Also output the complete state vector. With -e qisq2 it is output a second time exactly, as state_vector_exact: per amplitude a + b sqrt2 + i(c + d sqrt2) the rationals [a, b, c, d], as strings", 0},
     {"node-tab-size", 1000, "<size>", 0, "log2 of max node table size (max 40)", 0},
     {"lim-tab-size", 1012, "<size>", 0, "With -d limdd, limdd-heur or bqd: log2 of the LIM table size. Default is four times the node table, and sixteen times with --bqd-family pauli. A LIMDD mints far more labels than it keeps, and so does a BQD with x or pauli labels, so this is what fills first on wide circuits; it has no QMDD counterpart, so raising it does not change how a QMDD is resourced. With --bqd-family x or pauli the Pauli-word table gets the same size, since there every label product can make a new word.", 0},
     {"wgt-tab-size", 1001, "<size>", 0, "log2 of max edge weigth table size (max 30 (23 if node table >2^30))", 0},
@@ -333,6 +334,21 @@ fprint_json_double(FILE *stream, const char *fmt, double v)
     else fprintf(stream, "null");
 }
 
+/* -v with -e qisq2: an amplitude a + b sqrt2 + i(c + d sqrt2) exactly, as
+ * the four rationals [a, b, c, d], in strings, which JSON numbers cannot be. */
+static void
+fprint_json_qisq2(FILE *stream, EVBDD_WGT w)
+{
+    qisq2_t *x = weight_qisq2_malloc();
+    weight_value(w, x);
+    fprintf(stream, "[\"");
+    mpq_out_str(stream, 10, x->a); fprintf(stream, "\", \"");
+    mpq_out_str(stream, 10, x->b); fprintf(stream, "\", \"");
+    mpq_out_str(stream, 10, x->c); fprintf(stream, "\", \"");
+    mpq_out_str(stream, 10, x->d); fprintf(stream, "\"]");
+    weight_qisq2_free(x);
+}
+
 void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
 {
     fprintf(stream, "{\n");
@@ -358,6 +374,25 @@ void fprint_stats(FILE *stream, quantum_circuit_t* circuit)
             free(x);
         }
         fprintf(stream, "  ],\n");
+        if (wgt_table_type == QISQ2_MAP) {
+            fprintf(stream, "  \"state_vector_exact\": [\n");
+            for (int k = 0; k < (1<<(circuit->qreg_size)); k++) {
+                bool *x = int_to_bitarray(k, circuit->qreg_size, !(circuit->reversed_qubit_order));
+                EVBDD_WGT w;
+                if (dd_kind == DD_QMDD) {
+                    /* as qmdd_get_amplitude_qisq2 */
+                    reverse_bit_array(x, circuit->qreg_size);
+                    w = evbdd_getvalue(stats.final_state, x);
+                } else {
+                    w = final_vector[k];
+                }
+                fprintf(stream, "    ");
+                fprint_json_qisq2(stream, w);
+                fprintf(stream, k == (1<<(circuit->qreg_size))-1 ? "\n" : ",\n");
+                free(x);
+            }
+            fprintf(stream, "  ],\n");
+        }
     }
     if (amp_count > 0) {
         fprintf(stream, "  \"amp_points\": [");
