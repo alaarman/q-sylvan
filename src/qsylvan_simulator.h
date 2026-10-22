@@ -293,9 +293,10 @@ TASK_DECL_3(QMDD, qmdd_gate, QMDD, gate_id_t, BDDVAR);
  * Applies given controlled gate to |q>. When controls !<= target, the total
  * number of qubits needs to be passed as last argument.
 */
-#define qmdd_cgate(state,gate,c,t,...) _qmdd_cgate(state,gate,c,EVBDD_INVALID_VAR,EVBDD_INVALID_VAR,t,(0, ##__VA_ARGS__))
-#define qmdd_cgate2(state,gate,c1,c2,t,...) (_qmdd_cgate(state,gate,c1,c2,EVBDD_INVALID_VAR,t,(0, ##__VA_ARGS__)))
-#define qmdd_cgate3(state,gate,c1,c2,c3,t,...) (_qmdd_cgate(state,gate,c1,c2,c3,t,(0, ##__VA_ARGS__)))
+#define _qmdd_cgate_n(_,n,...) n // picks the optional last argument, default 0
+#define qmdd_cgate(state,gate,c,t,...) _qmdd_cgate(state,gate,c,EVBDD_INVALID_VAR,EVBDD_INVALID_VAR,t,_qmdd_cgate_n(0, ##__VA_ARGS__, 0))
+#define qmdd_cgate2(state,gate,c1,c2,t,...) (_qmdd_cgate(state,gate,c1,c2,EVBDD_INVALID_VAR,t,_qmdd_cgate_n(0, ##__VA_ARGS__, 0)))
+#define qmdd_cgate3(state,gate,c1,c2,c3,t,...) (_qmdd_cgate(state,gate,c1,c2,c3,t,_qmdd_cgate_n(0, ##__VA_ARGS__, 0)))
 QMDD _qmdd_cgate(QMDD state, gate_id_t gate, BDDVAR c1, BDDVAR c2, BDDVAR c3, BDDVAR t, BDDVAR n);
 TASK_DECL_4(QMDD, qmdd_cgate, QMDD, gate_id_t, BDDVAR*, BDDVAR);
 
