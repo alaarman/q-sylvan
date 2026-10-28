@@ -31,10 +31,10 @@ with the exact code of its runs and an archive of its runs:
 The rerun's code adds the fixes of 17 October: float LIMDD canonicity, no
 inverse caching for float weights, faster CX/SWAP and stabiliser code, and
 faster exact arithmetic. Exact runs keep their node counts; float results and
-all runtimes change. The rerun also has the float LIMDD under the relative
-merging rule (`limdd_float_rel`, `limdd_float_l2_rel`), which the paper now
-shows: under the absolute rule of Section 6 the float LIMDD is unsound. The
-rerun has no lazy-canonical-form runs.
+all runtimes change. The rerun also has two arms the paper does not use, the
+float LIMDD under a relative merging rule (`limdd_float_rel`,
+`limdd_float_l2_rel`); the paper's float EVDD and float LIMDD both use the
+absolute tolerance of Section 6. The rerun has no lazy-canonical-form runs.
 
 Use the tag of the dataset you repeat; the commands below are the same for
 both, except where they say otherwise.
@@ -174,13 +174,21 @@ default timeout of 1800 s. These are the paper's six arms:
 | `limdd_float` | LIMDD | float, low | `--dd=limdd -e float -s low --merging=abs -t 1e-14` |
 | `limdd_float_l2` | LIMDD | float, L2 | `--dd=limdd -e float -s l2 --merging=abs -t 1e-14` |
 
-The rerun adds two arms, which the paper's float LIMDD panels show since 20
-October:
+The rerun adds two arms that the paper does not use:
 
 | arm | diagram | weights | flags |
 |---|---|---|---|
 | `limdd_float_rel` | LIMDD | float, low | `--dd=limdd -e float -s low --merging=hybrid --rel-tol 1e-12 --zero-tol 0` |
 | `limdd_float_l2_rel` | LIMDD | float, L2 | `--dd=limdd -e float -s l2 --merging=hybrid --rel-tol 1e-12 --zero-tol 0` |
+
+**Settings that differ between the diagrams.** The runner's defaults give
+the two diagrams different table sizes, in both datasets. Every run's JSON
+records them (`min_cache_size`, `max_cache_size`, `min_wgt_tab_size`):
+
+| setting | EVDD | LIMDD |
+|---|---|---|
+| operation cache | 2^16 entries | 2^20 entries |
+| weight table | 2^23 entries, grown to 2^24 at a collection | 2^24 entries from the start |
 
 `run_arm.sh` knows more arms (`limdd_lazy`, `limdd_qisq2_lazy`, BQD arms); its
 header lists them. With the clean sweep's tag, leave `QSY_AMP_SAMPLE` and
@@ -339,16 +347,18 @@ layout:
 
 ```
 cd $QSY/benchmark/exactdd/amendment
-PY=$PWD/venv-plot/bin/python PY_TCOUNT=$PWD/venv-tcount/bin/python \
+FLOAT_LIMDD=abs PY=$PWD/venv-plot/bin/python PY_TCOUNT=$PWD/venv-tcount/bin/python \
   ./make_paper_figures.sh $DATA /tmp/figs $PAPER
-#   36 figures in /tmp/figs/figures
+#   36 figures in /tmp/figs/figures (float LIMDD: abs rule)
 #   compared with $PAPER/figures: 36 same, 0 differ, 0 not in the paper
 ```
 
-`ROOT` is either `$DATA` or a sweep's `OUT`. Where `ROOT` has the
-relative-rule arms (the rerun), the float LIMDD panels use them, as the paper
-does since 20 October; `FLOAT_LIMDD=abs` takes the absolute-rule arms
-instead, and the other rule's panels go to `/tmp/figs/figures_alt/`.
+`ROOT` is either `$DATA` or a sweep's `OUT`. The float LIMDD panels use the
+absolute-rule arms (`limdd_float`, `limdd_float_l2`), as the paper does.
+`FLOAT_LIMDD=rel` takes the relative-rule arms instead, where `ROOT` has
+them, and the other rule's panels go to `/tmp/figs/figures_alt/`. At the tag
+`exactdd-rerun-2026-10-19` the default was `rel`; pass `FLOAT_LIMDD=abs`
+there to get the paper's figures.
 `/tmp/figs/figures/` then holds the paper's figure files:
 
 | paper | file in `figures/` |
@@ -421,9 +431,9 @@ Run these with the plotting Python. `ROOT` is `$DATA` or a sweep's `OUT`.
   - the faster runs;
   - the runs that did not finish;
   - the circuits where only the exact or only the float run finishes;
-  - where `ROOT` has them, the same for the relative-rule arms, and at the end
-    the totals the text quotes (float runs, wrong runs, exact faster, same
-    final nodes).
+  - at the end, the totals of each pair of arms (float runs, wrong runs, exact
+    faster, same final nodes); where `ROOT` has the relative-rule arms, also
+    their counts, which the paper does not use.
 - **A repeat against the paper's runs.**
   `checks/compare_sweeps.py $DATA OUT [FAMILIES]`. For each arm it gives:
   - the runs that finish in each sweep;

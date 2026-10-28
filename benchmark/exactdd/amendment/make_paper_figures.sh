@@ -17,12 +17,13 @@
 #   PY_TCOUNT  the one of the T-count figure (requirements-plot-tcount.txt);
 #              default PY. With other versions the figures show the same
 #              data but are not byte-identical to the paper's.
-# FLOAT_LIMDD  the float LIMDD of the LIMDD panels: rel, the relative merging
-#              rule (run_arm.sh limdd_float_rel and limdd_float_l2_rel; the
-#              paper since the rerun of 19 Oct 2026), or abs, the absolute
-#              rule of Section 6's float (limdd_float, limdd_float_l2; the
-#              paper before). Default rel where ROOT has those runs, else abs.
-#              The other one, where ROOT has it, goes to OUTDIR/figures_alt/.
+# FLOAT_LIMDD  the float LIMDD of the LIMDD panels: abs (the default, and the
+#              paper's), the absolute tolerance the float EVDD uses too
+#              (run_arm.sh limdd_float, limdd_float_l2), so that the two
+#              diagrams differ in nothing else; or rel, the relative merging
+#              rule (limdd_float_rel, limdd_float_l2_rel; only where ROOT has
+#              those runs, as the rerun of 19 Oct 2026 does). The other one,
+#              where ROOT has it, goes to OUTDIR/figures_alt/.
 #
 # The figures, and where they come from:
 #   figures/final_plots_mm-(in)correct2/pooled_*  Figure 6's EVDD panels and
@@ -49,7 +50,7 @@ export AMEND_FAMILIES=${AMEND_FAMILIES:-random,grover,wstate,mirror,iqp,groverit
 export PYTHONDONTWRITEBYTECODE=1
 [ -d "$ROOT/amend/out_clean" ] || { echo "$ROOT/amend/out_clean is missing" >&2; exit 1; }
 HAVE_REL=0; ls "$ROOT"/amend/out_clean/*_limdd_float_rel.status > /dev/null 2>&1 && HAVE_REL=1
-FLOAT_LIMDD=${FLOAT_LIMDD:-$([ $HAVE_REL -eq 1 ] && echo rel || echo abs)}
+FLOAT_LIMDD=${FLOAT_LIMDD:-abs}
 case $FLOAT_LIMDD in
   rel) [ $HAVE_REL -eq 1 ] || { echo "FLOAT_LIMDD=rel, but $ROOT has no limdd_float_rel runs" >&2; exit 1; } ;;
   abs) ;;
