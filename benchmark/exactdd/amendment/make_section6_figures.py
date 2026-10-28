@@ -126,7 +126,7 @@ def panel(rows, fails, fam, field, lab, path):
             axis.set_minor_locator(FixedLocator(
                 [t for t in LogLocator(subs=range(2, 10)).tick_values(lo, hi) if lo <= t <= hi]))
             axis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel(f"{lab} float{TAGLAB}"); ax.set_ylabel(f"{lab} algebraic")
+    ax.set_xlabel(f"{lab} float EVDD{TAGLAB}"); ax.set_ylabel(f"{lab} algebraic EVDD")
     edge = 1.0                                 # keep the legend out of the band
     if anyfail: edge = math.log(F / gap ** 0.5 / lo) / math.log(top / lo)
     ax.legend(loc="best", bbox_to_anchor=(0.0, 0.0, edge, edge),   # where it hides the fewest points
@@ -173,7 +173,7 @@ def main():
     pooled = []
     for fname, field, lab in QUANT:
         pooled.append("pooled_" + fname.replace("float_vs", tag))
-        mf.scatter(rows, FLOAT, EXACT, field, f"{lab} float{TAGLAB}", f"{lab} algebraic", pooled[-1],
+        mf.scatter(rows, FLOAT, EXACT, field, f"{lab} float EVDD{TAGLAB}", f"{lab} algebraic EVDD", pooled[-1],
                    judge=FLOAT, fails=fails, fams=POOLED, split=True)
     mf.split_legend("pooled_legend_" + "float_vs_algebraic_nw.pdf".replace("float_vs", tag), pooled)
 
