@@ -18,8 +18,13 @@
 # limdd_qisq2_lazy = LIMDD qisq2 low, lazy canonical form
 # bqd_scalar, bqd_x, bqd_pauli = BQD qisq2 in that label family, zero rule SM
 #               (the default); circuits on more than 63 qubits get status SKIP
-# Every arm adds -c -m -w 1 --node-tab-size=25 --wgt-tab-size=24; the timeout
-# defaults to 30 minutes. limtab adds --lim-tab-size=<limtab> to the LIMDD arms
+# Every arm adds -c -m -w 1 --node-tab-size=25 --wgt-tab-size=24, and every
+# QMDD and LIMDD arm --cache-size=20 --wgt-tab-fixed: a 2^20 operation cache
+# and the whole 2^24 weight table from the start, the LIMDD's defaults, so
+# that the EVDD and LIMDD arms differ in the diagram alone (since 28 Oct
+# 2026; before, a QMDD ran with the runner's defaults, a 2^16 cache and a
+# table starting at 2^23). The BQD arms keep the runner's growing cache. The
+# timeout defaults to 30 minutes. limtab adds --lim-tab-size=<limtab> to the LIMDD arms
 # (no run of the 2026-10-01 revision used it).
 #
 # Runners, from the environment:
@@ -55,6 +60,7 @@ base=$(basename "$C" .qasm)
 nq=$(grep -oE 'qreg [a-zA-Z_0-9]+\[[0-9]+\]' "$C" | grep -oE '\[[0-9]+\]' | tr -d '[]' | paste -sd+ - | bc)
 [ -n "$nq" ] || { echo "no qreg in $C" >&2; exit 2; }
 SIZES="-c -m -w 1 --node-tab-size=25 --wgt-tab-size=24"
+case $arm in bqd_*) ;; *) SIZES="$SIZES --cache-size=20 --wgt-tab-fixed" ;; esac
 [ -n "$LIMTAB" ] && case $arm in limdd_*) SIZES="$SIZES --lim-tab-size=$LIMTAB";; esac
 A=${QSY_W1:?set QSY_W1 to run_qasm_on_qmdd of the LIMDD_PAULI_WORDS=1 build}
 W2() { echo "${QSY_W2:?set QSY_W2 to run_qasm_on_qmdd of the LIMDD_PAULI_WORDS=2 build}"; }

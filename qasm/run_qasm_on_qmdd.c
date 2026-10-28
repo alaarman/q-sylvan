@@ -43,6 +43,7 @@ static size_t max_tablesize = 1LL<<25;
 static size_t min_cachesize = 1LL<<16;
 static size_t max_cachesize = 1LL<<16;
 static bool cache_size_set = false;
+static bool wgt_tab_fixed = false;      /* --wgt-tab-fixed */
 static size_t min_wgt_tab_size = 1LL<<23;
 static size_t max_wgt_tab_size = 1LL<<23;
 static double tolerance = 1e-14;
@@ -122,6 +123,7 @@ static struct argp_option options[] =
     {"node-tab-size", 1000, "<size>", 0, "log2 of max node table size (max 40)", 0},
     {"lim-tab-size", 1012, "<size>", 0, "With -d limdd, limdd-heur or bqd: log2 of the LIM table size. Default is four times the node table, and sixteen times with --bqd-family pauli. A LIMDD mints far more labels than it keeps, and so does a BQD with x or pauli labels, so this is what fills first on wide circuits; it has no QMDD counterpart, so raising it does not change how a QMDD is resourced. With --bqd-family x or pauli the Pauli-word table gets the same size, since there every label product can make a new word.", 0},
     {"wgt-tab-size", 1001, "<size>", 0, "log2 of max edge weigth table size (max 30 (23 if node table >2^30))", 0},
+    {"wgt-tab-fixed", 1020, 0, 0, "Allocate the whole weight table (--wgt-tab-size) from the start, as -d limdd and -d bqd always do. Without it a QMDD's table starts at 2^23 and doubles at a collection, up to --wgt-tab-size. With --cache-size=20 it gives a QMDD the tables of a LIMDD, so that the two differ in nothing else.", 0},
     {"reorder", 1002, 0, 0, "Reorders the qubits once such that (most) controls occur before targets in the variable order.", 0},
     {"reorder-swaps", 1003, 0, 0, "Reorders the qubits such that all controls occur before targets (requires inserting SWAP gates).", 0},
     {"disable-inv-caching", 1004, 0, 0, "Disable storing inverse of MUL and DIV in cache.", 0},
@@ -273,6 +275,9 @@ parse_opt(int key, char *arg, struct argp_state *state)
         break;
     case 1019:
         amp_at_file = arg;
+        break;
+    case 1020:
+        wgt_tab_fixed = true;
         break;
     case ARGP_KEY_ARG:
         if (state->arg_num >= 1) argp_usage(state);
@@ -1463,7 +1468,7 @@ int main(int argc, char *argv[])
      * rand_n20_d700 fails at every maximum up to 2^28; starting at 2^24 it
      * finishes in 53s.
      */
-    if (dd_kind != DD_QMDD) {
+    if (dd_kind != DD_QMDD || wgt_tab_fixed) {
         min_wgt_tab_size = max_wgt_tab_size;
     }
 
