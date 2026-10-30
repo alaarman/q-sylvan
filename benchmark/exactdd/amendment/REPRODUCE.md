@@ -325,8 +325,11 @@ archive with the pinned Python environments (section 8).
 
 On 9 synthesised and quantum-walk circuits, no exact run (EVDD or LIMDD) gives
 a probability. They time out, or in one case the exact coefficients overflow a
-double. For these 9 circuits only, the float runs are judged against a
-double-precision state-vector simulation.
+double. Since 30 Oct 2026 the figures leave the measurement of these float
+runs unchecked (drawn grey; their norm is still checked). With `REFERENCE=1`
+in the environment, `regen_amendment.sh`, `make_paper_figures.sh` and
+`checks/family_stats.py` judge them against a double-precision state-vector
+simulation instead, as the figures of 19-29 October did.
 
 - Script: `reference_probs.py`. Qiskit parses the circuit, and a sparse state
   vector keeps only the nonzero amplitudes.

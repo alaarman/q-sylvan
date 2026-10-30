@@ -45,6 +45,12 @@ When no exact arm finished, or the float record carries no probability (the
 run_gw.sh status lines), only the norm can be checked: if it is 1, the
 measurement is not checked and the run is drawn grey, as Figures 6 to 8
 (make_section6_figures.py) draw it. Both scripts judge through judge() below.
+Since 30 Oct 2026 the panels colour four verdicts apart (kind()): red when
+only the measurement is wrong, violet when the norm is wrong and the
+measurement right or not checked, orange when both are wrong, grey when the
+norm is right and the measurement not checked; in LIMDD against EVDD the fill
+is the float LIMDD's verdict and the edge the float EVDD's. A run with 0 nodes
+sits in a band below the data, in the earlier look too.
 --unchecked right counts such a run as correct instead, as the figures of the
 2026-10-01 revision did (regen_amendment.sh passes it for those), and keeps
 that revision's legend.
@@ -333,6 +339,23 @@ def failures(recs):
             if rec["status"] != "OK" and rec["status"] not in NOT_RUN
             and family_of(k[0]) is not None}
 
+def kinds():
+    """True when the panels colour the four verdicts of kind() apart (the
+    paper's figures since 30 Oct 2026); --unchecked right and --rule section6
+    keep the earlier look."""
+    return UNCHECKED == "grey" and RULE != "section6"
+
+KIND_COL = {"meas": "tab:red", "norm": NORMCOL, "both": "tab:orange", "unjudged": GREY}
+
+def kind(r, arm, ref):
+    """judge()'s verdict as the panels colour it: 'meas' (measurement wrong,
+    norm right), 'norm' (norm wrong, measurement right or not checked), 'both'
+    (measurement and norm wrong), 'unjudged' (norm right, measurement not
+    checked: no exact run to compare with) or 'right'."""
+    v, how = judge(r, arm, ref)
+    if v == "meas" and how == "norm!=1": return "both"
+    return "unjudged" if v == "unchecked" else v
+
 def colours(y, x, split=False):
     """y, x: 'wrong', 'right', 'unjudged', or None where the panel judges no
     such float run; a split panel's y can also be 'norm' (only the norm is
@@ -341,7 +364,18 @@ def colours(y, x, split=False):
     grey when not judged, none when it did not finish. Edge: the x arm's float
     run, where the panel judges one (the lower row), orange when wrong, grey
     when not judged; otherwise the edge goes with the fill, and is grey for a
-    float run that did not finish."""
+    float run that did not finish.
+    With kinds(), y and x are kind()'s verdicts (or 'failed'), and fill and
+    edge take the same colours: red, violet, orange and grey for 'meas',
+    'norm', 'both' and 'unjudged'; a right x run has a blue edge, and one
+    that did not finish ('failed') a grey one."""
+    if kinds():
+        face = KIND_COL.get(y, "none")
+        if x is not None: edge = GREY if x == "failed" else KIND_COL.get(x, "tab:blue")
+        elif face != "none": edge = face
+        elif y == "failed": edge = GREY
+        else: edge = "tab:blue"
+        return face, edge
     face = {"wrong": "tab:red" if split else PAIRCOL, "norm": NORMCOL, "unjudged": GREY}.get(y, "none")
     if x == "wrong": edge = "tab:orange"
     elif x == "unjudged": edge = GREY
@@ -372,6 +406,19 @@ def band(ax, lo, F, gap, top, nboth, fs):
         ax.text(F / gap ** 0.35, F * gap ** 0.18, f"{nboth}", fontsize=fs, color="0.35",
                 ha="right", va="bottom")
 
+def zero_band(ax, lo, Z, gap, bot, zx, zy, fs):
+    """The shaded band below the data of the runs with 0 nodes, on the axes
+    that have one: its dotted line at Z and its label."""
+    if zx:
+        ax.axvspan(bot, Z * gap ** 0.5, color="0.94", lw=0, zorder=0)
+        ax.axvline(Z, ls=(0, (1, 1.5)), color="0.45", lw=0.7, zorder=1)
+        ax.text(Z / gap ** 0.18, lo * 1.2, "0 nodes", fontsize=fs, color="0.35",
+                rotation=90, ha="right", va="bottom")
+    if zy:
+        ax.axhspan(bot, Z * gap ** 0.5, color="0.94", lw=0, zorder=0)
+        ax.axhline(Z, ls=(0, (1, 1.5)), color="0.45", lw=0.7, zorder=1)
+        ax.text(lo * 1.2, Z / gap ** 0.18, "0 nodes", fontsize=fs, color="0.35", va="top")
+
 def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=None,
             fails=None, xjudge=None, fams=None, split=False):
     """One panel. fams keeps only those families. split (float against
@@ -382,6 +429,7 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
     split = split and UNCHECKED == "grey"      # --unchecked right keeps the revision's look
     pts = {}          # (family, face, edge) -> ([x],[y]); None for a failed arm
     nfloor = 0
+    vk = {"y": {}, "x": {}}             # how many points per verdict, for the report
     how = {}          # how each judged point was judged
     perfam = {}       # family -> [points, wrong]
     detail = []       # (circuit, how) of every point drawn red, for -v
@@ -408,18 +456,22 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         bad, h = False, None
         if judge and judge in r:
             bad, h = judge_point(r, judge, ref); yv = verdict(bad)
-            if split and bad and norm_only(r, judge, ref): yv = "norm"
+            if kinds(): yv = kind(r, judge, ref)
+            elif split and bad and norm_only(r, judge, ref): yv = "norm"
         elif split and judge and (circ, judge) in fails: yv = "failed"
         xbad, xh = False, None
-        if xjudge and xjudge in r: xbad, xh = judge_point(r, xjudge, EXACT[1]); xv = verdict(xbad)
+        if xjudge and xjudge in r:
+            xbad, xh = judge_point(r, xjudge, EXACT[1])
+            xv = kind(r, xjudge, EXACT[1]) if kinds() else verdict(xbad)
+        elif xjudge and kinds() and (circ, xjudge) in fails: xv = "failed"
         if (x is not None and x <= 0) or (y is not None and y <= 0):
-            # 0 nodes: drawn at the floor of the log axis. It keeps its verdict:
+            # 0 nodes: drawn in a band below the data. It keeps its verdict:
             # a LIMDD of 0 nodes is a root edge, which holds a product
             # stabiliser state (mirror-none-plus_*: |+>^n) as well as the zero
             # vector, and judge() tells them apart by the norm. Until 19 Oct
-            # 2026 such a point was always drawn wrong.
-            if not judge: continue
-            nfloor += 1; h = (h or "") + "+floored"
+            # 2026 such a point was always drawn wrong; until 30 Oct it was
+            # clipped by the axis (and dropped from the exact panels).
+            nfloor += 1; h = (h or "") + "+zero"
         if h: how[h] = how.get(h, 0) + 1
         if bad: detail.append(f"{short(circ)}:{h}")
         if xbad: detail.append(f"{short(circ)}:x:{xh}")
@@ -430,29 +482,37 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
         face, edge = colours(yv, xv, split)
         drawn = DRAWN.setdefault(fname, (set(), set()))
         drawn[0].add(r["_fam"]); drawn[1].add(yv or "right")
+        if xv: drawn[1].add(xv)
+        vk["y"][yv] = vk["y"].get(yv, 0) + 1; vk["x"][xv] = vk["x"].get(xv, 0) + 1
         pts.setdefault((r["_fam"], face, edge), ([], []))
         pts[(r["_fam"], face, edge)][0].append(x); pts[(r["_fam"], face, edge)][1].append(y)
     allv = [v for (xs, ys) in pts.values() for v in xs + ys if v is not None and v > 0]
     if not allv: print(f"  {fname}: no data"); return
-    floor = min(allv) * 0.35
     lo, hi = min(allv) * 0.5, max(allv) * 2.0
     anyfail = any(nfail.values())
     gap = 10 ** (0.08 * math.log10(hi / lo))  # the band of the runs that did not finish: 8% of an axis
     F = hi * gap                               # its dashed line
     top = F * gap if anyfail else hi
+    zx = any(v is not None and v <= 0 for xs, _ in pts.values() for v in xs)
+    zy = any(v is not None and v <= 0 for _, ys in pts.values() for v in ys)
+    Z = lo / gap                               # the dotted line of the runs with 0 nodes
+    bot = Z / gap
 
     fig, ax = plt.subplots(figsize=(2.9, 2.6))
     ax.plot([lo, hi], [lo, hi], color="0.6", lw=0.8, zorder=1)
     if anyfail:
         band(ax, lo, F, gap, top, nfail["both"], 5.5)
+    zero_band(ax, lo, Z, gap, bot, zx, zy, 5.5)
+    plain = ("none", "tab:blue", GREY)
     for (fam, face, edge), (xs, ys) in sorted(pts.items()):
-        xs = [F if v is None else (v if v > 0 else floor) for v in xs]
-        ys = [F if v is None else (v if v > 0 else floor) for v in ys]
+        xs = [F if v is None else (v if v > 0 else Z) for v in xs]
+        ys = [F if v is None else (v if v > 0 else Z) for v in ys]
         ax.scatter(xs, ys, s=20, marker=MARK[fam], facecolors=face, edgecolors=edge,
-                   linewidths=0.9, zorder=3 + (face != "none") + (edge == "tab:orange"))
+                   linewidths=1.1 if xjudge and kinds() else 0.9,
+                   zorder=3 + (face != "none") + (edge not in plain and edge != face))
     ax.set_xscale("log"); ax.set_yscale("log")
-    ax.set_xlim(lo, top); ax.set_ylim(lo, top)
-    if anyfail:                                # no tick labels in the band of the dashed lines
+    ax.set_xlim(bot if zx else lo, top); ax.set_ylim(bot if zy else lo, top)
+    if anyfail or zx or zy:                    # no tick labels in the bands
         from matplotlib.ticker import FixedLocator, LogLocator, NullFormatter
         for axis in (ax.xaxis, ax.yaxis):
             axis.set_major_locator(FixedLocator([t for t in LogLocator().tick_values(lo, hi) if lo <= t <= hi]))
@@ -474,8 +534,14 @@ def scatter(rows, xarm, yarm, field, xlabel, ylabel, fname, judge=None, truth=No
     fl = (f"; did not finish: x {nfail['x']}, y {nfail['y']}, both {nfail['both']}" if anyfail else "")
     njs = (f", {nj['y']} not judged" if nj["y"] else "") + (f", {nj['x']} x not judged" if nj["x"] else "")
     sp = f" (of which {nn} norm only), {nfl} float did not finish" if split else ""
+    if kinds():                                # the verdicts by colour: fill for y, edge for x
+        cnt = lambda side, k: vk["y" if side == 1 else "x"].get(k, 0)
+        ks = lambda side: ", ".join(f"{k} {cnt(side, k)}" for k in ("meas", "norm", "both", "unjudged"))
+        sp = f": {ks(1)}" + (f"; x: {ks(2)}" if xjudge else "") + (f"; {nfl} float did not finish" if split else "")
+        nb, nn = sum(cnt(1, k) for k in ("meas", "norm", "both")), 0
+        nxb = sum(cnt(2, k) for k in ("meas", "norm", "both"))
     print(f"  {fname}: {n} points ({nb + nn} wrong{sp}{', %d x wrong' % nxb if xjudge else ''}{njs}"
-          f"{', %d floored' % nfloor if nfloor else ''}{fl})  [{fams}{hw}]")
+          f"{', %d with 0 nodes' % nfloor if nfloor else ''}{fl})  [{fams}{hw}]")
     if VERBOSE and detail: print("      red/orange: " + " ".join(sorted(detail)))
 
 def legend(fname, grey=False):
@@ -484,6 +550,7 @@ def legend(fname, grey=False):
     say what was checked: the measurement alone under --rule section6, the
     measurement and the norm otherwise (worded as in the 2026-10-01 revision
     with --unchecked right)."""
+    if kinds(): return pair_legend(fname)
     fig = plt.figure(figsize=(6.4, 0.62))
     hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
                       ms=5, label=lab) for _, m, lab in FAMILY]
@@ -511,22 +578,46 @@ def split_legend(fname, panels):
     """The legend of a figure of split panels (float against algebraic: Figure
     6 of Section 6 and Figure 9), listing the families and the verdicts that
     its panels draw."""
-    fams, kinds = set(), set()
+    fams, verds = set(), set()
     for p in panels:
         f, k = DRAWN.get(p, (set(), set()))
-        fams |= f; kinds |= k
+        fams |= f; verds |= k
     dot = lambda fc, ec, lab: plt.Line2D([], [], ls="", marker="o", mfc=fc, mec=ec,
                                          mew=0.9, ms=5, label=lab)
     hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
                       ms=5, label=lab) for k, m, lab in FAMILY if k in fams]
     hs += [dot("none", "tab:blue", "float correct")]
-    if "wrong" in kinds: hs += [dot("tab:red", "tab:red", "float measurement wrong")]
-    if "norm" in kinds: hs += [dot(NORMCOL, NORMCOL, "float norm wrong")]
-    if "unjudged" in kinds: hs += [dot(GREY, GREY, "float measurement not checked")]
-    if "failed" in kinds: hs += [dot("none", GREY, "float run did not finish")]
+    if "wrong" in verds: hs += [dot("tab:red", "tab:red", "float measurement wrong")]
+    hs += [dot(KIND_COL[k], KIND_COL[k], "float " + KIND_LAB[k]) for k in KIND_LAB if k in verds]
+    if "failed" in verds: hs += [dot("none", GREY, "float run did not finish")]
     hs += [plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
                       label="did not finish (timeout or full table)")]
     fig = plt.figure(figsize=(6.4, 0.62))
+    fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
+               handletextpad=0.35, columnspacing=1.1)
+    fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
+    print("  wrote", fname)
+
+KIND_LAB = {"meas": "measurement wrong", "norm": "norm wrong",
+            "both": "measurement and norm wrong", "unjudged": "measurement not checked"}
+
+def pair_legend(fname):
+    """The legend of LIMDD against EVDD with kinds(): the families, and the
+    verdicts that its lower row draws, the float LIMDD's as the fill and the
+    float EVDD's as the edge."""
+    verds = set()
+    for p, (f, k) in DRAWN.items():
+        if p.startswith("limdd_vs_evdd_float"): verds |= k
+    dot = lambda fc, ec, lab: plt.Line2D([], [], ls="", marker="o", mfc=fc, mec=ec,
+                                         mew=1.1, ms=5, label=lab)
+    hs  = [plt.Line2D([], [], ls="", marker=m, mfc="none", mec="0.25", mew=0.9,
+                      ms=5, label=lab) for _, m, lab in FAMILY]
+    hs += [dot("none", "tab:blue", "float correct")]
+    hs += [dot(KIND_COL[k], KIND_COL[k], KIND_LAB[k]) for k in KIND_LAB if k in verds]
+    hs += [plt.Line2D([], [], ls="", label="bottom row: fill float LIMDD, edge float EVDD"),
+           plt.Line2D([], [], ls=(0, (3, 2)), color="0.45", lw=0.7,
+                      label="did not finish (timeout or full table)")]
+    fig = plt.figure(figsize=(6.4, 0.8))
     fig.legend(handles=hs, loc="center", ncol=4, fontsize=7, frameon=False,
                handletextpad=0.35, columnspacing=1.1)
     fig.savefig(os.path.join(OUT, fname), bbox_inches="tight"); plt.close(fig)
@@ -598,7 +689,8 @@ def main():
                          "no exact run has one")
     ap.add_argument("--pair-wrong-colour", default="tab:red",
                     help="fill of a wrong float LIMDD run in the LIMDD-against-EVDD panels, so that red "
-                         "can keep one meaning (measurement wrong) in the float-against-algebraic panels")
+                         "can keep one meaning (measurement wrong) in the float-against-algebraic panels "
+                         "(the earlier look only: --unchecked right or --rule section6)")
     ap.add_argument("--no-norm-label", action="store_true",
                     help="no '(low)' or '(L2)' in the axis labels (the text says which normalisation)")
     ap.add_argument("--low-label", action="store_true",
@@ -628,7 +720,7 @@ def main():
     for r in rows.values(): fams[r["_fam"]] = fams.get(r["_fam"], 0) + 1
     print(f"{len(rows)} circuits: " + ", ".join(f"{k}={v}" for k, v in sorted(fams.items())))
     fails = failures(recs)
-    print("panel: points (wrong, floored)  [family=points/wrong, how the float run was judged]")
+    print("panel: points (wrong, 0 nodes)  [family=points/wrong, how the float run was judged]")
     for field, lab in [("simulation_time", "runtime (s)"),
                        ("final_nodes", "final # of nodes"),
                        ("max_nodes", "peak # of nodes")]:

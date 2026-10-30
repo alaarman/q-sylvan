@@ -81,7 +81,7 @@ QA=(--qasm "$ROOT/ldd/qasm" --qasm "$ROOT/amend/qasm"); PN=("$ROOT/amend/out_cle
 if [ -d "$ROOT/pilot/out_clean" ]; then
   PN+=("$ROOT/pilot/out_clean")
   for d in "$ROOT"/pilot/qasm/*/; do QA+=(--qasm "$d"); done
-  [ -f "$ROOT/pilot/reference_probs.csv" ] && QA+=(--reference "$ROOT/pilot/reference_probs.csv")
+  [ "${REFERENCE:-0}" = 1 ] && [ -f "$ROOT/pilot/reference_probs.csv" ] && QA+=(--reference "$ROOT/pilot/reference_probs.csv")
 fi
 if [ $HAVE_REL -eq 1 ]; then
   for v in "limdd2 float_l2 limdd_float_l2_rel" "limdd2_low float_low limdd_float_rel"; do

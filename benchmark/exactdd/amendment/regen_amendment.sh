@@ -108,8 +108,10 @@ if [ -d "$ROOT/amend/out_clean" ]; then
   if [ -d "$ROOT/pilot/out_clean" ]; then
     PN+=("$ROOT/pilot/out_clean")
     for d in "$ROOT"/pilot/qasm/*/; do Q+=(--qasm "$d"); done
-    # state-vector probabilities where no exact run has one (reference_probs.py)
-    [ -f "$ROOT/pilot/reference_probs.csv" ] && Q+=(--reference "$ROOT/pilot/reference_probs.csv")
+    # no state-vector probabilities (reference_probs.py): since 30 Oct 2026 a
+    # float run with no exact run to compare with is drawn 'measurement not
+    # checked' (REFERENCE=1 takes them again where no exact run has one)
+    [ "${REFERENCE:-0}" = 1 ] && [ -f "$ROOT/pilot/reference_probs.csv" ] && Q+=(--reference "$ROOT/pilot/reference_probs.csv")
   fi
   step paper_section6_l2.out  "$PY" "$S/make_section6_figures.py" --float float_l2 --tag l2 --no-tag-label \
        "${Q[@]}" "${PN[@]}" "$P/final_plots_mm-(in)correct2"

@@ -8,7 +8,9 @@ final and peak nodes, and the runs that did not finish.
 
   family_stats.py ROOT
 ROOT as for regen_amendment.sh: ldd/qasm, amend/qasm, amend/out_clean, and
-where present pilot/qasm/<family>/, pilot/out_clean, pilot/reference_probs.csv.
+where present pilot/qasm/<family>/, pilot/out_clean, and with REFERENCE=1 in the
+environment pilot/reference_probs.csv (the state-vector probabilities, not used
+since 30 Oct 2026).
 Where ROOT has the float LIMDD under the relative merging rule
 (limdd_float_rel, limdd_float_l2_rel; the paper's float LIMDD since the rerun
 of 19 Oct 2026), every LIMDD count is given for those arms too, and the last
@@ -22,7 +24,7 @@ mf.ARMS += REL                                   # read the relative-rule arms t
 if len(sys.argv) != 2: sys.exit(__doc__)
 S = sys.argv[1]
 for d in [S + "/ldd/qasm", S + "/amend/qasm"] + glob.glob(S + "/pilot/qasm/*/"): mf.count_qasm(d)
-if os.path.exists(S + "/pilot/reference_probs.csv"): mf.read_reference(S + "/pilot/reference_probs.csv")
+if os.environ.get("REFERENCE") == "1" and os.path.exists(S + "/pilot/reference_probs.csv"): mf.read_reference(S + "/pilot/reference_probs.csv")
 recs, rows, _ = mf.load([d for d in (S + "/amend/out_clean", S + "/pilot/out_clean") if os.path.isdir(d)], [], set())
 mf.add_reference(rows)
 mf.UNCHECKED = "grey"
